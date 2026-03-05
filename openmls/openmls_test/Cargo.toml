@@ -1,0 +1,30 @@
+[package]
+name = "openmls_test"
+version = "0.2.1"
+authors = ["OpenMLS Authors"]
+edition = "2021"
+description = "Test utility used by OpenMLS"
+license = "MIT"
+documentation = "https://docs.rs/openmls_test"
+repository = "https://github.com/openmls/openmls/tree/main/openmls_test"
+readme = "Readme.md"
+
+[lib]
+proc-macro = true
+
+[features]
+# This needs to be enabled explicity to allow disabling on some platforms
+libcrux-provider = ["dep:openmls_libcrux_crypto"]
+sqlite-provider = ["dep:openmls_sqlite_storage"]
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "visit"] }
+proc-macro2 = { version = "1.0.10", features = ["span-locations"] }
+ansi_term = "0.12.1"
+quote = "1.0"
+rstest = { version = "0.26" }
+rstest_reuse = { version = "0.7" }
+openmls_rust_crypto = { workspace = true }
+openmls_libcrux_crypto = { workspace = true, optional = true }
+openmls_traits = { workspace = true }
+openmls_sqlite_storage = { workspace = true, optional = true }

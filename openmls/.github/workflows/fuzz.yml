@@ -1,0 +1,42 @@
+name: Spot Fuzz
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency: 
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        tests: [welcome_decode, mls_message_decode, proposal_decode]
+        include:
+          - tests: welcome_decode
+            runs: 10000
+          - tests: mls_message_decode
+            runs: 50000
+          - tests: proposal_decode
+            runs: 50000
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-fuzz
+          version: latest
+      - run: cargo fuzz run ${{ matrix.tests }} -- -runs=${{ matrix.runs }}

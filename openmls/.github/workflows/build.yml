@@ -1,0 +1,87 @@
+name: Build
+
+concurrency: 
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          # Windows
+          - i686-pc-windows-msvc
+          - x86_64-pc-windows-msvc
+          # macOS
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          # Linux
+          - x86_64-unknown-linux-gnu
+          - i686-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          # Android
+          - aarch64-linux-android
+          - armv7-linux-androideabi
+          - x86_64-linux-android
+          - i686-linux-android
+          # iOS
+          - aarch64-apple-ios
+          # WASM
+          - wasm32-unknown-unknown
+        include:
+          # Compile iOS sim on macOS
+          - os: macos-latest
+            arch: aarch64-apple-ios-sim
+        mode:
+          - debug
+          - release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Install the required target
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.arch }}
+      - uses: Swatinem/rust-cache@v2
+
+      - run: |
+          if [ ${{ matrix.mode }} == debug ]; then
+            echo "TEST_MODE=" >> $GITHUB_ENV
+          else
+            echo "TEST_MODE=--release" >> $GITHUB_ENV
+          fi
+      - name: Build (wasm)
+        if: matrix.arch == 'wasm32-unknown-unknown'
+        run: cargo build $TEST_MODE --verbose --target ${{ matrix.arch }} -p openmls -F js
+      - name: Build
+        if: ${{ matrix.arch != 'wasm32-unknown-unknown'  }} 
+        run: cargo build $TEST_MODE --verbose --target ${{ matrix.arch }} -p openmls
+
+  # Check feature powerset
+  check:
+    strategy:
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+
+      # Group all features except fork-resolution,js,extensions-draft-08
+      - name: Cargo hack
+        run: |
+          cargo hack check --feature-powerset --no-dev-deps --verbose -p openmls \
+          --group-features test-utils,crypto-debug,content-debug,backtrace,libcrux-provider,sqlite-provider

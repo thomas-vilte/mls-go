@@ -1,0 +1,13 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 10%
+
+ignore:
+  - "delivery-service/**/*"  # ignore PoC DS server and lib
+  - "cli/**/*"  # ignore PoC cli
+  # ignore test frameworks
+  - "openmls/tests/utils/managed_utils/*"
+  - "openmls/tests/utils/mls_utils/*"

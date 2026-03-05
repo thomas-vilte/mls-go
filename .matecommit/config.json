@@ -1,0 +1,14 @@
+{
+  "language": "en",
+  "use_emoji": true,
+  "suggestions_count": 3,
+  "path_file": "/home/enano/mls-go/.matecommit/config.json",
+  "ai_config": {
+    "active_ai": "gemini",
+    "models": {}
+  },
+  "vcs_configs": {},
+  "update_changelog": false,
+  "auto_fetch_tags": false,
+  "git_fallback": {}
+}
