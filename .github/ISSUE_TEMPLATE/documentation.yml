@@ -1,0 +1,18 @@
+body:
+    - attributes:
+        description: What needs to be documented or improved?
+        label: Description
+      id: description
+      type: textarea
+      validations:
+        required: true
+    - attributes:
+        description: Where should this check go?
+        label: Relevant files/sections
+      id: location
+      type: textarea
+description: Improvements or additions to documentation
+labels:
+    - documentation
+name: Documentation
+title: '[DOCS] '

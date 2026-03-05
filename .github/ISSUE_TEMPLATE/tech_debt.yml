@@ -1,0 +1,19 @@
+body:
+    - attributes:
+        description: What code needs refactoring?
+        label: Description
+      id: description
+      type: textarea
+      validations:
+        required: true
+    - attributes:
+        description: Why should we do this? (e.g. readability, maintainability)
+        label: Reason
+      id: reason
+      type: textarea
+description: Propose a refactoring or technical improvement
+labels:
+    - refactor
+    - tech-debt
+name: Tech Debt / Refactor
+title: '[REFACTOR] '

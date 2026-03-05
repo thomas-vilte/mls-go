@@ -1,0 +1,17 @@
+body:
+    - attributes:
+        label: Package Name
+      id: package
+      type: input
+      validations:
+        required: true
+    - attributes:
+        description: Security fix, new features, etc.
+        label: Reason for update
+      id: reason
+      type: textarea
+description: Update a project dependency
+labels:
+    - dependencies
+name: Dependency Update
+title: '[DEPENDENCY] '
