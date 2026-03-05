@@ -91,10 +91,16 @@ func encryptWithLabelInternal(
 	secret := hkdfExtract(sharedSecret, nil)
 
 	// key = Expand(secret, "key", Nk)
-	key := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
+	key, err := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
+	if err != nil {
+		return nil, fmt.Errorf("hkdf expand key: %w", err)
+	}
 
 	// base_nonce = Expand(secret, "base_nonce", Nn)
-	baseNonce := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
+	baseNonce, err := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
+	if err != nil {
+		return nil, fmt.Errorf("hkdf expand nonce: %w", err)
+	}
 
 	// seq = 0
 	seq := make([]byte, 12)
@@ -171,10 +177,16 @@ func decryptWithLabelInternal(
 	secret := hkdfExtract(sharedSecret, nil)
 
 	// key = Expand(secret, "key", Nk)
-	key := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
+	key, err := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
+	if err != nil {
+		return nil, fmt.Errorf("hkdf expand key: %w", err)
+	}
 
 	// base_nonce = Expand(secret, "base_nonce", Nn)
-	baseNonce := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
+	baseNonce, err := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
+	if err != nil {
+		return nil, fmt.Errorf("hkdf expand nonce: %w", err)
+	}
 
 	// seq = 0
 	seq := make([]byte, 12)
@@ -185,17 +197,17 @@ func decryptWithLabelInternal(
 	// Decrypt using AES-GCM
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, ErrAeadDecryptionError
+		return nil, fmt.Errorf("%w: creating cipher: %v", ErrAeadDecryption, err)
 	}
 
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, ErrAeadDecryptionError
+		return nil, fmt.Errorf("%w: creating GCM: %v", ErrAeadDecryption, err)
 	}
 
 	plaintext, err := aead.Open(nil, nonce, ciphertext.Ciphertext, nil)
 	if err != nil {
-		return nil, ErrAeadDecryptionError
+		return nil, fmt.Errorf("%w: %v", ErrAeadDecryption, err)
 	}
 
 	return plaintext, nil
