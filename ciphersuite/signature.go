@@ -74,10 +74,35 @@ func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 }
 
 // PublicKey returns the public key in uncompressed format.
+// RFC 9420 §5.1.2: Public keys are encoded in uncompressed format (0x04 || X || Y).
 func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
+	// Usar la API moderna de ecdh para obtener los bytes de la public key
+	// Convertir las coordenadas X, Y a formato uncompressed
 	pubKey := k.ecdsa.PublicKey
-	//nolint:staticcheck // elliptic.Marshal is deprecated but still widely used for compatibility
-	bytes := elliptic.Marshal(pubKey.Curve, pubKey.X, pubKey.Y)
+	
+	// Formato uncompressed: 0x04 || X || Y (65 bytes para P-256)
+	// X e Y son cada uno 32 bytes
+	xBytes := pubKey.X.Bytes()
+	yBytes := pubKey.Y.Bytes()
+	
+	// Asegurar que tengan 32 bytes (padding con ceros si es necesario)
+	if len(xBytes) < 32 {
+		padded := make([]byte, 32)
+		copy(padded[32-len(xBytes):], xBytes)
+		xBytes = padded
+	}
+	if len(yBytes) < 32 {
+		padded := make([]byte, 32)
+		copy(padded[32-len(yBytes):], yBytes)
+		yBytes = padded
+	}
+	
+	// Construir formato uncompressed
+	bytes := make([]byte, 65)
+	bytes[0] = 0x04
+	copy(bytes[1:33], xBytes)
+	copy(bytes[33:65], yBytes)
+	
 	return NewSignaturePublicKey(bytes)
 }
 
