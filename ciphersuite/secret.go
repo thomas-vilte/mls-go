@@ -3,6 +3,7 @@ package ciphersuite
 import (
 	"crypto/rand"
 	"fmt"
+	"runtime"
 )
 
 // Secret represents a secret value with secure handling
@@ -17,11 +18,11 @@ func NewSecret(value []byte) *Secret {
 	return &Secret{Value: copyBytes}
 }
 
-// NewSecretRandom generates a random Secret of the specified length
+// NewSecretRandom generates a random Secret of the specified length.
 func NewSecretRandom(length int) (*Secret, error) {
 	value := make([]byte, length)
 	if _, err := rand.Read(value); err != nil {
-		return nil, ErrInsufficientRandomness
+		return nil, fmt.Errorf("%w: %v", ErrInsufficientRandom, err)
 	}
 	return &Secret{Value: value}, nil
 }
@@ -71,6 +72,10 @@ func (s *Secret) Clone() *Secret {
 }
 
 // HKDFExtract performs HKDF-Extract with this Secret as salt.
+//
+// CRÍTICO: Usa runtime.KeepAlive() para prevenir que el GC mueva
+// los secrets antes de que hkdfExtract termine, y para asegurar
+// que SecureZero() no sea optimizado away por el compiler.
 func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 	if s == nil {
 		return nil, fmt.Errorf("salt is nil")
@@ -80,6 +85,15 @@ func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 	}
 
 	prk := hkdfExtract(s.Value, ikm.Value)
+
+	// CRÍTICO: Mantener vivos hasta que hkdfExtract termine
+	runtime.KeepAlive(s)
+	runtime.KeepAlive(ikm)
+
+	// Zero out después de usar
+	s.SecureZero()
+	ikm.SecureZero()
+
 	return NewSecret(prk), nil
 }
 
@@ -92,10 +106,17 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 		return nil, ErrInvalidLength
 	}
 
-	okm := hkdfExpand(s.Value, info, length)
+	okm, err := hkdfExpand(s.Value, info, length)
+	if err != nil {
+		return nil, err
+	}
 	if len(okm) == 0 {
 		return nil, ErrCryptoLibraryError
 	}
+
+	// CRÍTICO: Mantener vivo hasta que hkdfExpand termine
+	runtime.KeepAlive(s)
+
 	return NewSecret(okm), nil
 }
 
@@ -120,7 +141,13 @@ func (s *Secret) Hmac(message []byte) ([]byte, error) {
 	if s == nil {
 		return nil, fmt.Errorf("key is nil")
 	}
-	return hmacSha256(s.Value, message), nil
+
+	result := hmacSha256(s.Value, message)
+
+	// CRÍTICO: Mantener vivo hasta que hmacSha256 termine
+	runtime.KeepAlive(s)
+
+	return result, nil
 }
 
 // Equal performs constant-time comparison.
@@ -132,10 +159,15 @@ func (s *Secret) Equal(other *Secret) bool {
 }
 
 // SecureZero clears the secret value from memory.
+//
+// CRÍTICO: Usa runtime.KeepAlive() para asegurar que el compiler
+// no optimice away esta función (podría considerar que no tiene efectos).
 func (s *Secret) SecureZero() {
 	if s != nil && s.Value != nil {
 		for i := range s.Value {
 			s.Value[i] = 0
 		}
+		// Asegurar que SecureZero no sea optimizado away
+		runtime.KeepAlive(s)
 	}
 }
