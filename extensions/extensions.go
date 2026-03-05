@@ -11,14 +11,12 @@
 //
 // # Estructura de una Extensión
 //
-// ```
-// ┌─────────────────────────────────────────┐
-// │         Extension (RFC 9420)            │
-// ├─────────────────────────────────────────┤
-// │  extension_type: uint16                 │
-// │  extension_data: opaque<V>              │
-// └─────────────────────────────────────────┘
-// ```
+//	.--------------------------------------------------.
+//	|           EXTENSION (RFC 9420)                   |
+//	|--------------------------------------------------|
+//	|  extension_type  : uint16  (identificador)       |
+//	|  extension_data  : opaque<V> (datos del tipo)    |
+//	'--------------------------------------------------'
 //
 // # Tipos de Extensiones Soportados
 //
@@ -99,19 +97,20 @@ var (
 // Los valores GREASE (0x0A0A, 0x1A1A, etc.) se usan para testing de extensibilidad.
 // Aseguran que las implementaciones manejen correctamente tipos desconocidos.
 //
-// ```
-// GREASE Pattern: 0xXA0A donde X = 0-E
-// ┌──────────────────────────────────────┐
-// │  GREASE0:  0x0A0A  │  GREASE7: 0x7A7A │
-// │  GREASE1:  0x1A1A  │  GREASE8: 0x8A8A │
-// │  GREASE2:  0x2A2A  │  GREASE9: 0x9A9A │
-// │  GREASE3:  0x3A3A  │  GREASEA: 0xAAAA │
-// │  GREASE4:  0x4A4A  │  GREASEB: 0xBABA │
-// │  GREASE5:  0x5A5A  │  GREASEC: 0xCACA │
-// │  GREASE6:  0x6A6A  │  GREASED: 0xDADA │
-// │                    │  GREASEE: 0xEAEA │
-// └──────────────────────────────────────┘
-// ```
+//	.----------------------------------------------.
+//	|         GREASE VALUES (RFC 9420 §13.5)       |
+//	|----------------------------------------------|
+//	|  Patrón: 0xXA0A donde X = 0-E                |
+//	|                                              |
+//	|  GREASE0: 0x0A0A    GREASE1: 0x1A1A         |
+//	|  GREASE2: 0x2A2A    GREASE3: 0x3A3A         |
+//	|  GREASE4: 0x4A4A    GREASE5: 0x5A5A         |
+//	|  GREASE6: 0x6A6A    GREASE7: 0x7A7A         |
+//	|  GREASE8: 0x8A8A    GREASE9: 0x9A9A         |
+//	|  GREASEA: 0xAAAA    GREASEB: 0xBABA         |
+//	|  GREASEC: 0xCACA    GREASED: 0xDADA         |
+//	|  GREASEE: 0xEAEA                            |
+//	'----------------------------------------------'
 //
 // Ver RFC 9420 §13.5 para más detalles sobre GREASE.
 type ExtensionType uint16
@@ -167,6 +166,13 @@ const (
 	// ExtensionTypeGroupContextExtensions contiene extensiones para GroupContext.
 	// RFC 9420 §11.2.8
 	ExtensionTypeGroupContextExtensions ExtensionType = 0x0009
+
+	// ExtensionTypeLastResort marca un KeyPackage como last resort.
+	// RFC 9420 §11.2.5
+	//
+	// Ubicación: KeyPackage
+	// Uso: KeyPackages de respaldo para cuando se agotan los normales
+	ExtensionTypeLastResort ExtensionType = 0x000A
 )
 
 // Extension representa una extensión MLS genérica.
@@ -174,24 +180,28 @@ const (
 // # Estructura (RFC 9420 §13)
 //
 // ```
-// struct {
-//     ExtensionType extension_type;    // uint16 - identifica el tipo
-//     opaque extension_data<V>;        // variable-length - datos específicos
-// } Extension;
+//
+//	struct {
+//	    ExtensionType extension_type;    // uint16 - identifica el tipo
+//	    opaque extension_data<V>;        // variable-length - datos específicos
+//	} Extension;
+//
 // ```
 //
 // # Ejemplo
 //
 // // Crear extensión manualmente
-// ext := &Extension{
-//     Type: ExtensionTypeApplicationID,
-//     Data: []byte("my-app-id"),
-// }
+//
+//	ext := &Extension{
+//	    Type: ExtensionTypeApplicationID,
+//	    Data: []byte("my-app-id"),
+//	}
 //
 // // Validar
-// if err := ext.Validate(); err != nil {
-//     return err
-// }
+//
+//	if err := ext.Validate(); err != nil {
+//	    return err
+//	}
 //
 // // Serializar
 // data := ext.Marshal()
@@ -204,15 +214,13 @@ type Extension struct {
 //
 // # Encoding
 //
-// ```
-// ┌─────────────────────────────────────┐
-// │  extension_type: uint16             │  2 bytes
-// ├─────────────────────────────────────┤
-// │  extension_data_length: varint      │  1-2 bytes
-// ├─────────────────────────────────────┤
-// │  extension_data: opaque[]           │  variable
-// └─────────────────────────────────────┘
-// ```
+//	.--------------------------------------------------.
+//	|              TLS ENCODING                        |
+//	|--------------------------------------------------|
+//	|  extension_type        : uint16 (2 bytes)        |
+//	|  extension_data_length : varint (1-2 bytes)      |
+//	|  extension_data        : opaque (variable)       |
+//	'--------------------------------------------------'
 //
 // # Ejemplo
 //
@@ -236,9 +244,11 @@ func (e *Extension) Marshal() []byte {
 //
 // data := []byte{0x00, 0x01, 0x04, 't', 'e', 's', 't'}
 // ext, err := UnmarshalExtension(data)
-// if err != nil {
-//     return err
-// }
+//
+//	if err != nil {
+//	    return err
+//	}
+//
 // // ext.Type == ExtensionTypeApplicationID
 // // ext.Data == []byte("test")
 func UnmarshalExtension(data []byte) (*Extension, error) {
@@ -264,14 +274,14 @@ func UnmarshalExtension(data []byte) (*Extension, error) {
 //
 // # Estructura Interna
 //
-// ```
-// ┌─────────────────────────────────────────┐
-// │           Extensions                    │
-// ├─────────────────────────────────────────┤
-// │  extensions: map[Type]Extension         │  ← Lookup rápido O(1)
-// │  ordered:    []Type                     │  ← Orden para serializar
-// └─────────────────────────────────────────┘
-// ```
+//	.--------------------------------------------------.
+//	|           EXTENSIONS STRUCT                      |
+//	|--------------------------------------------------|
+//	|  extensions : map[Type]Extension                 |
+//	|             (lookup rápido O(1))                 |
+//	|  ordered    : []Type                             |
+//	|             (orden para serialización)           |
+//	'--------------------------------------------------'
 //
 // # ¿Por qué dos estructuras?
 //
@@ -295,8 +305,8 @@ func UnmarshalExtension(data []byte) (*Extension, error) {
 // // Marshal siempre produce el mismo orden: ApplicationId, RatchetTree, ExternalSenders
 // data := exts.Marshal()
 type Extensions struct {
-	extensions map[ExtensionType]Extension  // Lookup rápido por tipo
-	ordered    []ExtensionType              // Orden ascendente para serialización
+	extensions map[ExtensionType]Extension // Lookup rápido por tipo
+	ordered    []ExtensionType             // Orden ascendente para serialización
 }
 
 // NewExtensions crea una nueva colección de extensiones vacía.
@@ -324,16 +334,15 @@ func NewExtensions() *Extensions {
 // Las extensiones se mantienen en orden ascendente por ExtensionType.
 // Esto es requerido por RFC 9420 §13.4 para serialización determinística.
 //
-// ```
-// Antes de Add:
-// ordered: [0x0001, 0x0003, 0x0005]
-//
-// Add(Extension{Type: 0x0002})
-//
-// Después de Add (orden automático):
-// ordered: [0x0001, 0x0002, 0x0003, 0x0005]
-//         ↑ insertado en posición correcta
-// ```
+//	.----------------------------------------------.
+//	|           ORDEN DE INSERCIÓN                 |
+//	|----------------------------------------------|
+//	|  Antes:   ordered = [0x0001, 0x0003, 0x0005] |
+//	|  Add:     Type = 0x0002                      |
+//	|  Después: ordered = [0x0001, 0x0002, ...]    |
+//	|                   ^                          |
+//	|                   insertado en orden         |
+//	'----------------------------------------------'
 //
 // # Ejemplo
 //
@@ -372,9 +381,10 @@ func (e *Extensions) Add(ext Extension) error {
 // exts.Add(Extension{Type: ExtensionTypeApplicationId, Data: []byte("test")})
 //
 // ext, ok := exts.Get(ExtensionTypeApplicationId)
-// if ok {
-//     // ext.Data == []byte("test")
-// }
+//
+//	if ok {
+//	    // ext.Data == []byte("test")
+//	}
 func (e *Extensions) Get(typ ExtensionType) (Extension, bool) {
 	ext, ok := e.extensions[typ]
 	return ext, ok
@@ -387,9 +397,9 @@ func (e *Extensions) Get(typ ExtensionType) (Extension, bool) {
 // exts := NewExtensions()
 // exts.Add(Extension{Type: ExtensionTypeApplicationId, Data: []byte("test")})
 //
-// if exts.Has(ExtensionTypeApplicationId) {
-//     // La extensión existe
-// }
+//	if exts.Has(ExtensionTypeApplicationId) {
+//	    // La extensión existe
+//	}
 func (e *Extensions) Has(typ ExtensionType) bool {
 	_, ok := e.extensions[typ]
 	return ok
@@ -459,16 +469,15 @@ func (e *Extensions) All() []Extension {
 //
 // # Encoding (RFC 9420 §13.4)
 //
-// ```
-// ┌─────────────────────────────────────────┐
-// │  extensions_length: varint              │
-// ├─────────────────────────────────────────┤
-// │  Extension extensions<V>                │
-// │    ├─ extension_type: uint16            │
-// │    ├─ extension_data_length: varint     │
-// │    └─ extension_data: opaque[]          │
-// └─────────────────────────────────────────┘
-// ```
+//	.--------------------------------------------------.
+//	|          EXTENSIONS ENCODING (RFC 9420 §13.4)    |
+//	|--------------------------------------------------|
+//	|  extensions_length       : varint                |
+//	|  Extension[]                                     |
+//	|   - extension_type       : uint16                |
+//	|   - extension_data_length: varint                |
+//	|   - extension_data       : opaque<V>             |
+//	'--------------------------------------------------'
 //
 // Las extensiones se serializan en orden ASCENDENTE por ExtensionType.
 // Esto es CRÍTICO para que el hash del GroupContext sea determinístico.
@@ -505,9 +514,11 @@ func (e *Extensions) Marshal() []byte {
 //
 // data := []byte{...}  // datos serializados
 // exts, err := UnmarshalExtensions(data)
-// if err != nil {
-//     return err
-// }
+//
+//	if err != nil {
+//	    return err
+//	}
+//
 // // exts.Len() == número de extensiones en data
 func UnmarshalExtensions(data []byte) (*Extensions, error) {
 	exts := NewExtensions()
@@ -545,9 +556,10 @@ func UnmarshalExtensions(data []byte) (*Extensions, error) {
 // # Ejemplo
 //
 // ext := &Extension{Type: ExtensionTypeApplicationId, Data: []byte("test")}
-// if err := ext.Validate(); err != nil {
-//     return err  // Extensión inválida
-// }
+//
+//	if err := ext.Validate(); err != nil {
+//	    return err  // Extensión inválida
+//	}
 func (e *Extension) Validate() error {
 	if e.Data == nil {
 		return fmt.Errorf("%w: extension data is nil", ErrInvalidExtension)
