@@ -286,6 +286,84 @@ func (r *RequiredCapabilitiesExtension) Equal(other *RequiredCapabilitiesExtensi
 	return true
 }
 
+// IsEmpty devuelve true si la extensión no tiene capacidades requeridas.
+func (r *RequiredCapabilitiesExtension) IsEmpty() bool {
+	return len(r.ProtocolVersions) == 0 &&
+		len(r.CipherSuites) == 0 &&
+		len(r.Extensions) == 0 &&
+		len(r.Proposals) == 0 &&
+		len(r.Credentials) == 0
+}
+
+// SupportsAll verifica si esta extensión soporta todas las capacidades de otra.
+// Devuelve true si todas las capacidades de other están presentes en esta.
+func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesExtension) bool {
+	if other == nil {
+		return true
+	}
+
+	// Verificar protocol versions
+	for _, v := range other.ProtocolVersions {
+		if !r.HasProtocolVersion(v) {
+			return false
+		}
+	}
+
+	// Verificar cipher suites
+	for _, cs := range other.CipherSuites {
+		if !r.HasCipherSuite(cs) {
+			return false
+		}
+	}
+
+	// Verificar extensions
+	for _, ext := range other.Extensions {
+		if !r.HasExtension(ext) {
+			return false
+		}
+	}
+
+	// Verificar proposals
+	for _, p := range other.Proposals {
+		found := false
+		for _, rp := range r.Proposals {
+			if rp == p {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	// Verificar credentials
+	for _, c := range other.Credentials {
+		found := false
+		for _, rc := range r.Credentials {
+			if rc == c {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// HasCredential verifica si un tipo de credential es requerido.
+func (r *RequiredCapabilitiesExtension) HasCredential(cred credentials.CredentialType) bool {
+	for _, c := range r.Credentials {
+		if c == cred {
+			return true
+		}
+	}
+	return false
+}
+
 // Helper functions for slice comparison
 
 func uint16SliceEqual(a, b []uint16) bool {
