@@ -17,7 +17,7 @@ type ReuseGuard struct {
 func NewReuseGuardRandom() (*ReuseGuard, error) {
 	var rg ReuseGuard
 	if _, err := rand.Read(rg.value[:]); err != nil {
-		return nil, ErrInsufficientRandomness
+		return nil, fmt.Errorf("%w: %v", ErrInsufficientRandom, err)
 	}
 	return &rg, nil
 }
