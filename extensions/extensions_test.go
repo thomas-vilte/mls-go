@@ -31,6 +31,42 @@ func TestExtensionMarshalUnmarshal(t *testing.T) {
 	}
 }
 
+func TestExtensionsMarshal_OrderDeterministic(t *testing.T) {
+	// RFC 9420 §13.4: Extensions MUST be serialized in ascending order by type
+
+	exts := extensions.NewExtensions()
+
+	// Add extensions in random order
+	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeExternalSenders, Data: []byte{0x03}})
+	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeApplicationID, Data: []byte{0x01}})
+	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeRatchetTree, Data: []byte{0x02}})
+
+	// Marshal multiple times
+	data1 := exts.Marshal()
+	data2 := exts.Marshal()
+	data3 := exts.Marshal()
+
+	// Must be deterministic
+	if !bytes.Equal(data1, data2) || !bytes.Equal(data2, data3) {
+		t.Error("Marshal is not deterministic")
+	}
+
+	// Verify order is ascending (ApplicationID=0x0001, RatchetTree=0x0002, ExternalSenders=0x0005)
+	all := exts.All()
+	if len(all) != 3 {
+		t.Fatalf("Expected 3 extensions, got %d", len(all))
+	}
+	if all[0].Type != extensions.ExtensionTypeApplicationID {
+		t.Errorf("First extension should be ApplicationID (0x0001), got %d", all[0].Type)
+	}
+	if all[1].Type != extensions.ExtensionTypeRatchetTree {
+		t.Errorf("Second extension should be RatchetTree (0x0002), got %d", all[1].Type)
+	}
+	if all[2].Type != extensions.ExtensionTypeExternalSenders {
+		t.Errorf("Third extension should be ExternalSenders (0x0005), got %d", all[2].Type)
+	}
+}
+
 // TestExtensionsCollection tests the Extensions collection.
 func TestExtensionsCollection(t *testing.T) {
 	exts := extensions.NewExtensions()
