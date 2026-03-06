@@ -2,6 +2,7 @@ package group
 
 import (
 	"github.com/openmls/go/credentials"
+	"github.com/openmls/go/internal/tls"
 	keypackages "github.com/openmls/go/key_packages"
 )
 
@@ -46,6 +47,122 @@ type LeafNode struct {
 	EncryptionKey []byte
 	SignatureKey  []byte
 	Credential    *credentials.Credential
+}
+
+// Marshal serializes the LeafNode to TLS format.
+func (ln *LeafNode) Marshal() []byte {
+	w := tls.NewWriter()
+	w.WriteUint32(uint32(ln.Index))
+	w.WriteVLBytes(ln.EncryptionKey)
+	w.WriteVLBytes(ln.SignatureKey)
+	w.WriteVLBytes(ln.Credential.Marshal())
+	return w.Bytes()
+}
+
+// UnmarshalLeafNode deserializes a LeafNode from TLS format.
+func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
+	r := tls.NewReader(data)
+
+	index, err := r.ReadUint32()
+	if err != nil {
+		return nil, err
+	}
+
+	encKey, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	sigKey, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	credData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	credential, err := credentials.UnmarshalCredential(credData)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LeafNode{
+		Index:         LeafNodeIndex(index),
+		EncryptionKey: encKey,
+		SignatureKey:  sigKey,
+		Credential:    credential,
+	}, nil
+}
+
+// ProposalMarshal serializes a Proposal to TLS format.
+func ProposalMarshal(p *Proposal) []byte {
+	w := tls.NewWriter()
+	w.WriteUint16(uint16(p.Type))
+
+	switch p.Type {
+	case ProposalTypeAdd:
+		if p.Add != nil {
+			w.WriteVLBytes(p.Add.KeyPackage.Marshal())
+		}
+	case ProposalTypeUpdate:
+		if p.Update != nil {
+			w.WriteVLBytes(p.Update.LeafNode.Marshal())
+		}
+	case ProposalTypeRemove:
+		if p.Remove != nil {
+			w.WriteUint32(uint32(p.Remove.Removed))
+		}
+		// ... otros casos
+	}
+
+	return w.Bytes()
+}
+
+// UnmarshalProposal deserializes a Proposal from TLS format.
+func UnmarshalProposal(data []byte) (*Proposal, error) {
+	r := tls.NewReader(data)
+
+	propType, err := r.ReadUint16()
+	if err != nil {
+		return nil, err
+	}
+
+	proposal := &Proposal{
+		Type: ProposalType(propType),
+	}
+
+	switch proposal.Type {
+	case ProposalTypeAdd:
+		kpData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		kp, err := keypackages.UnmarshalKeyPackage(kpData)
+		if err != nil {
+			return nil, err
+		}
+		proposal.Add = &AddProposal{KeyPackage: kp}
+	case ProposalTypeUpdate:
+		lnData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		ln, err := keypackages.UnmarshalLeafNode(lnData)
+		if err != nil {
+			return nil, err
+		}
+		proposal.Update = &UpdateProposal{LeafNode: ln}
+	case ProposalTypeRemove:
+		removed, err := r.ReadUint32()
+		if err != nil {
+			return nil, err
+		}
+		proposal.Remove = &RemoveProposal{Removed: LeafNodeIndex(removed)}
+	}
+
+	return proposal, nil
 }
 
 // GroupState represents the operational state of a group.

@@ -80,7 +80,7 @@ type Group struct {
 	state                 GroupState
 }
 
-// This is the entry point for creating a new group.
+// NewGroup This is the entry point for creating a new group.
 func NewGroup(
 	groupID *GroupID,
 	cipherSuite ciphersuite.CipherSuite,
@@ -155,7 +155,7 @@ func NewGroup(
 		EpochSecrets:          epochSecrets,
 		Proposals:             NewProposalStore(),
 		KeySchedule:           keySchedule,
-		InterimTranscriptHash: make([]byte, 32), // Hash of empty string
+		InterimTranscriptHash: []byte{}, // string vacio
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 	}
@@ -248,18 +248,80 @@ func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 // Commit applies all pending proposals and creates a new epoch.
 //
 // This is the main function to advance the group to a new epoch.
-func (g *Group) Commit() (*StagedCommit, error) {
+// RFC 9420 §12.4
+func (g *Group) Commit(
+	sigPrivKey *ciphersuite.SignaturePrivateKey,
+	sigPubKey *ciphersuite.SignaturePublicKey,
+) (*StagedCommit, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state")
+		return nil, fmt.Errorf("group not in operational state: %w", ErrInvalidGroupState)
 	}
 
 	if len(g.Proposals.Proposals) == 0 {
 		return nil, fmt.Errorf("no proposals to commit")
 	}
 
-	// Create staged commit
+	// 1. Filtrar y validar proposals (RFC §12.2)
+	// Para ahora, usamos todos los del store. En una implementación más avanzada
+	// filtraríamos según las reglas del RFC.
+	proposals := g.Proposals.Proposals
+
+	// 2. Aplicar proposals a una copia provisional del árbol
+	treeDiff := g.RatchetTree.Clone()
+	for _, prop := range proposals {
+		if err := g.applyProposalToTree(prop, treeDiff); err != nil {
+			return nil, fmt.Errorf("applying proposal to tree: %w", err)
+		}
+	}
+
+	// 3. Generar UpdatePath si es necesario (RFC §12.4.1)
+	// Para este commit, siempre generamos uno si hay cambios estructurales
+	// o si se solicita explícitamente.
+	var updatePath *UpdatePath
+	var rootPathSecret *ciphersuite.Secret
+
+	// Generar path secrets y UpdatePath
+	// path_secret[root] -> random
+	// path_secret[n] = DeriveSecret(path_secret[parent(n)], "path")
+	// node_secret[n] = DeriveSecret(path_secret[n], "node")
+	// node_key[n] = DeriveSecret(node_secret[n], "key")
+
+	// Implementación simplificada del UpdatePath para cumplir con la estructura
+	leafNode := &LeafNode{
+		Index:         g.OwnLeafIndex,
+		EncryptionKey: make([]byte, 32), // Mock
+		SignatureKey:  sigPubKey.AsSlice(),
+		Credential:    g.Members[g.OwnLeafIndex].Credential,
+	}
+
+	updatePath = &UpdatePath{
+		LeafNode: leafNode,
+		Nodes:    make([]UpdatePathNode, 0),
+	}
+
+	_ = rootPathSecret // Evitar warning de variable no usada
+
+	// 4. Construir Commit struct
+	commit := &Commit{
+		Proposals: make([]ProposalOrRef, len(proposals)),
+		Path:      updatePath,
+	}
+
+	for i, prop := range proposals {
+		commit.Proposals[i] = ProposalOrRef{
+			Proposal: prop,
+		}
+	}
+
+	// 5. Crear StagedCommit
 	stagedCommit := &StagedCommit{
-		Proposals: g.Proposals.Proposals,
+		Commit:             commit,
+		Proposals:          proposals,
+		WireFormat:         1, // PublicMessage
+		FramedContentBytes: commit.Marshal(),
+		Signature:          make([]byte, 64), // Mock
+		ConfirmationTag:    make([]byte, 32), // Mock
+		RootPathSecret:     ciphersuite.ZeroSecret(g.CipherSuite.HashLength()),
 	}
 
 	g.PendingCommit = stagedCommit
@@ -268,29 +330,125 @@ func (g *Group) Commit() (*StagedCommit, error) {
 	return stagedCommit, nil
 }
 
-// MergeCommit merges a staged commit into the group state.
+// applyProposalToTree aplica un proposal a un árbol específico.
+func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree) error {
+	switch proposal.Type {
+	case ProposalTypeAdd:
+		leafData := treesync.LeafNodeData{
+			EncryptionKey: proposal.Add.KeyPackage.InitKey,
+			SignatureKey:  proposal.Add.KeyPackage.LeafNode.SignatureKey,
+			Credential:    proposal.Add.KeyPackage.LeafNode.Credential,
+		}
+		tree.AddLeaf(leafData)
+	case ProposalTypeRemove:
+		nodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(proposal.Remove.Removed))
+		tree.BlankNode(nodeIdx)
+	case ProposalTypeUpdate:
+		nodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(g.OwnLeafIndex))
+		leafData := treesync.LeafNodeData{
+			EncryptionKey: proposal.Update.LeafNode.EncryptionKey,
+			SignatureKey:  proposal.Update.LeafNode.SignatureKey,
+			Credential:    proposal.Update.LeafNode.Credential,
+		}
+		tree.SetLeaf(treesync.LeafIndex(uint32(nodeIdx)/2), leafData)
+	}
+	return nil
+}
+
+// ProcessCommit procesa un commit recibido.
+func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
+	return g.MergeCommit(stagedCommit)
+}
+
+// MergeCommit aplica un commit y avanza el estado del protocolo
+// RFC 9420 §12.4.2
 func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit {
-		return fmt.Errorf("group not in pending commit state")
+		return fmt.Errorf("group not in pending commit state: %w", ErrInvalidGroupState)
 	}
-
-	// Apply each proposal
+	// 1. Aplicar proposals al ratchet tree
 	for _, proposal := range stagedCommit.Proposals {
 		if err := g.applyProposal(proposal); err != nil {
 			return fmt.Errorf("applying proposal: %w", err)
 		}
 	}
+	// 2. Recomputar TreeHash desde treesync
+	treeHash := g.RatchetTree.TreeHash()
+	// 3. Calcular ConfirmedTranscriptHash nuevo
+	ctHashInput := &ConfirmedTranscriptHashInput{
+		WireFormat: stagedCommit.WireFormat, // uint16
+		Content:    stagedCommit.FramedContentBytes,
+		Signature:  stagedCommit.Signature,
+	}
 
-	// Update epoch
-	g.Epoch.Increment()
+	confirmedTranscriptHash, err := ctHashInput.Calculate(
+		g.CipherSuite,
+		g.InterimTranscriptHash,
+	)
+	if err != nil {
+		return fmt.Errorf("calculating confirmed transcript hash: %w", err)
+	}
+	// 4. Calcular InterimTranscriptHash nuevo
+	itHashInput := &InterimTranscriptHashInput{
+		ConfirmationTag: stagedCommit.ConfirmationTag,
+	}
 
-	// Clear proposals
+	interimTranscriptHash, err := itHashInput.Calculate(
+		g.CipherSuite,
+		confirmedTranscriptHash,
+	)
+	if err != nil {
+		return fmt.Errorf("calculating interim transcript hash: %w", err)
+	}
+	// 5. Actualizar GroupContext (RFC §8.1)
+	g.GroupContext.IncrementEpoch()
+	g.GroupContext.UpdateTreeHash(treeHash)
+	g.GroupContext.UpdateConfirmedTranscriptHash(confirmedTranscriptHash)
+
+	// Actualizar también Group directamente
+	g.Epoch = g.GroupContext.Epoch
+	g.InterimTranscriptHash = interimTranscriptHash
+	// 6. Avanzar key schedule → nuevos EpochSecrets
+	// Calcular commit_secret del UpdatePath si existe
+	var commitSecret *ciphersuite.Secret
+	if stagedCommit.Commit != nil && stagedCommit.Commit.Path != nil {
+		// El commit_secret es el path_secret de la raíz
+		commitSecret = stagedCommit.RootPathSecret
+	} else {
+		commitSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
+	}
+
+	g.KeySchedule.SetCommitSecret(commitSecret)
+
+	_, err = g.KeySchedule.ComputeJoinerSecret()
+	if err != nil {
+		return fmt.Errorf("computing joiner secret: %w", err)
+	}
+
+	_, err = g.KeySchedule.ComputePskSecret(nil) // o []Psk{} si hay PSKs
+	if err != nil {
+		return fmt.Errorf("computing psk secret: %w", err)
+	}
+
+	groupContextBytes := g.GroupContext.Marshal()
+	_, err = g.KeySchedule.ComputeIntermediateSecret(groupContextBytes)
+	if err != nil {
+		return fmt.Errorf("computing intermediate secret: %w", err)
+	}
+
+	_, err = g.KeySchedule.ComputeEpochSecret()
+	if err != nil {
+		return fmt.Errorf("computing epoch secret: %w", err)
+	}
+
+	g.EpochSecrets, err = g.KeySchedule.DeriveEpochSecrets()
+	if err != nil {
+		return fmt.Errorf("deriving epoch secrets: %w", err)
+	}
+	// 7. Limpiar estado
 	g.Proposals.Clear()
-
-	// Update state
-	g.state = StateOperational
 	g.PendingCommit = nil
-
+	g.state = StateOperational
 	return nil
 }
 
@@ -311,11 +469,37 @@ func (g *Group) applyProposal(proposal *Proposal) error {
 // applyAddProposal applies an Add proposal.
 func (g *Group) applyAddProposal(add *AddProposal) error {
 	if add == nil {
-		return fmt.Errorf("invalid Add proposal")
+		return ErrNilAddProposal
+	}
+	if add.KeyPackage == nil {
+		return ErrNilKeyPackage
 	}
 
-	// For now, just increment leaf count - full implementation would add the key package
-	_ = add
+	// Validar KeyPackage
+	if err := add.KeyPackage.Validate(); err != nil {
+		return fmt.Errorf("invalid key package: %w", err)
+	}
+
+	// Insertar en el árbol
+	leafData := treesync.LeafNodeData{
+		EncryptionKey:  add.KeyPackage.InitKey,
+		SignatureKey:   add.KeyPackage.LeafNode.SignatureKey,
+		Credential:     add.KeyPackage.LeafNode.Credential,
+		Capabilities:   &treesync.LeafNodeCapabilities{},
+		Lifetime:       &treesync.LeafNodeLifetime{},
+		LeafNodeSource: 1, // key_package
+	}
+
+	leafIdx, _ := g.RatchetTree.AddLeaf(leafData)
+	leafIndex := LeafNodeIndex(leafIdx)
+
+	// Agregar a Members
+	g.Members[leafIndex] = &Member{
+		LeafIndex:  leafIndex,
+		KeyPackage: add.KeyPackage,
+		Credential: add.KeyPackage.LeafNode.Credential,
+		Active:     true,
+	}
 
 	return nil
 }
