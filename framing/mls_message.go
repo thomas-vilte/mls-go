@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // MLSMessage es el wrapper de nivel superior para todos los mensajes MLS (RFC 9420 §6).
@@ -29,8 +29,8 @@ type MLSMessage struct {
 	PublicMessage  *PublicMessage
 	PrivateMessage *PrivateMessage
 	// Payloads opacos hasta que Welcome/GroupInfo/KeyPackage estén implementados.
-	Welcome   []byte
-	GroupInfo []byte
+	Welcome    []byte
+	GroupInfo  []byte
 	KeyPackage []byte
 }
 
@@ -60,6 +60,22 @@ func (m *MLSMessage) WireFormat() WireFormat {
 	default:
 		return 0
 	}
+}
+
+// AsPrivate retorna el PrivateMessage y true si el mensaje es cifrado.
+func (m *MLSMessage) AsPrivate() (*PrivateMessage, bool) {
+	if m.PrivateMessage != nil {
+		return m.PrivateMessage, true
+	}
+	return nil, false
+}
+
+// AsPublic retorna el PublicMessage y true si el mensaje es en claro.
+func (m *MLSMessage) AsPublic() (*PublicMessage, bool) {
+	if m.PublicMessage != nil {
+		return m.PublicMessage, true
+	}
+	return nil, false
 }
 
 // Marshal serializa el MLSMessage para transmisión.

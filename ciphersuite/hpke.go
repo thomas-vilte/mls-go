@@ -213,6 +213,26 @@ func decryptWithLabelInternal(
 	return plaintext, nil
 }
 
+// DeriveKeyPair derives an HPKE key pair from a secret (RFC 9180 §4.1).
+func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
+	// For DHKEM(P-256, HKDF-SHA256)
+	// dkp_prk = Extract("", ikm)
+	dkpPrk := hkdfExtract(ikm, nil)
+
+	// info = labeledExpand("", "dkp_sk", suite_id)
+	suiteID := hpkeSuiteID(cs)
+	info := labeledExpand(nil, "dkp_sk", suiteID)
+
+	// sk = Expand(dkp_prk, info, Nsk)
+	// Nsk = 32 for P-256
+	skBytes, err := hkdfExpand(dkpPrk, info, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	return ecdh.P256().NewPrivateKey(skBytes)
+}
+
 func hpkeSuiteID(cs CipherSuite) []byte {
 	// suite_id = "HPKE" || 0x00 || kem_id || kdf_id || aead_id
 	config := cs.HPKEConfig()

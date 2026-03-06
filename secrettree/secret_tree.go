@@ -1,8 +1,8 @@
-// Package secret_tree implements the MLS Secret Tree according to RFC 9420 §9.
+// Package secrettree implements the MLS Secret Tree according to RFC 9420 §9.
 //
 // The secret tree is derived from the encryption_secret and is used to derive
 // encryption keys and nonces for application messages.
-package secret_tree
+package secrettree
 
 import (
 	"crypto/sha256"

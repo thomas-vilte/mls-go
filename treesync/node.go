@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"errors"
 
+	"github.com/openmls/go/ciphersuite"
+	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/internal/tls"
 )
 
@@ -101,6 +103,161 @@ func (c *LeafNodeCapabilities) Marshal(buf *tls.Writer) {
 	buf.WriteVLBytes(credBuf.Bytes())
 }
 
+// UnmarshalLeafNodeData deserializes a LeafNodeData from TLS format (RFC 9420 §7.2).
+func UnmarshalLeafNodeData(data []byte) (*LeafNodeData, error) {
+	r := tls.NewReader(data)
+	return UnmarshalLeafNodeDataFromReader(r)
+}
+
+// UnmarshalLeafNodeDataFromReader deserializes a LeafNodeData from a TLS reader.
+func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
+	l := &LeafNodeData{}
+
+	// Credential
+	credData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	l.Credential, err = credentials.UnmarshalCredential(credData)
+	if err != nil {
+		return nil, err
+	}
+
+	// EncryptionKey
+	l.EncryptionKey, err = r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	// Capabilities
+	capsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
+	if err != nil {
+		return nil, err
+	}
+
+	// Lifetime
+	nb, err := r.ReadUint64()
+	if err != nil {
+		return nil, err
+	}
+	na, err := r.ReadUint64()
+	if err != nil {
+		return nil, err
+	}
+	l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
+
+	// Extensions
+	extsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	// For now, store raw extensions
+	l.Extensions = [][]byte{extsData}
+
+	// LeafNodeSource
+	l.LeafNodeSource, err = r.ReadUint8()
+	if err != nil {
+		return nil, err
+	}
+
+	// ParentHash (only if source == commit)
+	if l.LeafNodeSource == 3 {
+		l.ParentHash, err = r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Signature
+	l.Signature, err = r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	return l, nil
+}
+
+// UnmarshalCapabilities deserializes capabilities.
+func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
+	c := &LeafNodeCapabilities{}
+
+	// ProtocolVersions
+	versData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	versReader := tls.NewReader(versData)
+	for versReader.Remaining() > 0 {
+		v, err := versReader.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		c.ProtocolVersions = append(c.ProtocolVersions, v)
+	}
+
+	// CipherSuites
+	csData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	csReader := tls.NewReader(csData)
+	for csReader.Remaining() > 0 {
+		cs, err := csReader.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		c.CipherSuites = append(c.CipherSuites, cs)
+	}
+
+	// Extensions
+	extsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	extsReader := tls.NewReader(extsData)
+	for extsReader.Remaining() > 0 {
+		e, err := extsReader.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		c.Extensions = append(c.Extensions, e)
+	}
+
+	// Proposals
+	propsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	propsReader := tls.NewReader(propsData)
+	for propsReader.Remaining() > 0 {
+		p, err := propsReader.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		c.Proposals = append(c.Proposals, p)
+	}
+
+	// Credentials
+	credsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	credsReader := tls.NewReader(credsData)
+	for credsReader.Remaining() > 0 {
+		cr, err := credsReader.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		c.Credentials = append(c.Credentials, cr)
+	}
+
+	return c, nil
+}
+
 // Hash computes the hash of a LeafNode.
 func (l *LeafNodeData) Hash() []byte {
 	data := l.Marshal()
@@ -135,6 +292,38 @@ func (l *LeafNodeData) Validate() error {
 	}
 
 	return nil
+}
+
+// Verify verifies the LeafNode signature (RFC 9420 §7.3).
+func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
+	tbs := l.MarshalTBS()
+
+	// Convert *ecdsa.PublicKey to OpenMlsSignaturePublicKey
+	// We need the raw bytes. For P-256, it's 0x04 || X || Y
+	pubKeyBytes := l.marshalSignatureKey()
+	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, ciphersuite.SignatureScheme(0)) // scheme not strictly needed for raw verify
+
+	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
+}
+
+func (l *LeafNodeData) marshalSignatureKey() []byte {
+	if l.SignatureKey == nil {
+		return nil
+	}
+	xBytes := l.SignatureKey.X.Bytes()
+	yBytes := l.SignatureKey.Y.Bytes()
+
+	// Pad to 32 bytes
+	paddedX := make([]byte, 32)
+	copy(paddedX[32-len(xBytes):], xBytes)
+	paddedY := make([]byte, 32)
+	copy(paddedY[32-len(yBytes):], yBytes)
+
+	res := make([]byte, 65)
+	res[0] = 0x04
+	copy(res[1:33], paddedX)
+	copy(res[33:65], paddedY)
+	return res
 }
 
 // clone creates a deep copy of a node.

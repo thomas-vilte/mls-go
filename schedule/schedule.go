@@ -29,6 +29,7 @@ import (
 //   - resumption_secret → reinitialization
 //   - init_secret → next epoch
 type EpochSecrets struct {
+	SenderDataSecret     *ciphersuite.Secret
 	EncryptionSecret     *ciphersuite.Secret
 	ExporterSecret       *ciphersuite.Secret
 	AuthenticationSecret *ciphersuite.Secret
@@ -159,6 +160,12 @@ func (ks *KeySchedule) DeriveEpochSecrets() (*EpochSecrets, error) {
 
 	secrets := &EpochSecrets{}
 	var err error
+
+	// sender_data_secret (RFC §8)
+	secrets.SenderDataSecret, err = ks.epochSecret.HKDFExpand([]byte("sender data"), ks.ciphersuite.HashLength())
+	if err != nil {
+		return nil, fmt.Errorf("deriving sender_data_secret: %w", err)
+	}
 
 	// encryption_secret
 	secrets.EncryptionSecret, err = ks.epochSecret.HKDFExpand([]byte("encryption"), ks.ciphersuite.HashLength())

@@ -1,4 +1,3 @@
-//nolint:unused
 package group
 
 import (
@@ -8,7 +7,7 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
 	"github.com/openmls/go/treesync"
 )
@@ -125,6 +124,21 @@ type GroupInfo struct {
 	Signer          LeafNodeIndex
 	Signature       []byte
 	RatchetTree     *treesync.RatchetTree
+}
+
+// MarshalTBS serializa los campos a firmar de GroupInfo (excluye Signature).
+func (gi *GroupInfo) MarshalTBS() []byte {
+	w := tls.NewWriter()
+	w.WriteVLBytes(gi.GroupContext.Marshal())
+	extBuf := tls.NewWriter()
+	for _, ext := range gi.Extensions {
+		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteVLBytes(ext.Data)
+	}
+	w.WriteVLBytes(extBuf.Bytes())
+	w.WriteVLBytes(gi.ConfirmationTag)
+	w.WriteUint32(uint32(gi.Signer))
+	return w.Bytes()
 }
 
 // Marshal serializa GroupInfo a formato TLS.
@@ -292,15 +306,18 @@ func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
 	pathSecret []byte,
-	signerPrivKey []byte,
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
 	}
 
 	// 1. Calcular welcome_secret desde joiner_secret
-	// welcome_secret = ExpandWithLabel(joiner_secret, "welcome", "", KDF.Nh)
-	welcomeSecret := deriveWelcomeSecret(joinerSecret, g.CipherSuite)
+	// welcome_secret = DeriveSecret(joiner_secret, "welcome")
+	welcomeSecret, err := joinerSecret.DeriveSecret(g.CipherSuite, "welcome")
+	if err != nil {
+		return nil, fmt.Errorf("deriving welcome secret: %w", err)
+	}
 
 	// 2. Construir GroupInfo
 	groupInfo := &GroupInfo{
@@ -308,19 +325,42 @@ func (g *Group) CreateWelcome(
 		Extensions:      g.GroupContext.Extensions,
 		ConfirmationTag: g.ConfirmationTag,
 		Signer:          g.OwnLeafIndex,
+		RatchetTree:     g.RatchetTree,
 	}
 
-	// Firmar GroupInfo
-	groupInfoBytes := groupInfo.Marshal()
-	signature, err := signWithPrivateKey(groupInfoBytes, signerPrivKey)
+	// Serializar ratchet tree como extensión (RFC §12.4.3.3)
+	const extTypeRatchetTree = 0x0002
+	treeData := g.RatchetTree.MarshalTree()
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: extTypeRatchetTree,
+		Data: treeData,
+	})
+
+	// Firmar GroupInfo sobre los campos TBS (excluye Signature)
+	groupInfoTBS := groupInfo.MarshalTBS()
+	signature, err := signerPrivKey.Sign(groupInfoTBS)
 	if err != nil {
 		return nil, fmt.Errorf("signing group info: %w", err)
 	}
-	groupInfo.Signature = signature
+	groupInfo.Signature = signature.AsSlice()
 
-	// 3. Encriptar GroupInfo con welcome_secret
-	// Usar AES-GCM con la welcome_secret como key
-	encryptedGroupInfo, err := encryptWithAEAD(groupInfoBytes, welcomeSecret, []byte("welcome"))
+	// 3. Encriptar GroupInfo completo (con firma) con welcome_secret (RFC §11.2.2)
+	groupInfoBytes := groupInfo.Marshal()
+	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.CipherSuite.AeadKeyLength())
+	if err != nil {
+		return nil, err
+	}
+	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, g.CipherSuite.AeadNonceLength())
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedGroupInfo, err := ciphersuite.AESEncrypt(
+		welcomeKey.AsSlice(),
+		welcomeNonce.AsSlice(),
+		groupInfoBytes,
+		[]byte{}, // empty AAD
+	)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting group info: %w", err)
 	}
@@ -335,8 +375,8 @@ func (g *Group) CreateWelcome(
 		// Construir GroupSecrets
 		groupSecrets := &GroupSecrets{
 			JoinerSecret: joinerSecret,
-			PathSecret:   pathSecret, // nil si no hay UpdatePath
-			Psks:         nil,        // o PSKs si aplica
+			PathSecret:   pathSecret,
+			Psks:         nil,
 		}
 
 		// Encriptar con HPKE usando init_key del KeyPackage
@@ -390,7 +430,6 @@ func JoinFromWelcome(
 	}
 
 	// 3. Desencriptar GroupSecrets con mi HPKE private key
-	// Convertir la clave privada ECDH a bytes
 	privKeyBytes := myPrivateKeys.InitKey.Bytes()
 	secretsData, err := ciphersuite.DecryptWithLabel(
 		privKeyBytes,
@@ -409,10 +448,27 @@ func JoinFromWelcome(
 	}
 
 	// 4. Derivar welcome_secret desde joiner_secret
-	welcomeSecret := deriveWelcomeSecret(groupSecrets.JoinerSecret, welcome.CipherSuite)
+	welcomeSecret, err := groupSecrets.JoinerSecret.DeriveSecret(welcome.CipherSuite, "welcome")
+	if err != nil {
+		return nil, err
+	}
 
 	// 5. Desencriptar GroupInfo
-	groupInfoData, err := decryptWithAEAD(welcome.EncryptedGroupInfo, welcomeSecret, []byte("welcome"))
+	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, welcome.CipherSuite.AeadKeyLength())
+	if err != nil {
+		return nil, err
+	}
+	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, welcome.CipherSuite.AeadNonceLength())
+	if err != nil {
+		return nil, err
+	}
+
+	groupInfoData, err := ciphersuite.AESDecrypt(
+		welcomeKey.AsSlice(),
+		welcomeNonce.AsSlice(),
+		welcome.EncryptedGroupInfo,
+		[]byte{},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting group info: %w", err)
 	}
@@ -422,13 +478,35 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("unmarshaling group info: %w", err)
 	}
 
-	// 6. Verificar firma de GroupInfo (simplificado)
-	// En implementación real, verificar contra la public key del signer
+	// 6. Verificar firma de GroupInfo (RFC §12.4.3.1)
+	if groupInfo.RatchetTree != nil {
+		signerLeaf := groupInfo.RatchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
+		if signerLeaf != nil && signerLeaf.LeafData != nil && signerLeaf.LeafData.SignatureKey != nil {
+			ecdhKey, ecdhErr := signerLeaf.LeafData.SignatureKey.ECDH()
+			if ecdhErr == nil {
+				pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(ecdhKey.Bytes(), ciphersuite.ECDSA_SECP256R1_SHA256)
+				sig := ciphersuite.NewSignature(groupInfo.Signature)
+				if verifyErr := pubKey.Verify(groupInfo.MarshalTBS(), sig); verifyErr != nil {
+					return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
+				}
+			}
+		}
+	}
 
-	// 7. Reconstituir ratchet tree desde GroupInfo.RatchetTree o construir vacío
+	// 7. Reconstituir ratchet tree: primero buscar extensión ratchet_tree,
+	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
+	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
+	for _, ext := range groupInfo.Extensions {
+		if ext.Type == extTypeRatchetTree {
+			parsed, parseErr := treesync.UnmarshalTree(ext.Data)
+			if parseErr == nil {
+				ratchetTree = parsed
+			}
+			break
+		}
+	}
 	if ratchetTree == nil {
-		// Crear árbol vacío
 		ratchetTree = treesync.NewRatchetTree(1)
 	}
 
@@ -436,7 +514,6 @@ func JoinFromWelcome(
 	groupContext := groupInfo.GroupContext
 
 	// 9. Avanzar key schedule desde joiner_secret
-	// Inicializar key schedule con init_secret = joiner_secret
 	keySchedule := schedule.NewKeySchedule(welcome.CipherSuite, groupSecrets.JoinerSecret)
 
 	if groupSecrets.PathSecret != nil {
@@ -475,6 +552,18 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
+	// 9b. Determinar OwnLeafIndex buscando nuestra InitKey en el árbol
+	var ownLeafIndex LeafNodeIndex
+	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
+		leaf := ratchetTree.GetLeaf(i)
+		if leaf != nil && leaf.LeafData != nil {
+			if bytes.Equal(leaf.LeafData.EncryptionKey, myKeyPackage.InitKey) {
+				ownLeafIndex = LeafNodeIndex(i)
+				break
+			}
+		}
+	}
+
 	// 10. Crear Group
 	group := &Group{
 		GroupID:               groupContext.GroupID,
@@ -482,6 +571,7 @@ func JoinFromWelcome(
 		CipherSuite:           welcome.CipherSuite,
 		GroupContext:          groupContext,
 		RatchetTree:           ratchetTree,
+		OwnLeafIndex:          ownLeafIndex,
 		EpochSecrets:          epochSecrets,
 		InterimTranscriptHash: []byte{}, // Inicial
 		Members:               make(map[LeafNodeIndex]*Member),
@@ -490,44 +580,5 @@ func JoinFromWelcome(
 		Proposals:             NewProposalStore(),
 	}
 
-	// Agregarnos como miembro (nuestro índice debe determinarse del commit)
-	// Por ahora, usamos el índice del signer como referencia
-	// En implementación real, esto viene del UpdatePath
-
 	return group, nil
-}
-
-// Funciones auxiliares
-
-// deriveWelcomeSecret deriva el welcome_secret desde joiner_secret.
-func deriveWelcomeSecret(joinerSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite) []byte {
-	// welcome_secret = ExpandWithLabel(joiner_secret, "welcome", "", KDF.Nh)
-	// Simplificado: usar HKDF directamente
-	secret, err := joinerSecret.DeriveSecret(cs, "welcome")
-	if err != nil {
-		return nil
-	}
-	return secret.AsSlice()
-}
-
-// encryptWithAEAD encripta datos usando AES-GCM.
-func encryptWithAEAD(plaintext, key, aad []byte) ([]byte, error) {
-	// Simplificado: en implementación real usar AEAD del ciphersuite
-	// Por ahora, retornar plaintext "encriptado" (mock)
-	return plaintext, nil
-}
-
-// decryptWithAEAD desencripta datos usando AES-GCM.
-func decryptWithAEAD(ciphertext, key, aad []byte) ([]byte, error) {
-	// Simplificado: en implementación real usar AEAD del ciphersuite
-	// Por ahora, retornar ciphertext "desencriptado" (mock)
-	return ciphertext, nil
-}
-
-// signWithPrivateKey firma datos con una clave privada.
-func signWithPrivateKey(data, privKey []byte) ([]byte, error) {
-	// Simplificado: en implementación real usar ECDSA
-	// Por ahora, retornar hash como "firma" (mock)
-	hash := sha256.Sum256(data)
-	return hash[:], nil
 }

@@ -5,7 +5,7 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {

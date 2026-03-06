@@ -6,7 +6,7 @@ import (
 
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/internal/tls"
-	kp "github.com/openmls/go/key_packages"
+	kp "github.com/openmls/go/keypackages"
 )
 
 // TestKeyPackageGenerate tests KeyPackage generation.

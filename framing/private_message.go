@@ -4,9 +4,8 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/group"
 	"github.com/openmls/go/internal/tls"
-	secret_tree "github.com/openmls/go/secret_tree"
+	secret_tree "github.com/openmls/go/secrettree"
 )
 
 // PrivateMessage implementa RFC 9420 §6.3.
@@ -107,7 +106,7 @@ type EncryptParams struct {
 	SenderDataSecret *ciphersuite.Secret     // encripta MLSSenderData
 	SecretTree       *secret_tree.Tree       // deriva content key/nonce
 	SigKey           *ciphersuite.SignaturePrivateKey
-	GroupContext     *group.GroupContext // incluido en FramedContentTBS
+	GroupContext     []byte // serialized GroupContext; incluido en FramedContentTBS
 }
 
 // Encrypt implementa RFC 9420 §6.3.1.
@@ -235,7 +234,7 @@ type DecryptParams struct {
 	// SigPubKey se utiliza para verificar la firma del remitente luego de descifrar.
 	// Si es nil, se omite la verificación (no recomendado en producción).
 	SigPubKey    *ciphersuite.OpenMlsSignaturePublicKey
-	GroupContext *group.GroupContext // requerido para verificación TBS
+	GroupContext []byte // serialized GroupContext; requerido para verificación TBS
 }
 
 // Decrypt descifra un PrivateMessage y retorna el AuthenticatedContent.

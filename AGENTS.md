@@ -113,7 +113,7 @@ Use import aliases only when necessary to avoid ambiguity:
 
 ```go
 import (
-    keypackages "github.com/openmls/go/key_packages"
+    keypackages "github.com/openmls/go/keypackages"
 )
 ```
 
