@@ -1,0 +1,153 @@
+package framing
+
+import (
+	"fmt"
+
+	"github.com/openmls/go/ciphersuite"
+	"github.com/openmls/go/group"
+	"github.com/openmls/go/internal/tls"
+	keypackages "github.com/openmls/go/key_packages"
+)
+
+// FramedContentAuthData implements RFC 9420 §6.1.
+// ConfirmationTag is non-nil only when ContentType == Commit.
+type FramedContentAuthData struct {
+	Signature       *ciphersuite.Signature // message signature
+	ConfirmationTag []byte                 // nil unless content_type == commit
+}
+
+// Marshal serializes auth data; includes confirmation_tag only for Commit.
+func (a *FramedContentAuthData) Marshal(ct ContentType) []byte {
+	w := tls.NewWriter()
+	var sigBytes []byte
+	if a.Signature != nil {
+		sigBytes = a.Signature.AsSlice()
+	}
+	w.WriteVLBytes(sigBytes)
+	if ct == ContentTypeCommit && len(a.ConfirmationTag) > 0 {
+		w.WriteVLBytes(a.ConfirmationTag)
+	}
+	return w.Bytes()
+}
+
+// AuthenticatedContent implements RFC 9420 §6.1.
+// It is the input to the signing process, not sent directly on the wire.
+type AuthenticatedContent struct {
+	WireFormat   WireFormat
+	Content      FramedContent
+	Auth         FramedContentAuthData
+	GroupContext *group.GroupContext // required for PublicMessage TBS; nil for PrivateMessage
+}
+
+// MarshalForSigning serializes wire_format + content (used in membership tag TBM).
+func (ac *AuthenticatedContent) MarshalForSigning() []byte {
+	w := tls.NewWriter()
+	w.WriteUint16(uint16(ac.WireFormat))
+	w.WriteRaw(ac.Content.Marshal())
+	return w.Bytes()
+}
+
+// MarshalTBS serializa FramedContentTBS para firmar (RFC 9420 §6.1).
+//
+//	struct {
+//	    ProtocolVersion version = mls10;
+//	    WireFormat wire_format;
+//	    FramedContent content;
+//	    select (FramedContent.sender.sender_type) {
+//	        case member:
+//	        case new_member_commit:  GroupContext group_context;
+//	        case external:
+//	        case new_member_proposal: struct{};
+//	    };
+//	} FramedContentTBS;
+func (ac *AuthenticatedContent) MarshalTBS() []byte {
+	w := tls.NewWriter()
+	w.WriteUint16(uint16(keypackages.MLS10)) // version = mls10
+	w.WriteUint16(uint16(ac.WireFormat))
+	w.WriteRaw(ac.Content.Marshal())
+	// RFC §6.1: GroupContext incluido cuando sender_type == member o new_member_commit
+	st := ac.Content.Sender.Type
+	if (st == SenderTypeMember || st == SenderTypeNewMemberCommit) && ac.GroupContext != nil {
+		w.WriteRaw(ac.GroupContext.Marshal())
+	}
+	return w.Bytes()
+}
+
+// PrivateMessageContent is the plaintext that gets AEAD-encrypted in a PrivateMessage (RFC 9420 §6.3).
+//
+//	struct {
+//	    select (content_type) {
+//	        case application:  ApplicationData application_data;
+//	        case proposal:     Proposal proposal;
+//	        case commit:       Commit commit;
+//	    }
+//	    FramedContentAuthData auth;
+//	    opaque padding[length_of_padding];  // currently always 0
+//	} PrivateMessageContent;
+type PrivateMessageContent struct {
+	Body FramedContentBody
+	Auth FramedContentAuthData
+}
+
+// marshalPrivateMessageContent serializa el plaintext para encriptación de PrivateMessage.
+// paddingSize == 0 significa sin padding; > 0 agrega ceros para alinear al bloque (RFC §6.3).
+func marshalPrivateMessageContent(body FramedContentBody, auth FramedContentAuthData, paddingSize int) []byte {
+	w := tls.NewWriter()
+	body.marshal(w)
+	w.WriteRaw(auth.Marshal(body.ContentType()))
+	if paddingSize > 0 {
+		// padding_length = (paddingSize - (plaintext_len % paddingSize)) % paddingSize
+		plainLen := len(w.Bytes())
+		padLen := (paddingSize - (plainLen % paddingSize)) % paddingSize
+		w.WriteRaw(make([]byte, padLen)) // RFC §6.3: padding MUST be all-zero
+	}
+	return w.Bytes()
+}
+
+// unmarshalPrivateMessageContent parses the decrypted PrivateMessage plaintext.
+func unmarshalPrivateMessageContent(data []byte, ct ContentType) (*PrivateMessageContent, error) {
+	r := tls.NewReader(data)
+
+	bodyData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("framing: reading body: %w", err)
+	}
+	var body FramedContentBody
+	switch ct {
+	case ContentTypeApplication:
+		body = ApplicationData{Data: bodyData}
+	case ContentTypeProposal:
+		body = ProposalBody{Data: bodyData}
+	case ContentTypeCommit:
+		body = CommitBody{Data: bodyData}
+	default:
+		return nil, fmt.Errorf("%w: %d", ErrInvalidContentType, ct)
+	}
+
+	sigBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("framing: reading signature: %w", err)
+	}
+	auth := FramedContentAuthData{Signature: ciphersuite.NewSignature(sigBytes)}
+
+	// confirmation_tag presente solo para Commit
+	if ct == ContentTypeCommit && r.Remaining() > 0 {
+		tag, err := r.ReadVLBytes()
+		if err == nil && len(tag) > 0 {
+			auth.ConfirmationTag = tag
+		}
+	}
+
+	// RFC §6.3: los bytes restantes son padding, deben ser todos cero
+	for r.Remaining() > 0 {
+		b, err := r.ReadUint8()
+		if err != nil {
+			return nil, fmt.Errorf("framing: reading padding: %w", err)
+		}
+		if b != 0 {
+			return nil, fmt.Errorf("%w: non-zero padding byte", ErrInvalidMessage)
+		}
+	}
+
+	return &PrivateMessageContent{Body: body, Auth: auth}, nil
+}
