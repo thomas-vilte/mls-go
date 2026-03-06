@@ -1,6 +1,8 @@
 package group
 
 import (
+	"fmt"
+
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/internal/tls"
 	keypackages "github.com/openmls/go/key_packages"
@@ -25,6 +27,26 @@ type GroupContext struct {
 	TreeHash                []byte
 	ConfirmedTranscriptHash []byte
 	Extensions              []Extension
+}
+
+// IncrementEpoch increments the epoch counter.
+func (gc *GroupContext) IncrementEpoch() {
+	gc.Epoch++
+}
+
+// UpdateTreeHash updates the tree hash.
+func (gc *GroupContext) UpdateTreeHash(newTreeHash []byte) {
+	gc.TreeHash = newTreeHash
+}
+
+// UpdateConfirmedTranscriptHash updates the confirmed transcript hash.
+func (gc *GroupContext) UpdateConfirmedTranscriptHash(newHash []byte) {
+	gc.ConfirmedTranscriptHash = newHash
+}
+
+// SetExtensions sets the extensions.
+func (gc *GroupContext) SetExtensions(extensions []Extension) {
+	gc.Extensions = extensions
 }
 
 // Marshal serializes the GroupContext to TLS format.
@@ -73,11 +95,17 @@ func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Extensions
-	_, err = r.ReadVLBytes()
+	// Extensions - parsear correctamente
+	extensionsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
+
+	extensions, err := parseExtensions(extensionsData)
+	if err != nil {
+		return nil, fmt.Errorf("parsing extensions: %w", err)
+	}
+
 	return &GroupContext{
 		Version:                 keypackages.ProtocolVersion(version),
 		CipherSuite:             ciphersuite.CipherSuite(cipherSuite),
@@ -85,6 +113,31 @@ func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
 		Epoch:                   NewGroupEpoch(epoch),
 		TreeHash:                treeHash,
 		ConfirmedTranscriptHash: confirmedTranscriptHash,
-		Extensions:              []Extension{},
+		Extensions:              extensions,
 	}, nil
+}
+
+// Función auxiliar para parsear extensions
+func parseExtensions(data []byte) ([]Extension, error) {
+	r := tls.NewReader(data)
+	var extensions []Extension
+
+	for r.Remaining() > 0 {
+		extType, err := r.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+
+		extData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+
+		extensions = append(extensions, Extension{
+			Type: extType,
+			Data: extData,
+		})
+	}
+
+	return extensions, nil
 }
