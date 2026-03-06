@@ -64,6 +64,11 @@ type SignaturePrivateKey struct {
 	ecdsa *ecdsa.PrivateKey
 }
 
+// NewSignaturePrivateKey creates a wrapper from an existing ecdsa.PrivateKey.
+func NewSignaturePrivateKey(priv *ecdsa.PrivateKey) *SignaturePrivateKey {
+	return &SignaturePrivateKey{ecdsa: priv}
+}
+
 // GenerateSignaturePrivateKey generates a new P-256 private key.
 func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -79,12 +84,12 @@ func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
 	// Usar la API moderna de ecdh para obtener los bytes de la public key
 	// Convertir las coordenadas X, Y a formato uncompressed
 	pubKey := k.ecdsa.PublicKey
-	
+
 	// Formato uncompressed: 0x04 || X || Y (65 bytes para P-256)
 	// X e Y son cada uno 32 bytes
 	xBytes := pubKey.X.Bytes()
 	yBytes := pubKey.Y.Bytes()
-	
+
 	// Asegurar que tengan 32 bytes (padding con ceros si es necesario)
 	if len(xBytes) < 32 {
 		padded := make([]byte, 32)
@@ -96,13 +101,13 @@ func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
 		copy(padded[32-len(yBytes):], yBytes)
 		yBytes = padded
 	}
-	
+
 	// Construir formato uncompressed
 	bytes := make([]byte, 65)
 	bytes[0] = 0x04
 	copy(bytes[1:33], xBytes)
 	copy(bytes[33:65], yBytes)
-	
+
 	return NewSignaturePublicKey(bytes)
 }
 

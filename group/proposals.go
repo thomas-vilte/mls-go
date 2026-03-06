@@ -1,6 +1,8 @@
 package group
 
 import (
+	"errors"
+
 	keypackages "github.com/openmls/go/key_packages"
 )
 
@@ -58,8 +60,12 @@ type Confirmation struct {
 }
 
 // ExternalInitProposal - RFC 9420 §12.1.6
+//
+//	struct {
+//	    opaque kem_output<V>;
+//	} ExternalInit;
 type ExternalInitProposal struct {
-	KeyPackage *keypackages.KeyPackage
+	KemOutput []byte
 }
 
 // GroupContextExtensionsProposal - RFC 9420 §12.1.7
@@ -138,11 +144,11 @@ func NewReInitProposal(
 }
 
 // NewExternalInitProposal creates a new ExternalInit proposal.
-func NewExternalInitProposal(keyPackage *keypackages.KeyPackage) *Proposal {
+func NewExternalInitProposal(kemOutput []byte) *Proposal {
 	return &Proposal{
 		Type: ProposalTypeExternalInit,
 		ExternalInit: &ExternalInitProposal{
-			KeyPackage: keyPackage,
+			KemOutput: kemOutput,
 		},
 	}
 }
@@ -254,10 +260,10 @@ func validateExternalInitProposal(ext *ExternalInitProposal) error {
 	if ext == nil {
 		return ErrNilExternalInitProposal
 	}
-	if ext.KeyPackage == nil {
-		return ErrNilKeyPackage
+	if len(ext.KemOutput) == 0 {
+		return errors.New("kem_output is empty")
 	}
-	return ext.KeyPackage.Validate()
+	return nil
 }
 
 func validateGroupContextExtensionsProposal(ext *GroupContextExtensionsProposal) error {
