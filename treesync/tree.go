@@ -1,7 +1,8 @@
 // Package treesync implements MLS ratchet tree operations according to RFC 9420 §7.
 //
-// The ratchet tree is the core data structure that enables efficient group key
-// agreement. It's a binary tree where each leaf represents a group member.
+// Uses RFC Appendix C interleaved representation:
+// - Leaves at indices 0, 2, 4, 6, ... (even)
+// - Parents at indices 1, 3, 5, 7, ... (odd)
 package treesync
 
 import (
@@ -16,13 +17,13 @@ import (
 	"github.com/openmls/go/internal/tls"
 )
 
-// NodeIndex represents the index of a node in the tree.
+// NodeIndex represents a node in the tree (interleaved representation).
 type NodeIndex uint32
 
-// LeafIndex represents the index of a leaf (member) in the tree.
+// LeafIndex represents a leaf position.
 type LeafIndex uint32
 
-// NodeState represents the state of a tree node.
+// NodeState represents the state of a node.
 type NodeState uint8
 
 const (
@@ -31,15 +32,13 @@ const (
 	NodeStateBlank
 )
 
-// RatchetTree is the main tree structure for MLS group key agreement.
+// RatchetTree represents the MLS ratchet tree.
 type RatchetTree struct {
-	Nodes      []Node
-	NumLeaves  uint32
-	cachedHash []byte
-	hashDirty  bool
+	Nodes     []Node
+	NumLeaves uint32
 }
 
-// Node represents a node in the ratchet tree.
+// Node represents a node in the tree.
 type Node struct {
 	State          NodeState
 	EncryptionKey  *ecdh.PublicKey
@@ -48,20 +47,20 @@ type Node struct {
 	LeafData       *LeafNodeData
 }
 
-// LeafNodeData contains the data specific to leaf nodes.
+// LeafNodeData contains leaf-specific data.
 type LeafNodeData struct {
 	Credential     *credentials.Credential
 	SignatureKey   *ecdsa.PublicKey
 	EncryptionKey  []byte
 	Capabilities   *LeafNodeCapabilities
 	Lifetime       *LeafNodeLifetime
-	Extensions     [][]byte // Raw extension data to avoid import cycle
+	Extensions     [][]byte
 	LeafNodeSource uint8
 	ParentHash     []byte
 	Signature      []byte
 }
 
-// LeafNodeCapabilities mirrors the KeyPackage capabilities.
+// LeafNodeCapabilities represents node capabilities.
 type LeafNodeCapabilities struct {
 	ProtocolVersions []uint16
 	CipherSuites     []uint16
@@ -70,419 +69,316 @@ type LeafNodeCapabilities struct {
 	Credentials      []uint16
 }
 
-// LeafNodeLifetime indicates the validity period of a leaf node.
+// LeafNodeLifetime represents validity period.
 type LeafNodeLifetime struct {
 	NotBefore uint64
 	NotAfter  uint64
 }
 
-// NewRatchetTree creates a new ratchet tree with the specified capacity.
+// NewRatchetTree creates a tree with N leaves.
 func NewRatchetTree(numLeaves uint32) *RatchetTree {
-	totalNodes := int(numLeaves)*2 - 1
-	if totalNodes < 1 {
-		totalNodes = 1
+	if numLeaves < 1 {
+		numLeaves = 1
 	}
-
 	return &RatchetTree{
-		Nodes:     make([]Node, totalNodes),
+		Nodes:     make([]Node, numLeaves*2-1),
 		NumLeaves: numLeaves,
-		hashDirty: true,
 	}
 }
 
-// AddLeaf adds a new leaf to the tree.
+// LeafCount returns the number of leaves.
+func (t *RatchetTree) LeafCount() uint32 {
+	return t.NumLeaves
+}
+
+// IsLeaf returns true if node index is even (leaf).
+func IsLeaf(idx NodeIndex) bool {
+	return uint32(idx)%2 == 0
+}
+
+// IsParent returns true if node index is odd (parent).
+func IsParent(idx NodeIndex) bool {
+	return uint32(idx)%2 == 1
+}
+
+// LeafIndexToNodeIndex converts leaf k to node 2k.
+func LeafIndexToNodeIndex(leaf LeafIndex) NodeIndex {
+	return NodeIndex(uint32(leaf) * 2)
+}
+
+// NodeIndexToLeafIndex converts node to leaf (if even).
+func NodeIndexToLeafIndex(node NodeIndex) (LeafIndex, error) {
+	if !IsLeaf(node) {
+		return 0, fmt.Errorf("node %d is not a leaf", node)
+	}
+	return LeafIndex(uint32(node) / 2), nil
+}
+
+// nodeLevel retorna el nivel de un nodo en la representación intercalada (RFC Apéndice C).
+// Las hojas están en nivel 0; se cuenta cuántos bits 1 consecutivos tiene x desde el bit 0.
+func nodeLevel(x uint32) uint32 {
+	// Trailing ones = trailing zeros of ^x
+	return uint32(bits.TrailingZeros32(^x))
+}
+
+// Root retorna el índice del nodo raíz según RFC Apéndice C:
 //
-// In the standard heap representation, leaves occupy the last N positions.
-// This function finds the first empty leaf slot and places the new leaf there.
-func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
-	// Find first empty leaf slot
-	// Leaves are at indices [numLeaves-1, numLeaves*2-2]
-	var leafIdx LeafIndex
-	var found bool
-	
-	startIdx := NodeIndex(t.NumLeaves - 1)
-	endIdx := NodeIndex(t.NumLeaves*2 - 2)
-	
-	for nodeIdx := startIdx; nodeIdx <= endIdx; nodeIdx++ {
-		if t.Nodes[nodeIdx].State == NodeStateEmpty {
-			leafIdx = LeafIndex(nodeIdx - startIdx)
-			found = true
+//	root(n) = (1 << floor(log2(2n-1))) - 1
+func (t *RatchetTree) Root() NodeIndex {
+	if t.NumLeaves == 1 {
+		return 0
+	}
+	// floor(log2(2n-1)) = bits.Len(2n-1) - 1
+	w := bits.Len(uint(2*t.NumLeaves-1)) - 1
+	return NodeIndex((1 << w) - 1)
+}
+
+// Parent retorna el padre de un nodo según RFC Apéndice C.
+//
+// Si el bit (l+1) del nodo es 0, es hijo izquierdo → padre = x + 2^l.
+// Si el bit (l+1) del nodo es 1, es hijo derecho → padre = x - 2^l.
+// En árboles no potencia-de-2 el resultado puede exceder la raíz; se acota.
+func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
+	root := t.Root()
+	if node == root {
+		return 0, fmt.Errorf("root has no parent")
+	}
+
+	l := nodeLevel(uint32(node))
+	var p NodeIndex
+	if (uint32(node)>>(l+1))&1 == 0 {
+		// hijo izquierdo: padre está a la derecha
+		p = node + NodeIndex(1<<l)
+	} else {
+		// hijo derecho: padre está a la izquierda
+		p = node - NodeIndex(1<<l)
+	}
+
+	// Para árboles no potencia-de-2, el padre "natural" puede caer fuera
+	// del rango válido (0..2n-2); en ese caso se usa la raíz.
+	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
+	if p > maxIdx {
+		p = root
+	}
+
+	return p, nil
+}
+
+// LeftChild retorna el hijo izquierdo de un nodo padre (RFC Apéndice C):
+//
+//	left_child(x) = x ^ (1 << (level(x) - 1))
+func (t *RatchetTree) LeftChild(parent NodeIndex) (NodeIndex, error) {
+	if !IsParent(parent) {
+		return 0, fmt.Errorf("not a parent node")
+	}
+
+	l := nodeLevel(uint32(parent))
+	return NodeIndex(uint32(parent) ^ (1 << (l - 1))), nil
+}
+
+// RightChild retorna el hijo derecho de un nodo padre (RFC Apéndice C):
+//
+//	right_child(x) = x ^ (3 << (level(x) - 1))
+func (t *RatchetTree) RightChild(parent NodeIndex) (NodeIndex, error) {
+	if !IsParent(parent) {
+		return 0, fmt.Errorf("not a parent node")
+	}
+
+	l := nodeLevel(uint32(parent))
+	return NodeIndex(uint32(parent) ^ (3 << (l - 1))), nil
+}
+
+// DirectPath returns the path from a leaf to root.
+func (t *RatchetTree) DirectPath(leafIdx LeafIndex) []NodeIndex {
+	leaf := LeafIndexToNodeIndex(leafIdx)
+	path := []NodeIndex{leaf}
+
+	current := leaf
+	for current != t.Root() {
+		parent, err := t.Parent(current)
+		if err != nil {
 			break
+		}
+		path = append(path, parent)
+		current = parent
+	}
+
+	return path
+}
+
+// Copath returns the copath (siblings of direct path).
+func (t *RatchetTree) Copath(leafIdx LeafIndex) []NodeIndex {
+	path := t.DirectPath(leafIdx)
+	copath := make([]NodeIndex, 0, len(path)-1)
+
+	for i := 0; i < len(path)-1; i++ {
+		node := path[i]
+		parent, _ := t.Parent(node)
+
+		left, _ := t.LeftChild(parent)
+		if left == node {
+			right, _ := t.RightChild(parent)
+			copath = append(copath, right)
+		} else {
+			copath = append(copath, left)
 		}
 	}
 
-	// If no empty leaf found, expand the tree
-	if !found {
-		leafIdx = LeafIndex(t.NumLeaves)
-		t.expandTree(t.NumLeaves + 1)
+	return copath
+}
+
+// AddLeaf adds a leaf to the tree.
+func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
+	// Find first empty leaf
+	for i := LeafIndex(0); i < LeafIndex(t.NumLeaves); i++ {
+		nodeIdx := LeafIndexToNodeIndex(i)
+		if int(nodeIdx) < len(t.Nodes) && t.Nodes[nodeIdx].State == NodeStateEmpty {
+			t.Nodes[nodeIdx] = Node{
+				State:    NodeStatePresent,
+				LeafData: &leaf,
+			}
+			return i, nodeIdx
+		}
 	}
 
-	nodeIdx := NodeIndex(t.NumLeaves - 1 + uint32(leafIdx))
+	// Expand tree if needed
+	i := LeafIndex(t.NumLeaves)
+	t.NumLeaves++
+	newNodes := make([]Node, t.NumLeaves*2-1)
+	copy(newNodes, t.Nodes)
+	t.Nodes = newNodes
 
+	nodeIdx := LeafIndexToNodeIndex(i)
 	t.Nodes[nodeIdx] = Node{
 		State:    NodeStatePresent,
 		LeafData: &leaf,
 	}
-
-	t.hashDirty = true
-	return leafIdx, nodeIdx
+	return i, nodeIdx
 }
 
-// GetLeaf returns the leaf at the given index.
-func (t *RatchetTree) GetLeaf(index LeafIndex) *Node {
-	if t.NumLeaves == 0 {
-		return nil
-	}
-	nodeIdx := NodeIndex(t.NumLeaves - 1 + uint32(index))
+// GetLeaf returns a leaf node.
+func (t *RatchetTree) GetLeaf(idx LeafIndex) *Node {
+	nodeIdx := LeafIndexToNodeIndex(idx)
 	if int(nodeIdx) >= len(t.Nodes) {
 		return nil
 	}
 	return &t.Nodes[nodeIdx]
 }
 
-// SetLeaf sets the leaf at the given index.
-func (t *RatchetTree) SetLeaf(index LeafIndex, leaf LeafNodeData) error {
-	if t.NumLeaves == 0 {
-		return errors.New("tree has no leaves")
-	}
-	nodeIdx := NodeIndex(t.NumLeaves - 1 + uint32(index))
+// SetLeaf updates a leaf.
+func (t *RatchetTree) SetLeaf(idx LeafIndex, leaf LeafNodeData) error {
+	nodeIdx := LeafIndexToNodeIndex(idx)
 	if int(nodeIdx) >= len(t.Nodes) {
-		return errors.New("leaf index out of bounds")
+		return fmt.Errorf("leaf out of range")
 	}
-
 	t.Nodes[nodeIdx] = Node{
 		State:    NodeStatePresent,
 		LeafData: &leaf,
 	}
-
-	t.hashDirty = true
 	return nil
 }
 
-// BlankNode marks a node as blank (removed).
-func (t *RatchetTree) BlankNode(index NodeIndex) {
-	if int(index) >= len(t.Nodes) {
-		return
+// BlankNode blanks a node.
+func (t *RatchetTree) BlankNode(idx NodeIndex) {
+	if int(idx) < len(t.Nodes) {
+		t.Nodes[idx].State = NodeStateBlank
+		t.Nodes[idx].EncryptionKey = nil
+		t.Nodes[idx].LeafData = nil
 	}
-
-	t.Nodes[index].State = NodeStateBlank
-	t.Nodes[index].EncryptionKey = nil
-	t.Nodes[index].LeafData = nil
-	t.Nodes[index].ParentHash = []byte{}
-	t.hashDirty = true
 }
 
-// TreeHash computes the hash of the entire tree (RFC 9420 §7.8).
+// TreeHash computes the tree hash (RFC §7.8).
 func (t *RatchetTree) TreeHash() []byte {
-	if len(t.Nodes) == 0 {
-		hash := sha256.Sum256([]byte{})
-		return hash[:]
+	if t.NumLeaves == 0 {
+		return nil
 	}
-
-	// Root is always at index 0 in array-based tree representation
-	return t.hashNode(0)
+	return t.hashNode(t.Root())
 }
 
-// hashNode computes the hash of a single node according to RFC 9420 §7.8.
-//
-// Tree representation (array-based, RFC 9420 Appendix C):
-//   - Root is at index 0
-//   - For node i: left child = 2i+1, right child = 2i+2
-//   - Leaves are at indices [numLeaves-1, numLeaves*2-2]
-//   - Parents are at indices [0, numLeaves-2]
-func (t *RatchetTree) hashNode(index NodeIndex) []byte {
-	if int(index) >= len(t.Nodes) {
-		hash := sha256.Sum256([]byte{})
-		return hash[:]
+// hashNode computes node hash.
+func (t *RatchetTree) hashNode(idx NodeIndex) []byte {
+	if int(idx) >= len(t.Nodes) {
+		return nil
 	}
 
-	node := &t.Nodes[index]
-	buf := tls.NewWriter()
+	node := &t.Nodes[idx]
 
-	// Check if this is a leaf node
-	// Leaves are at indices >= numLeaves-1
-	isLeaf := index >= NodeIndex(t.NumLeaves-1)
+	if node.State == NodeStateEmpty {
+		emptyHash := sha256.Sum256([]byte{})
+		return emptyHash[:]
+	}
 
-	if isLeaf {
-		// Leaf node hash: Hash(0x01 || leaf_index || LeafNode)
-		buf.WriteUint8(1)
-		
-		// Convert node index to leaf index
-		leafIndex := index - NodeIndex(t.NumLeaves-1)
-		buf.WriteUint32(uint32(leafIndex))
+	if IsLeaf(idx) {
+		return t.hashLeaf(idx)
+	}
 
-		if node.State == NodeStatePresent && node.LeafData != nil {
-			buf.WriteUint8(1)
-			buf.WriteRaw(node.LeafData.Marshal())
-		} else if node.State == NodeStateBlank {
-			buf.WriteUint8(1)
-			// Blank leaf - write minimal LeafNodeData
-			emptyLeaf := &LeafNodeData{
-				EncryptionKey: []byte{},
-				Signature:     []byte{},
-			}
-			buf.WriteRaw(emptyLeaf.Marshal())
-		} else {
-			// NodeStateEmpty
-			buf.WriteUint8(0)
-		}
+	return t.hashParent(idx)
+}
+
+// hashLeaf computes leaf hash.
+func (t *RatchetTree) hashLeaf(idx NodeIndex) []byte {
+	node := &t.Nodes[idx]
+	return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), node.LeafData)
+}
+
+// hashParent computes parent hash.
+func (t *RatchetTree) hashParent(idx NodeIndex) []byte {
+	node := &t.Nodes[idx]
+
+	// Left and right hashes
+	left, _ := t.LeftChild(idx)
+	leftHash := t.hashNode(left)
+
+	right, _ := t.RightChild(idx)
+	rightHash := t.hashNode(right)
+
+	// RFC §7.8 ParentNodeHashInput uses original_sibling_tree_hash
+	// but the tree hash calculation itself is recursive.
+
+	w := tls.NewWriter()
+
+	// optional<ParentNode>
+	if node.State == NodeStateBlank || node.EncryptionKey == nil {
+		w.WriteUint8(0)
 	} else {
-		// Parent node hash: Hash(0x02 || left_hash || right_hash || ParentNode)
-		buf.WriteUint8(2)
-
-		leftChild := index*2 + 1
-		rightChild := index*2 + 2
-
-		var leftHash, rightHash []byte
-		if leftChild < NodeIndex(len(t.Nodes)) {
-			leftHash = t.hashNode(leftChild)
-		} else {
-			hash := sha256.Sum256([]byte{})
-			leftHash = hash[:]
+		w.WriteUint8(1)
+		// Serialize ParentNode
+		parentBuf := tls.NewWriter()
+		parentBuf.WriteVLBytes(node.EncryptionKey.Bytes())
+		parentBuf.WriteVLBytes(node.ParentHash)
+		unmergedBuf := tls.NewWriter()
+		for _, leaf := range node.UnmergedLeaves {
+			unmergedBuf.WriteUint32(uint32(leaf))
 		}
-
-		if rightChild < NodeIndex(len(t.Nodes)) {
-			rightHash = t.hashNode(rightChild)
-		} else {
-			hash := sha256.Sum256([]byte{})
-			rightHash = hash[:]
-		}
-
-		buf.WriteVLBytes(leftHash)
-		buf.WriteVLBytes(rightHash)
-
-		if node.State == NodeStatePresent && node.EncryptionKey != nil {
-			buf.WriteUint8(1)
-			buf.WriteVLBytes(node.EncryptionKey.Bytes())
-			buf.WriteVLBytes(node.ParentHash)
-
-			unmergedBuf := tls.NewWriter()
-			for _, leaf := range node.UnmergedLeaves {
-				unmergedBuf.WriteUint32(uint32(leaf))
-			}
-			buf.WriteVLBytes(unmergedBuf.Bytes())
-		} else if node.State == NodeStateBlank {
-			buf.WriteUint8(1)
-			buf.WriteVLBytes([]byte{})
-			buf.WriteVLBytes([]byte{})
-			buf.WriteVLBytes([]byte{})
-		} else {
-			// NodeStateEmpty
-			buf.WriteUint8(0)
-		}
+		parentBuf.WriteVLBytes(unmergedBuf.Bytes())
+		w.WriteVLBytes(parentBuf.Bytes())
 	}
 
-	hash := sha256.Sum256(buf.Bytes())
+	w.WriteVLBytes(leftHash)
+	w.WriteVLBytes(rightHash)
+
+	hash := sha256.Sum256(w.Bytes())
 	return hash[:]
 }
 
-// expandTree expands the tree to accommodate more leaves.
-func (t *RatchetTree) expandTree(newNumLeaves uint32) {
-	if newNumLeaves <= t.NumLeaves {
-		return
-	}
-
-	oldNumLeaves := t.NumLeaves
-	t.NumLeaves = newNumLeaves
-
-	// Calculate new total nodes: for N leaves, we need 2N-1 nodes
-	newTotalNodes := int(newNumLeaves)*2 - 1
-	newNodes := make([]Node, newTotalNodes)
-
-	// Copy old nodes to their new positions
-	// In array representation, structure changes when we add leaves
-	copy(newNodes, t.Nodes)
-
-	// Initialize new leaf nodes as empty
-	for i := oldNumLeaves; i < newNumLeaves; i++ {
-		nodeIdx := int(newNumLeaves - 1 + i)
-		if nodeIdx < len(newNodes) {
-			newNodes[nodeIdx] = Node{
-				State: NodeStateEmpty,
-			}
-		}
-	}
-
-	t.Nodes = newNodes
-	t.hashDirty = true
-}
-
-// Clone creates a deep copy of the tree.
+// Clone creates a deep copy.
 func (t *RatchetTree) Clone() *RatchetTree {
-	result := &RatchetTree{
+	cloned := &RatchetTree{
 		Nodes:     make([]Node, len(t.Nodes)),
 		NumLeaves: t.NumLeaves,
-		hashDirty: t.hashDirty,
 	}
-
-	if t.cachedHash != nil {
-		result.cachedHash = append([]byte(nil), t.cachedHash...)
-	}
-
-	for i := range t.Nodes {
-		result.Nodes[i] = t.Nodes[i].clone()
-	}
-
-	return result
+	copy(cloned.Nodes, t.Nodes)
+	return cloned
 }
 
-// Validate validates the tree structure.
+// Validate checks tree consistency.
 func (t *RatchetTree) Validate() error {
 	if t.NumLeaves == 0 {
-		return errors.New("tree must have at least one leaf")
+		return errors.New("no leaves")
 	}
-
-	expectedNodes := int(t.NumLeaves)*2 - 1
-	if len(t.Nodes) != expectedNodes {
-		return fmt.Errorf("wrong number of nodes: got %d, want %d", len(t.Nodes), expectedNodes)
+	expected := int(t.NumLeaves*2 - 1)
+	if len(t.Nodes) != expected {
+		return fmt.Errorf("wrong node count: %d vs %d", len(t.Nodes), expected)
 	}
-
-	for i, node := range t.Nodes {
-		if err := node.Validate(NodeIndex(i), t.NumLeaves); err != nil {
-			return fmt.Errorf("node %d invalid: %w", i, err)
-		}
-	}
-
 	return nil
-}
-
-// Helper functions for tree navigation
-
-// LeftChild returns the left child of a node.
-func LeftChild(index NodeIndex, numLeaves uint32) NodeIndex {
-	if index >= NodeIndex(numLeaves*2-1) {
-		return index
-	}
-	child := index*2 + 1
-	if child >= NodeIndex(numLeaves*2-1) {
-		return index
-	}
-	return child
-}
-
-// RightChild returns the right child of a node.
-func RightChild(index NodeIndex, numLeaves uint32) NodeIndex {
-	if index >= NodeIndex(numLeaves*2-1) {
-		return index
-	}
-	child := index*2 + 2
-	if child >= NodeIndex(numLeaves*2-1) {
-		return index
-	}
-	return child
-}
-
-// Parent returns the parent of a node.
-//
-// For a binary tree stored in array form:
-//   - Parent of node i is (i-1)/2 for i > 0
-//   - Root (node 0) has no parent, returns 0
-func Parent(index NodeIndex) NodeIndex {
-	if index == 0 {
-		return 0 // Root has no parent
-	}
-	return (index - 1) / 2
-}
-
-// Sibling returns the sibling of a node.
-func Sibling(index NodeIndex) NodeIndex {
-	if index == 0 {
-		return 0
-	}
-	if index%2 == 0 {
-		return index - 1
-	}
-	return index + 1
-}
-
-// DirectPath returns the direct path from a leaf to the root.
-//
-// The direct path consists of all parent nodes from the leaf's parent up to (but not including) the root.
-// For a tree with N leaves, the direct path has length ceil(log2(N)).
-func DirectPath(leaf LeafIndex, numLeaves uint32) []NodeIndex {
-	if numLeaves == 0 {
-		return []NodeIndex{}
-	}
-	
-	var path []NodeIndex
-	
-	// Start from the leaf's node index
-	// In our representation, leaf i is at node index (numLeaves - 1) + i
-	// This is the standard heap representation where leaves are the last N nodes
-	leafNodeIdx := NodeIndex(numLeaves - 1 + uint32(leaf))
-	
-	// Root is at index 0
-	rootIdx := NodeIndex(0)
-	
-	// Walk up from leaf's parent to root's children
-	nodeIdx := leafNodeIdx
-	for nodeIdx > rootIdx {
-		parentIdx := Parent(nodeIdx)
-		if parentIdx == rootIdx {
-			// Don't include the root in the direct path
-			break
-		}
-		path = append(path, parentIdx)
-		nodeIdx = parentIdx
-	}
-
-	return path
-}
-
-// Copath returns the copath (siblings) for a direct path.
-func Copath(leaf LeafIndex, numLeaves uint32) []NodeIndex {
-	directPath := DirectPath(leaf, numLeaves)
-	copath := make([]NodeIndex, len(directPath))
-
-	for i, nodeIdx := range directPath {
-		copath[i] = Sibling(nodeIdx)
-	}
-
-	return copath
-}
-
-// Depth returns the depth of the tree.
-func (t *RatchetTree) Depth() uint32 {
-	if t.NumLeaves == 0 {
-		return 0
-	}
-	return uint32(bits.Len32(t.NumLeaves - 1))
-}
-
-// LeafIndexToNodeIndex converts a leaf index to a node index.
-//
-// In the standard heap representation, leaves are the last N nodes in the array.
-// For a tree with numLeaves leaves, leaf i is at node index (numLeaves - 1) + i.
-// Note: This function requires knowing numLeaves, so it's deprecated.
-// Use DirectPath() which handles this correctly.
-func LeafIndexToNodeIndex(leafIdx LeafIndex) NodeIndex {
-	// This is a simplified version that assumes leaf 0 is at node 0
-	// For accurate conversion, use the formula: nodeIdx = (numLeaves - 1) + leafIdx
-	return NodeIndex(leafIdx)
-}
-
-// NodeIndexToLeafIndex converts a node index to a leaf index.
-// Only valid for leaf nodes (nodes >= numLeaves - 1).
-func NodeIndexToLeafIndex(nodeIdx NodeIndex, numLeaves uint32) LeafIndex {
-	if nodeIdx < NodeIndex(numLeaves-1) {
-		return LeafIndex(0) // Not a leaf
-	}
-	return LeafIndex(nodeIdx - NodeIndex(numLeaves-1))
-}
-
-// SerializeRatchetTreeExtension serializes a ratchet tree for the GroupInfo extension.
-// TODO: Implement full serialization according to RFC 9420 §12.4.3.3
-func SerializeRatchetTreeExtension(tree *RatchetTree) ([]byte, error) {
-	if tree == nil {
-		return []byte{}, nil
-	}
-	// Stub implementation - returns empty for now
-	return []byte{}, nil
-}
-
-// DeserializeRatchetTreeExtension deserializes a ratchet tree from the GroupInfo extension.
-// TODO: Implement full deserialization according to RFC 9420 §12.4.3.3
-func DeserializeRatchetTreeExtension(data []byte) (*RatchetTree, error) {
-	// Stub implementation - returns nil tree
-	return nil, nil
 }
