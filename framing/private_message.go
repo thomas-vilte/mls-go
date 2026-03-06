@@ -9,8 +9,8 @@ import (
 	secret_tree "github.com/openmls/go/secret_tree"
 )
 
-// PrivateMessage implements RFC 9420 §6.3.
-// The first four fields are transmitted in clear; only the last two are encrypted.
+// PrivateMessage implementa RFC 9420 §6.3.
+// Los primeros cuatro campos se transmiten en claro; únicamente los últimos dos están cifrados.
 type PrivateMessage struct {
 	GroupID             []byte      // in clear
 	Epoch               uint64      // in clear
@@ -20,7 +20,7 @@ type PrivateMessage struct {
 	Ciphertext          []byte      // encrypted PrivateMessageContent
 }
 
-// Marshal serializes the PrivateMessage for transmission.
+// Marshal serializa el PrivateMessage para transmisión.
 func (pm *PrivateMessage) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(WireFormatPrivateMessage))
@@ -33,8 +33,8 @@ func (pm *PrivateMessage) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalPrivateMessage parses a PrivateMessage from its wire representation.
-// The leading wire_format uint16 must be included in data.
+// UnmarshalPrivateMessage parsea un PrivateMessage desde su representación wire.
+// El wire_format uint16 inicial debe estar incluido en los datos.
 func UnmarshalPrivateMessage(data []byte) (*PrivateMessage, error) {
 	r := tls.NewReader(data)
 
@@ -81,15 +81,15 @@ func UnmarshalPrivateMessage(data []byte) (*PrivateMessage, error) {
 	}, nil
 }
 
-// MLSSenderData implements RFC 9420 §6.3.2.
-// It is encrypted to form EncryptedSenderData.
+// MLSSenderData implementa RFC 9420 §6.3.2.
+// Se cifra para formar EncryptedSenderData.
 type MLSSenderData struct {
 	LeafIndex  uint32
 	Generation uint32
 	ReuseGuard [ciphersuite.ReuseGuardBytes]byte
 }
 
-// Marshal serializes MLSSenderData.
+// Marshal serializa MLSSenderData.
 func (sd *MLSSenderData) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint32(sd.LeafIndex)
@@ -98,16 +98,16 @@ func (sd *MLSSenderData) Marshal() []byte {
 	return w.Bytes()
 }
 
-// EncryptParams holds the parameters required to encrypt a PrivateMessage.
+// EncryptParams contiene los parámetros requeridos para cifrar un PrivateMessage.
 type EncryptParams struct {
 	Content          FramedContent
 	SenderLeafIndex  uint32
-	CipherSuite      ciphersuite.CipherSuite            // para derivar ciphertext_sample y tamaños
-	PaddingSize      int                                // tamaño de bloque para padding (0 = sin padding)
-	SenderDataSecret *ciphersuite.Secret                // encripta MLSSenderData
-	SecretTree       *secret_tree.Tree                  // deriva content key/nonce
+	CipherSuite      ciphersuite.CipherSuite // para derivar ciphertext_sample y tamaños
+	PaddingSize      int                     // tamaño de bloque para padding (0 = sin padding)
+	SenderDataSecret *ciphersuite.Secret     // encripta MLSSenderData
+	SecretTree       *secret_tree.Tree       // deriva content key/nonce
 	SigKey           *ciphersuite.SignaturePrivateKey
-	GroupContext     *group.GroupContext                 // incluido en FramedContentTBS
+	GroupContext     *group.GroupContext // incluido en FramedContentTBS
 }
 
 // Encrypt implementa RFC 9420 §6.3.1.
@@ -232,14 +232,14 @@ type DecryptParams struct {
 	CipherSuite      ciphersuite.CipherSuite
 	SenderDataSecret *ciphersuite.Secret
 	SecretTree       *secret_tree.Tree
-	// SigPubKey se usa para verificar la firma del sender tras descifrar.
+	// SigPubKey se utiliza para verificar la firma del remitente luego de descifrar.
 	// Si es nil, se omite la verificación (no recomendado en producción).
 	SigPubKey    *ciphersuite.OpenMlsSignaturePublicKey
 	GroupContext *group.GroupContext // requerido para verificación TBS
 }
 
 // Decrypt descifra un PrivateMessage y retorna el AuthenticatedContent.
-// Verifica la firma del sender si SigPubKey está presente.
+// Verifica la firma del remitente si SigPubKey está presente.
 func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error) {
 	// 1. Extraer ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
 	// Necesario para derivar sender_data key/nonce ANTES de descifrar sender_data

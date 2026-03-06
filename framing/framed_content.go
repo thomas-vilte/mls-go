@@ -56,14 +56,14 @@ func (fc *FramedContent) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalFramedContent parses bytes into a FramedContent.
+// UnmarshalFramedContent parsea bytes en un FramedContent.
 func UnmarshalFramedContent(data []byte) (*FramedContent, error) {
 	r := tls.NewReader(data)
 	return unmarshalFramedContentFromReader(r)
 }
 
-// unmarshalFramedContentFromReader parses a FramedContent from an existing reader.
-// Used internally when parsing compound wire formats (PublicMessage).
+// unmarshalFramedContentFromReader parsea un FramedContent desde un reader existente.
+// Utilizado internamente al parsear formatos wire compuestos (PublicMessage).
 func unmarshalFramedContentFromReader(r *tls.Reader) (*FramedContent, error) {
 	groupID, err := r.ReadVLBytes()
 	if err != nil {

@@ -20,7 +20,7 @@ func marshalAuthenticatedContentTBM(ac *AuthenticatedContent) []byte {
 	return w.Bytes()
 }
 
-// MarshalSender serializes a Sender according to RFC §6.
+// MarshalSender serializa un Sender según RFC §6.
 func MarshalSender(s *Sender, w *tls.Writer) {
 	w.WriteUint8(uint8(s.Type))
 	switch s.Type {
@@ -31,7 +31,7 @@ func MarshalSender(s *Sender, w *tls.Writer) {
 	}
 }
 
-// UnmarshalSender parses a Sender from a TLS reader.
+// UnmarshalSender parsea un Sender desde un TLS reader.
 func UnmarshalSender(r *tls.Reader) (*Sender, error) {
 	st, err := r.ReadUint8()
 	if err != nil {
@@ -59,7 +59,7 @@ func UnmarshalSender(r *tls.Reader) (*Sender, error) {
 	return s, nil
 }
 
-// UnmarshalSenderData parses bytes into an MLSSenderData.
+// UnmarshalSenderData parsea bytes en un MLSSenderData.
 func UnmarshalSenderData(data []byte) (*MLSSenderData, error) {
 	r := tls.NewReader(data)
 	leafIndex, err := r.ReadUint32()

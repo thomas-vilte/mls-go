@@ -536,10 +536,10 @@ func TestErrors_ErrorMessages(t *testing.T) {
 		{framing.ErrInvalidWireFormat, "wire format", "ErrInvalidWireFormat"},
 		{framing.ErrInvalidContentType, "content type", "ErrInvalidContentType"},
 		{framing.ErrInvalidSenderType, "sender type", "ErrInvalidSenderType"},
-		{framing.ErrDecryptionFailed, "decryption", "ErrDecryptionFailed"},
-		{framing.ErrVerificationFailed, "verification", "ErrVerificationFailed"},
+		{framing.ErrDecryptionFailed, "descifrado", "ErrDecryptionFailed"},
+		{framing.ErrVerificationFailed, "verificación", "ErrVerificationFailed"},
 		{framing.ErrInvalidMembershipTag, "membership", "ErrInvalidMembershipTag"},
-		{framing.ErrInvalidMessage, "message", "ErrInvalidMessage"},
+		{framing.ErrInvalidMessage, "mensaje", "ErrInvalidMessage"},
 	}
 
 	for _, tt := range tests {

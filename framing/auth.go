@@ -9,14 +9,14 @@ import (
 	keypackages "github.com/openmls/go/key_packages"
 )
 
-// FramedContentAuthData implements RFC 9420 §6.1.
-// ConfirmationTag is non-nil only when ContentType == Commit.
+// FramedContentAuthData implementa RFC 9420 §6.1.
+// ConfirmationTag es no-nil únicamente cuando ContentType == Commit.
 type FramedContentAuthData struct {
 	Signature       *ciphersuite.Signature // message signature
 	ConfirmationTag []byte                 // nil unless content_type == commit
 }
 
-// Marshal serializes auth data; includes confirmation_tag only for Commit.
+// Marshal serializa los datos de autenticación; incluye confirmation_tag únicamente para Commit.
 func (a *FramedContentAuthData) Marshal(ct ContentType) []byte {
 	w := tls.NewWriter()
 	var sigBytes []byte
@@ -30,8 +30,8 @@ func (a *FramedContentAuthData) Marshal(ct ContentType) []byte {
 	return w.Bytes()
 }
 
-// AuthenticatedContent implements RFC 9420 §6.1.
-// It is the input to the signing process, not sent directly on the wire.
+// AuthenticatedContent implementa RFC 9420 §6.1.
+// Es el input del proceso de firma, no se envía directamente por el wire.
 type AuthenticatedContent struct {
 	WireFormat   WireFormat
 	Content      FramedContent
@@ -39,7 +39,7 @@ type AuthenticatedContent struct {
 	GroupContext *group.GroupContext // required for PublicMessage TBS; nil for PrivateMessage
 }
 
-// MarshalForSigning serializes wire_format + content (used in membership tag TBM).
+// MarshalForSigning serializa wire_format + content (utilizado en membership tag TBM).
 func (ac *AuthenticatedContent) MarshalForSigning() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(ac.WireFormat))
@@ -73,7 +73,7 @@ func (ac *AuthenticatedContent) MarshalTBS() []byte {
 	return w.Bytes()
 }
 
-// PrivateMessageContent is the plaintext that gets AEAD-encrypted in a PrivateMessage (RFC 9420 §6.3).
+// PrivateMessageContent es el plaintext que se encripta con AEAD en un PrivateMessage (RFC 9420 §6.3).
 //
 //	struct {
 //	    select (content_type) {
@@ -104,7 +104,7 @@ func marshalPrivateMessageContent(body FramedContentBody, auth FramedContentAuth
 	return w.Bytes()
 }
 
-// unmarshalPrivateMessageContent parses the decrypted PrivateMessage plaintext.
+// unmarshalPrivateMessageContent parsea el plaintext descifrado de PrivateMessage.
 func unmarshalPrivateMessageContent(data []byte, ct ContentType) (*PrivateMessageContent, error) {
 	r := tls.NewReader(data)
 
