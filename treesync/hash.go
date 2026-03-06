@@ -7,42 +7,43 @@ import (
 )
 
 // ComputeParentHash computes the parent hash for a node (RFC 9420 §7.9).
+//
+//	struct {
+//	    HPKEPublicKey public_key;
+//	    opaque parent_hash<V>;
+//	    opaque original_sibling_tree_hash<V>;
+//	} ParentHashInput;
 func ComputeParentHash(
-	leftHash []byte,
-	rightHash []byte,
-	encryptionKey []byte,
+	publicKey []byte,
 	parentHash []byte,
-	unmergedLeaves []LeafIndex,
+	originalSiblingTreeHash []byte,
 ) []byte {
 	buf := tls.NewWriter()
 
-	buf.WriteVLBytes(leftHash)
-	buf.WriteVLBytes(rightHash)
-	buf.WriteVLBytes(encryptionKey)
+	buf.WriteVLBytes(publicKey)
 	buf.WriteVLBytes(parentHash)
-
-	unmergedBuf := tls.NewWriter()
-	for _, leaf := range unmergedLeaves {
-		unmergedBuf.WriteUint32(uint32(leaf))
-	}
-	buf.WriteVLBytes(unmergedBuf.Bytes())
+	buf.WriteVLBytes(originalSiblingTreeHash)
 
 	hash := sha256.Sum256(buf.Bytes())
 	return hash[:]
 }
 
-// ComputeLeafNodeHash computes the hash of a leaf node.
+// ComputeLeafNodeHash computes the hash of a leaf node (RFC 9420 §7.8).
+//
+//	struct {
+//	    uint32 leaf_index;
+//	    optional<LeafNode> leaf_node;
+//	} LeafNodeHashInput;
 func ComputeLeafNodeHash(leafIndex LeafIndex, leafData *LeafNodeData) []byte {
 	buf := tls.NewWriter()
 
-	buf.WriteUint8(1)
 	buf.WriteUint32(uint32(leafIndex))
 
 	if leafData != nil {
-		buf.WriteUint8(1)
+		buf.WriteUint8(1) // present
 		buf.WriteRaw(leafData.Marshal())
 	} else {
-		buf.WriteUint8(0)
+		buf.WriteUint8(0) // not present
 	}
 
 	hash := sha256.Sum256(buf.Bytes())

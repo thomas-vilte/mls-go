@@ -11,76 +11,37 @@ import (
 func (l *LeafNodeData) Marshal() []byte {
 	buf := tls.NewWriter()
 
-	buf.WriteVLBytes(l.EncryptionKey)
+	// TBS portion
+	buf.WriteRaw(l.MarshalTBS())
 
-	if l.SignatureKey != nil {
-		pubKeyBytes := append([]byte{0x04}, l.SignatureKey.X.Bytes()...)
-		pubKeyBytes = append(pubKeyBytes, l.SignatureKey.Y.Bytes()...)
-		buf.WriteRaw(pubKeyBytes)
-	} else {
-		buf.WriteRaw(make([]byte, 65))
-	}
-
-	if l.Credential != nil {
-		buf.WriteRaw(l.Credential.Marshal())
-	} else {
-		buf.WriteVLBytes([]byte{})
-	}
-
-	if l.Capabilities != nil {
-		l.Capabilities.Marshal(buf)
-	} else {
-		buf.WriteUint8(0)
-	}
-
-	if l.Lifetime != nil {
-		buf.WriteUint64(l.Lifetime.NotBefore)
-		buf.WriteUint64(l.Lifetime.NotAfter)
-	} else {
-		buf.WriteUint64(0)
-		buf.WriteUint64(0)
-	}
-
-	extBuf := tls.NewWriter()
-	for _, extData := range l.Extensions {
-		if len(extData) >= 2 {
-			extBuf.WriteRaw(extData)
-		}
-	}
-	buf.WriteVLBytes(extBuf.Bytes())
-
-	buf.WriteUint8(l.LeafNodeSource)
-	buf.WriteVLBytes(l.ParentHash)
+	// Signature
+	buf.WriteVLBytes(l.Signature)
 
 	return buf.Bytes()
 }
 
-// MarshalTBS serializes the To-Be-Signed portion of LeafNode.
+// MarshalTBS serializes the To-Be-Signed portion of LeafNode (RFC 9420 §7.2).
 func (l *LeafNodeData) MarshalTBS() []byte {
 	buf := tls.NewWriter()
 
-	buf.WriteVLBytes(l.EncryptionKey)
-
-	if l.SignatureKey != nil {
-		pubKeyBytes := append([]byte{0x04}, l.SignatureKey.X.Bytes()...)
-		pubKeyBytes = append(pubKeyBytes, l.SignatureKey.Y.Bytes()...)
-		buf.WriteRaw(pubKeyBytes)
-	} else {
-		buf.WriteRaw(make([]byte, 65))
-	}
-
+	// Credential
 	if l.Credential != nil {
 		buf.WriteRaw(l.Credential.Marshal())
 	} else {
 		buf.WriteVLBytes([]byte{})
 	}
 
+	// EncryptionKey
+	buf.WriteVLBytes(l.EncryptionKey)
+
+	// Capabilities
 	if l.Capabilities != nil {
 		l.Capabilities.Marshal(buf)
 	} else {
 		buf.WriteUint8(0)
 	}
 
+	// Lifetime
 	if l.Lifetime != nil {
 		buf.WriteUint64(l.Lifetime.NotBefore)
 		buf.WriteUint64(l.Lifetime.NotAfter)
@@ -89,16 +50,20 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 		buf.WriteUint64(0)
 	}
 
+	// Extensions
 	extBuf := tls.NewWriter()
 	for _, extData := range l.Extensions {
-		if len(extData) >= 2 {
-			extBuf.WriteRaw(extData)
-		}
+		extBuf.WriteRaw(extData)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
 
+	// LeafNodeSource
 	buf.WriteUint8(l.LeafNodeSource)
-	buf.WriteVLBytes(l.ParentHash)
+
+	// ParentHash (only if source == commit)
+	if l.LeafNodeSource == 3 { // commit
+		buf.WriteVLBytes(l.ParentHash)
+	}
 
 	return buf.Bytes()
 }

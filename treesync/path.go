@@ -3,19 +3,14 @@ package treesync
 import (
 	"errors"
 
+	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/internal/tls"
 )
 
 // UpdatePath represents a path through the tree used in Commit messages.
 type UpdatePath struct {
 	LeafNode *LeafNodeData
-	Nodes    []HPKECiphertext
-}
-
-// HPKECiphertext represents encrypted path node data.
-type HPKECiphertext struct {
-	KEMOutput  []byte
-	Ciphertext []byte
+	Nodes    []ciphersuite.HpkeCiphertext
 }
 
 // PathSecret represents a secret derived from a path node.
@@ -24,7 +19,7 @@ type PathSecret struct {
 }
 
 // NewUpdatePath creates a new UpdatePath.
-func NewUpdatePath(leafNode *LeafNodeData, nodes []HPKECiphertext) *UpdatePath {
+func NewUpdatePath(leafNode *LeafNodeData, nodes []ciphersuite.HpkeCiphertext) *UpdatePath {
 	return &UpdatePath{
 		LeafNode: leafNode,
 		Nodes:    nodes,
@@ -36,15 +31,18 @@ func (u *UpdatePath) Marshal() []byte {
 	buf := tls.NewWriter()
 
 	if u.LeafNode != nil {
-		buf.WriteRaw(u.LeafNode.Marshal())
+		buf.WriteVLBytes(u.LeafNode.Marshal())
 	} else {
 		buf.WriteVLBytes([]byte{})
 	}
 
 	nodesBuf := tls.NewWriter()
 	for _, node := range u.Nodes {
-		nodesBuf.WriteVLBytes(node.KEMOutput)
-		nodesBuf.WriteVLBytes(node.Ciphertext)
+		// Manual serialization of HpkeCiphertext
+		ctBuf := tls.NewWriter()
+		ctBuf.WriteVLBytes(node.KEMOutput)
+		ctBuf.WriteVLBytes(node.Ciphertext)
+		nodesBuf.WriteVLBytes(ctBuf.Bytes())
 	}
 	buf.WriteVLBytes(nodesBuf.Bytes())
 
@@ -55,11 +53,13 @@ func (u *UpdatePath) Marshal() []byte {
 func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	buf := tls.NewReader(data)
 
-	// Skip leaf_node for now
-	_, err := buf.ReadVLBytes()
+	leafData, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: Unmarshal leaf node data
+	_ = leafData
 
 	nodesBytes, err := buf.ReadVLBytes()
 	if err != nil {
@@ -67,20 +67,25 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	}
 
 	nodesBuf := tls.NewReader(nodesBytes)
-	var nodes []HPKECiphertext
+	var nodes []ciphersuite.HpkeCiphertext
 
 	for nodesBuf.Remaining() > 0 {
-		kemOutput, err := nodesBuf.ReadVLBytes()
+		ctData, err := nodesBuf.ReadVLBytes()
+		if err != nil {
+			break
+		}
+
+		ctReader := tls.NewReader(ctData)
+		kemOutput, err := ctReader.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		ciphertext, err := ctReader.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
 
-		ciphertext, err := nodesBuf.ReadVLBytes()
-		if err != nil {
-			return nil, err
-		}
-
-		nodes = append(nodes, HPKECiphertext{
+		nodes = append(nodes, ciphersuite.HpkeCiphertext{
 			KEMOutput:  kemOutput,
 			Ciphertext: ciphertext,
 		})
