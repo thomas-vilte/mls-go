@@ -43,11 +43,11 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 	buf.WriteVLBytes(l.marshalSignatureKey())
 
 	// Capabilities
+	capsBuf := tls.NewWriter()
 	if l.Capabilities != nil {
-		l.Capabilities.Marshal(buf)
-	} else {
-		buf.WriteUint8(0)
+		l.Capabilities.Marshal(capsBuf)
 	}
+	buf.WriteVLBytes(capsBuf.Bytes())
 
 	// Lifetime
 	if l.Lifetime != nil {
@@ -151,9 +151,13 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	if err != nil {
 		return nil, err
 	}
-	l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
-	if err != nil {
-		return nil, err
+	if len(capsData) == 0 {
+		l.Capabilities = nil
+	} else {
+		l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Lifetime
