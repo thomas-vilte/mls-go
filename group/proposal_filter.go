@@ -255,14 +255,11 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 func (g *Group) FilterProposalsForCommit(
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
-	// Convertir proposals del store a FilteredProposal
-	// Nota: En implementación real, necesitamos trackear el sender de cada proposal
-	// Por ahora, asumimos que todas las proposals son del committer
 	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
-	for _, p := range g.Proposals.Proposals {
+	for _, sp := range g.Proposals.Proposals {
 		filtered = append(filtered, FilteredProposal{
-			Proposal: p,
-			Sender:   g.OwnLeafIndex, // Simplificado
+			Proposal: sp.Proposal,
+			Sender:   sp.Sender,
 		})
 	}
 

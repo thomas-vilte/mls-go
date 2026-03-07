@@ -43,11 +43,11 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 	buf.WriteVLBytes(l.marshalSignatureKey())
 
 	// Capabilities
+	capsBuf := tls.NewWriter()
 	if l.Capabilities != nil {
-		l.Capabilities.Marshal(buf)
-	} else {
-		buf.WriteUint8(0)
+		l.Capabilities.Marshal(capsBuf)
 	}
+	buf.WriteVLBytes(capsBuf.Bytes())
 
 	// Lifetime
 	if l.Lifetime != nil {
@@ -151,9 +151,13 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	if err != nil {
 		return nil, err
 	}
-	l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
-	if err != nil {
-		return nil, err
+	if len(capsData) == 0 {
+		l.Capabilities = nil
+	} else {
+		l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Lifetime
@@ -323,12 +327,12 @@ func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 
-func (l *LeafNodeData) marshalSignatureKey() []byte {
-	if l.SignatureKey == nil {
+func MarshalSignatureKey(key *ecdsa.PublicKey) []byte {
+	if key == nil {
 		return nil
 	}
-	xBytes := l.SignatureKey.X.Bytes()
-	yBytes := l.SignatureKey.Y.Bytes()
+	xBytes := key.X.Bytes()
+	yBytes := key.Y.Bytes()
 
 	// Pad to 32 bytes
 	paddedX := make([]byte, 32)
@@ -341,6 +345,10 @@ func (l *LeafNodeData) marshalSignatureKey() []byte {
 	copy(res[1:33], paddedX)
 	copy(res[33:65], paddedY)
 	return res
+}
+
+func (l *LeafNodeData) marshalSignatureKey() []byte {
+	return MarshalSignatureKey(l.SignatureKey)
 }
 
 // clone creates a deep copy of a node.

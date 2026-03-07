@@ -159,6 +159,7 @@ func NewGroup(
 		OwnLeafIndex:          NewLeafNodeIndex(0),
 		EpochSecrets:          epochSecrets,
 		Proposals:             NewProposalStore(),
+		ProposalByRef:         make(map[string]*Proposal),
 		KeySchedule:           keySchedule,
 		InterimTranscriptHash: []byte{}, // string vacio
 		Members:               make(map[LeafNodeIndex]*Member),
@@ -199,7 +200,7 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -214,17 +215,29 @@ func (g *Group) UpdateMember(
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state")
 	}
+	if newLeafNode == nil {
+		return nil, fmt.Errorf("new leaf node is nil")
+	}
+	_ = privateKeys
+
+	// Convert treesync leaf data to keypackages leaf node.
+	kpLeafNode := &keypackages.LeafNode{
+		EncryptionKey: newLeafNode.EncryptionKey,
+		SignatureKey:  newLeafNode.SignatureKey,
+		Credential:    newLeafNode.Credential,
+		Capabilities:  &keypackages.Capabilities{},
+	}
 
 	// Create Update proposal
 	proposal := &Proposal{
 		Type: ProposalTypeUpdate,
 		Update: &UpdateProposal{
-			LeafNode: nil, // TODO: Convert treesync.LeafNodeData to keypackages.LeafNode
+			LeafNode: kpLeafNode,
 		},
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -251,7 +264,7 @@ func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -285,8 +298,8 @@ func (g *Group) Commit(
 
 	// 2. Clonar árbol, aplicar proposals provisoriamente
 	treeDiff := g.RatchetTree.Clone()
-	for _, prop := range proposals {
-		if err := g.applyProposalToTree(prop, treeDiff); err != nil {
+	for _, fp := range filtered {
+		if err := g.applyProposalToTree(fp.Proposal, treeDiff, fp.Sender); err != nil {
 			return nil, fmt.Errorf("applying proposal to tree: %w", err)
 		}
 	}
@@ -526,7 +539,7 @@ func (g *Group) createUpdatePath(
 }
 
 // applyProposalToTree aplica un proposal a un árbol específico.
-func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree) error {
+func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		leafData := treesync.LeafNodeData{
@@ -542,7 +555,7 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 		nodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(proposal.Remove.Removed))
 		tree.BlankNode(nodeIdx)
 	case ProposalTypeUpdate:
-		leafIdx := treesync.LeafIndex(g.OwnLeafIndex)
+		leafIdx := treesync.LeafIndex(senderIdx)
 		leafData := treesync.LeafNodeData{
 			EncryptionKey: proposal.Update.LeafNode.EncryptionKey,
 			SignatureKey:  proposal.Update.LeafNode.SignatureKey,
@@ -563,13 +576,13 @@ func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 }
 
 // StoreProposal almacena un proposal indexado por referencia hash para resolución futura (RFC 9420 §12.4).
-func (g *Group) StoreProposal(p *Proposal) []byte {
+func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex) []byte {
 	if g.ProposalByRef == nil {
 		g.ProposalByRef = make(map[string]*Proposal)
 	}
 	ref := ComputeProposalRef(p)
 	g.ProposalByRef[string(ref)] = p
-	g.Proposals.AddProposal(p)
+	g.Proposals.AddProposal(p, sender)
 	return ref
 }
 
@@ -680,8 +693,12 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
 	}
 	// 1. Aplicar proposals al ratchet tree
+	senderIdx := g.OwnLeafIndex
+	if stagedCommit.AuthenticatedContent != nil {
+		senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+	}
 	for _, proposal := range stagedCommit.Proposals {
-		if err := g.applyProposal(proposal); err != nil {
+		if err := g.applyProposal(proposal, senderIdx); err != nil {
 			return fmt.Errorf("applying proposal: %w", err)
 		}
 	}
@@ -838,12 +855,12 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 }
 
 // applyProposal applies a single proposal to the group state.
-func (g *Group) applyProposal(proposal *Proposal) error {
+func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		return g.applyAddProposal(proposal.Add)
 	case ProposalTypeUpdate:
-		return g.applyUpdateProposal(proposal.Update)
+		return g.applyUpdateProposal(proposal.Update, senderIdx)
 	case ProposalTypeRemove:
 		return g.applyRemoveProposal(proposal.Remove)
 	default:
@@ -890,7 +907,7 @@ func (g *Group) applyAddProposal(add *AddProposal) error {
 }
 
 // applyUpdateProposal applies an Update proposal.
-func (g *Group) applyUpdateProposal(update *UpdateProposal) error {
+func (g *Group) applyUpdateProposal(update *UpdateProposal, senderIdx LeafNodeIndex) error {
 	if update == nil || update.LeafNode == nil {
 		return fmt.Errorf("invalid Update proposal")
 	}
@@ -899,7 +916,7 @@ func (g *Group) applyUpdateProposal(update *UpdateProposal) error {
 		SignatureKey:  update.LeafNode.SignatureKey,
 		Credential:    update.LeafNode.Credential,
 	}
-	return g.RatchetTree.SetLeaf(treesync.LeafIndex(g.OwnLeafIndex), leafData)
+	return g.RatchetTree.SetLeaf(treesync.LeafIndex(senderIdx), leafData)
 }
 
 // applyRemoveProposal applies a Remove proposal.

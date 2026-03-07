@@ -7,8 +7,9 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
+	"github.com/openmls/go/secrettree"
 	"github.com/openmls/go/treesync"
 )
 
@@ -338,7 +339,7 @@ func (g *Group) CreateWelcome(
 
 	// Firmar GroupInfo sobre los campos TBS (excluye Signature)
 	groupInfoTBS := groupInfo.MarshalTBS()
-	signature, err := signerPrivKey.Sign(groupInfoTBS)
+	signature, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", groupInfoTBS)
 	if err != nil {
 		return nil, fmt.Errorf("signing group info: %w", err)
 	}
@@ -478,22 +479,7 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("unmarshaling group info: %w", err)
 	}
 
-	// 6. Verificar firma de GroupInfo (RFC §12.4.3.1)
-	if groupInfo.RatchetTree != nil {
-		signerLeaf := groupInfo.RatchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
-		if signerLeaf != nil && signerLeaf.LeafData != nil && signerLeaf.LeafData.SignatureKey != nil {
-			ecdhKey, ecdhErr := signerLeaf.LeafData.SignatureKey.ECDH()
-			if ecdhErr == nil {
-				pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(ecdhKey.Bytes(), ciphersuite.ECDSA_SECP256R1_SHA256)
-				sig := ciphersuite.NewSignature(groupInfo.Signature)
-				if verifyErr := pubKey.Verify(groupInfo.MarshalTBS(), sig); verifyErr != nil {
-					return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
-				}
-			}
-		}
-	}
-
-	// 7. Reconstituir ratchet tree: primero buscar extensión ratchet_tree,
+	// 6. Reconstituir ratchet tree: primero buscar extensión ratchet_tree,
 	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
 	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
@@ -508,6 +494,19 @@ func JoinFromWelcome(
 	}
 	if ratchetTree == nil {
 		ratchetTree = treesync.NewRatchetTree(1)
+	}
+	groupInfo.RatchetTree = ratchetTree
+
+	// 7. Verificar firma de GroupInfo (RFC §12.4.3.1)
+	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
+	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
+		return nil, fmt.Errorf("missing signer leaf in ratchet tree")
+	}
+	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
+	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+	sig := ciphersuite.NewSignature(groupInfo.Signature)
+	if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
+		return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
 	}
 
 	// 8. Inicializar GroupContext desde GroupInfo
@@ -578,6 +577,24 @@ func JoinFromWelcome(
 		state:                 StateOperational,
 		KeySchedule:           keySchedule,
 		Proposals:             NewProposalStore(),
+	}
+	group.ProposalByRef = make(map[string]*Proposal)
+
+	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
+		leaf := ratchetTree.GetLeaf(i)
+		if leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
+			leafIdx := LeafNodeIndex(i)
+			group.Members[leafIdx] = &Member{
+				LeafIndex:  leafIdx,
+				Credential: leaf.LeafData.Credential,
+				Active:     true,
+			}
+		}
+	}
+
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves)
+	if err != nil {
+		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
 
 	return group, nil
