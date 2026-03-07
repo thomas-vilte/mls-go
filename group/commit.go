@@ -1,12 +1,14 @@
 package group
 
 import (
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/framing"
 	"github.com/openmls/go/internal/tls"
 	"github.com/openmls/go/schedule"
+	"github.com/openmls/go/treesync"
 )
 
 // ProposalOrRefType - RFC 9420 §12.4
@@ -35,7 +37,7 @@ type Commit struct {
 //	    UpdatePathNode nodes<V>;
 //	} UpdatePath;
 type UpdatePath struct {
-	LeafNode *LeafNode
+	LeafNode *treesync.LeafNodeData
 	Nodes    []UpdatePathNode
 }
 
@@ -59,7 +61,7 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	if err != nil {
 		return nil, err
 	}
-	leafNode, err := UnmarshalLeafNode(leafData)
+	leafNode, err := treesync.UnmarshalLeafNodeData(leafData)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +89,13 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 		LeafNode: leafNode,
 		Nodes:    nodes,
 	}, nil
+}
+
+// ComputeProposalRef calcula el hash de referencia de un proposal (RFC 9420 §12.4).
+func ComputeProposalRef(p *Proposal) []byte {
+	data := ProposalMarshal(p)
+	hash := sha256.Sum256(data)
+	return hash[:]
 }
 
 // UpdatePathNode represents a node in the update path.

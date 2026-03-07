@@ -41,69 +41,6 @@ type Proposal struct {
 	GroupContextExtensions *GroupContextExtensionsProposal
 }
 
-// LeafNode represents a node in the ratchet tree.
-type LeafNode struct {
-	Index         LeafNodeIndex
-	EncryptionKey []byte
-	SignatureKey  []byte
-	Credential    *credentials.Credential
-	ParentHash    []byte
-}
-
-// Marshal serializes the LeafNode to TLS format.
-func (ln *LeafNode) Marshal() []byte {
-	w := tls.NewWriter()
-	w.WriteUint32(uint32(ln.Index))
-	w.WriteVLBytes(ln.EncryptionKey)
-	w.WriteVLBytes(ln.SignatureKey)
-	w.WriteVLBytes(ln.Credential.Marshal())
-	w.WriteVLBytes(ln.ParentHash)
-	return w.Bytes()
-}
-
-// UnmarshalLeafNode deserializes a LeafNode from TLS format.
-func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
-	r := tls.NewReader(data)
-
-	index, err := r.ReadUint32()
-	if err != nil {
-		return nil, err
-	}
-
-	encKey, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	sigKey, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	credData, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	credential, err := credentials.UnmarshalCredential(credData)
-	if err != nil {
-		return nil, err
-	}
-
-	parentHash, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	return &LeafNode{
-		Index:         LeafNodeIndex(index),
-		EncryptionKey: encKey,
-		SignatureKey:  sigKey,
-		Credential:    credential,
-		ParentHash:    parentHash,
-	}, nil
-}
-
 // ProposalMarshal serializes a Proposal to TLS format.
 func ProposalMarshal(p *Proposal) []byte {
 	w := tls.NewWriter()
