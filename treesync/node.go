@@ -327,12 +327,12 @@ func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 
-func (l *LeafNodeData) marshalSignatureKey() []byte {
-	if l.SignatureKey == nil {
+func MarshalSignatureKey(key *ecdsa.PublicKey) []byte {
+	if key == nil {
 		return nil
 	}
-	xBytes := l.SignatureKey.X.Bytes()
-	yBytes := l.SignatureKey.Y.Bytes()
+	xBytes := key.X.Bytes()
+	yBytes := key.Y.Bytes()
 
 	// Pad to 32 bytes
 	paddedX := make([]byte, 32)
@@ -345,6 +345,10 @@ func (l *LeafNodeData) marshalSignatureKey() []byte {
 	copy(res[1:33], paddedX)
 	copy(res[33:65], paddedY)
 	return res
+}
+
+func (l *LeafNodeData) marshalSignatureKey() []byte {
+	return MarshalSignatureKey(l.SignatureKey)
 }
 
 // clone creates a deep copy of a node.
