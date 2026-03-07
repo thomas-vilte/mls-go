@@ -199,7 +199,7 @@ func TestProposalStore(t *testing.T) {
 
 	// Add proposal
 	proposal := &Proposal{Type: ProposalTypeAdd}
-	ps.AddProposal(proposal)
+	ps.AddProposal(proposal, NewLeafNodeIndex(0))
 
 	if len(ps.Proposals) != 1 {
 		t.Errorf("Should have 1 proposal, got %d", len(ps.Proposals))

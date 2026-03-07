@@ -200,7 +200,7 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -215,17 +215,29 @@ func (g *Group) UpdateMember(
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state")
 	}
+	if newLeafNode == nil {
+		return nil, fmt.Errorf("new leaf node is nil")
+	}
+	_ = privateKeys
+
+	// Convert treesync leaf data to keypackages leaf node.
+	kpLeafNode := &keypackages.LeafNode{
+		EncryptionKey: newLeafNode.EncryptionKey,
+		SignatureKey:  newLeafNode.SignatureKey,
+		Credential:    newLeafNode.Credential,
+		Capabilities:  &keypackages.Capabilities{},
+	}
 
 	// Create Update proposal
 	proposal := &Proposal{
 		Type: ProposalTypeUpdate,
 		Update: &UpdateProposal{
-			LeafNode: nil, // TODO: Convert treesync.LeafNodeData to keypackages.LeafNode
+			LeafNode: kpLeafNode,
 		},
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -252,7 +264,7 @@ func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 	}
 
 	// Store proposal
-	g.Proposals.AddProposal(proposal)
+	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
 	return proposal, nil
 }
@@ -286,8 +298,8 @@ func (g *Group) Commit(
 
 	// 2. Clonar árbol, aplicar proposals provisoriamente
 	treeDiff := g.RatchetTree.Clone()
-	for _, prop := range proposals {
-		if err := g.applyProposalToTree(prop, treeDiff, g.OwnLeafIndex); err != nil {
+	for _, fp := range filtered {
+		if err := g.applyProposalToTree(fp.Proposal, treeDiff, fp.Sender); err != nil {
 			return nil, fmt.Errorf("applying proposal to tree: %w", err)
 		}
 	}
@@ -564,13 +576,13 @@ func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 }
 
 // StoreProposal almacena un proposal indexado por referencia hash para resolución futura (RFC 9420 §12.4).
-func (g *Group) StoreProposal(p *Proposal) []byte {
+func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex) []byte {
 	if g.ProposalByRef == nil {
 		g.ProposalByRef = make(map[string]*Proposal)
 	}
 	ref := ComputeProposalRef(p)
 	g.ProposalByRef[string(ref)] = p
-	g.Proposals.AddProposal(p)
+	g.Proposals.AddProposal(p, sender)
 	return ref
 }
 

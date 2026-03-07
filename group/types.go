@@ -200,24 +200,24 @@ const (
 
 // ProposalStore stores pending proposals.
 type ProposalStore struct {
-	Proposals []*Proposal
+	Proposals []StoredProposal
 }
 
 // NewProposalStore creates a new proposal store.
 func NewProposalStore() *ProposalStore {
 	return &ProposalStore{
-		Proposals: make([]*Proposal, 0),
+		Proposals: make([]StoredProposal, 0),
 	}
 }
 
 // AddProposal adds a proposal to the store.
-func (ps *ProposalStore) AddProposal(proposal *Proposal) {
-	ps.Proposals = append(ps.Proposals, proposal)
+func (ps *ProposalStore) AddProposal(proposal *Proposal, sender LeafNodeIndex) {
+	ps.Proposals = append(ps.Proposals, StoredProposal{Proposal: proposal, Sender: sender})
 }
 
 // Clear clears all proposals.
 func (ps *ProposalStore) Clear() {
-	ps.Proposals = make([]*Proposal, 0)
+	ps.Proposals = make([]StoredProposal, 0)
 }
 
 // Member represents a group member.
@@ -226,4 +226,10 @@ type Member struct {
 	KeyPackage *keypackages.KeyPackage
 	Credential *credentials.Credential
 	Active     bool
+}
+
+// StoredProposal guarda un proposal junto con el indice de hoja de quien lo envio
+type StoredProposal struct {
+	Proposal *Proposal
+	Sender   LeafNodeIndex
 }
