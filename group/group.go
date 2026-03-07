@@ -75,6 +75,7 @@ type Group struct {
 	OwnLeafIndex          LeafNodeIndex
 	EpochSecrets          *schedule.EpochSecrets
 	Proposals             *ProposalStore
+	ProposalByRef         map[string]*Proposal
 	PendingCommit         *StagedCommit
 	ConfirmationTag       []byte
 	InterimTranscriptHash []byte
@@ -494,29 +495,32 @@ func (g *Group) createUpdatePath(
 		tree.Nodes[nodeIdx].ParentHash = ph
 	}
 
+	sigPubKeyECDSA, err := sigPubKey.ToECDSA()
+	if err != nil {
+		return nil, nil, fmt.Errorf("converting signature public key: %w", err)
+	}
+
 	leafNodeData := &treesync.LeafNodeData{
 		EncryptionKey:  leafSecret.AsSlice(),
+		SignatureKey:   sigPubKeyECDSA,
 		Credential:     g.Members[g.OwnLeafIndex].Credential,
+		Capabilities:   &treesync.LeafNodeCapabilities{},
+		Lifetime:       &treesync.LeafNodeLifetime{},
 		LeafNodeSource: 3, // commit
 		ParentHash:     tree.Nodes[directPath[0]].ParentHash,
 	}
 
 	tbs := leafNodeData.MarshalTBS()
-	sig, _ := sigPrivKey.Sign(tbs)
-	leafNodeData.Signature = sig.AsSlice()
-
-	leafNode := &LeafNode{
-		Index:         g.OwnLeafIndex,
-		EncryptionKey: leafSecret.AsSlice(),
-		SignatureKey:  sigPubKey.AsSlice(),
-		Credential:    leafNodeData.Credential,
-		ParentHash:    leafNodeData.ParentHash,
+	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("signing leaf node TBS: %w", err)
 	}
+	leafNodeData.Signature = sig.AsSlice()
 
 	commitSecret := pathSecrets[len(pathSecrets)-1]
 
 	return &UpdatePath{
-		LeafNode: leafNode,
+		LeafNode: leafNodeData,
 		Nodes:    nodes,
 	}, commitSecret, nil
 }
@@ -526,9 +530,12 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		leafData := treesync.LeafNodeData{
-			EncryptionKey: proposal.Add.KeyPackage.InitKey,
-			SignatureKey:  proposal.Add.KeyPackage.LeafNode.SignatureKey,
-			Credential:    proposal.Add.KeyPackage.LeafNode.Credential,
+			EncryptionKey:  proposal.Add.KeyPackage.InitKey,
+			SignatureKey:   proposal.Add.KeyPackage.LeafNode.SignatureKey,
+			Credential:     proposal.Add.KeyPackage.LeafNode.Credential,
+			Capabilities:   &treesync.LeafNodeCapabilities{},
+			Lifetime:       &treesync.LeafNodeLifetime{},
+			LeafNodeSource: 1, // key_package
 		}
 		tree.AddLeaf(leafData)
 	case ProposalTypeRemove:
@@ -555,6 +562,17 @@ func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 	return g.MergeCommit(stagedCommit)
 }
 
+// StoreProposal almacena un proposal indexado por referencia hash para resolución futura (RFC 9420 §12.4).
+func (g *Group) StoreProposal(p *Proposal) []byte {
+	if g.ProposalByRef == nil {
+		g.ProposalByRef = make(map[string]*Proposal)
+	}
+	ref := ComputeProposalRef(p)
+	g.ProposalByRef[string(ref)] = p
+	g.Proposals.AddProposal(p)
+	return ref
+}
+
 // ProcessReceivedCommit procesa un commit enviado por otro miembro.
 // Descifra el path secret usando la clave HPKE privada del receptor,
 // luego avanza el estado del grupo. RFC 9420 §12.4.2
@@ -573,11 +591,17 @@ func (g *Group) ProcessReceivedCommit(
 		return fmt.Errorf("unmarshaling commit: %w", err)
 	}
 
-	// Extraer proposals inline (ProposalRef no está implementado)
+	// Resolver proposals: inline o por referencia hash
 	proposals := make([]*Proposal, 0, len(commit.Proposals))
 	for _, por := range commit.Proposals {
 		if por.Proposal != nil {
 			proposals = append(proposals, por.Proposal)
+		} else if len(por.ProposalRef) > 0 {
+			if p, ok := g.ProposalByRef[string(por.ProposalRef)]; ok {
+				proposals = append(proposals, p)
+			} else {
+				return fmt.Errorf("unknown proposal reference in commit")
+			}
 		}
 	}
 
@@ -664,35 +688,60 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 
 	// 1.2 Aplicar UpdatePath si existe
 	if stagedCommit.Commit.Path != nil {
-		// Actualizar la hoja del emisor
-		leafIdx := treesync.LeafIndex(stagedCommit.Commit.Path.LeafNode.Index)
-		leafData := treesync.LeafNodeData{
-			EncryptionKey:  stagedCommit.Commit.Path.LeafNode.EncryptionKey,
-			Credential:     stagedCommit.Commit.Path.LeafNode.Credential,
-			LeafNodeSource: 3, // commit
-			ParentHash:     stagedCommit.Commit.Path.LeafNode.ParentHash,
-			// Signature: ...
-		}
-		g.RatchetTree.SetLeaf(leafIdx, leafData)
+		// Obtener índice de hoja del emisor desde AuthenticatedContent
+		senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
-		// Actualizar ancestros
-		path := g.RatchetTree.DirectPath(leafIdx)
-		for i := 1; i < len(path); i++ {
+		// Verificar firma del leaf node del emisor (RFC §12.4.2)
+		if leafNodeData.SignatureKey != nil {
+			if err := leafNodeData.Verify(g.CipherSuite); err != nil {
+				return fmt.Errorf("leaf node signature verification failed: %w", err)
+			}
+		}
+
+		// Actualizar la hoja del emisor
+		g.RatchetTree.SetLeaf(senderLeafIdx, *leafNodeData)
+
+		// Actualizar ancestros con nuevas claves de cifrado
+		path := g.RatchetTree.DirectPath(senderLeafIdx)
+		for i := 1; i < len(path) && i-1 < len(stagedCommit.Commit.Path.Nodes); i++ {
 			nodeIdx := path[i]
 			updateNode := stagedCommit.Commit.Path.Nodes[i-1]
 
 			node := &g.RatchetTree.Nodes[nodeIdx]
 			node.EncryptionKey, _ = ecdh.P256().NewPublicKey(updateNode.EncryptionKey)
 			node.State = treesync.NodeStatePresent
-			// ParentHash del nodo será verificado después
 		}
 
-		// 1.1 Verificar parent hashes (RFC §7.9)
-		// TODO: Arreglar mismatch en tests
-		// if err := g.RatchetTree.VerifyParentHashes(leafIdx, g.CipherSuite); err != nil {
-		// 	return fmt.Errorf("parent hash verification failed: %w", err)
-		// }
-		_ = leafIdx // Evitar warning
+		// Calcular parent hashes de arriba abajo y verificar (RFC §7.9)
+		if len(path) > 1 {
+			rootIdx := g.RatchetTree.Root()
+			g.RatchetTree.Nodes[rootIdx].ParentHash = []byte{}
+
+			for i := len(path) - 2; i >= 0; i-- {
+				nodeIdx := path[i]
+				parentIdx := path[i+1]
+				parent := &g.RatchetTree.Nodes[parentIdx]
+				siblingIdx := g.RatchetTree.GetSibling(nodeIdx)
+				siblingHash := g.RatchetTree.HashNode(siblingIdx)
+
+				var parentKey []byte
+				if parent.EncryptionKey != nil {
+					parentKey = parent.EncryptionKey.Bytes()
+				}
+				ph := treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+
+				// Almacenar en nodos intermedios; la hoja ya tiene su parent hash del wire
+				if !treesync.IsLeaf(nodeIdx) {
+					g.RatchetTree.Nodes[nodeIdx].ParentHash = ph
+				}
+			}
+
+			// Verificar que el parent hash de la hoja coincide con lo calculado (RFC §7.9)
+			if err := g.RatchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
+				return fmt.Errorf("parent hash verification failed: %w", err)
+			}
+		}
 	}
 
 	// 2. Recomputar TreeHash desde treesync

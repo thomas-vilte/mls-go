@@ -1,8 +1,11 @@
 package treesync
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"errors"
+	"math/big"
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
@@ -35,6 +38,9 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 
 	// EncryptionKey
 	buf.WriteVLBytes(l.EncryptionKey)
+
+	// SignatureKey (formato uncompressed P-256: 0x04 || X || Y)
+	buf.WriteVLBytes(l.marshalSignatureKey())
 
 	// Capabilities
 	if l.Capabilities != nil {
@@ -127,6 +133,17 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	l.EncryptionKey, err = r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+
+	// SignatureKey (formato uncompressed P-256: 0x04 || X || Y)
+	sigKeyBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	if len(sigKeyBytes) == 65 && sigKeyBytes[0] == 0x04 {
+		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
+		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
+		l.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	}
 
 	// Capabilities
