@@ -6,6 +6,7 @@
 package treesync
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -292,11 +293,11 @@ func (t *RatchetTree) TreeHash() []byte {
 	if t.NumLeaves == 0 {
 		return nil
 	}
-	return t.hashNode(t.Root())
+	return t.HashNode(t.Root())
 }
 
-// hashNode computes node hash.
-func (t *RatchetTree) hashNode(idx NodeIndex) []byte {
+// HashNode computes node hash.
+func (t *RatchetTree) HashNode(idx NodeIndex) []byte {
 	if int(idx) >= len(t.Nodes) {
 		return nil
 	}
@@ -327,31 +328,28 @@ func (t *RatchetTree) hashParent(idx NodeIndex) []byte {
 
 	// Left and right hashes
 	left, _ := t.LeftChild(idx)
-	leftHash := t.hashNode(left)
+	leftHash := t.HashNode(left)
 
 	right, _ := t.RightChild(idx)
-	rightHash := t.hashNode(right)
+	rightHash := t.HashNode(right)
 
 	// RFC §7.8 ParentNodeHashInput uses original_sibling_tree_hash
 	// but the tree hash calculation itself is recursive.
 
 	w := tls.NewWriter()
 
-	// optional<ParentNode>
+	// optional<ParentNode> — byte de presencia seguido directo de los campos (RFC §7.8)
 	if node.State == NodeStateBlank || node.EncryptionKey == nil {
 		w.WriteUint8(0)
 	} else {
 		w.WriteUint8(1)
-		// Serialize ParentNode
-		parentBuf := tls.NewWriter()
-		parentBuf.WriteVLBytes(node.EncryptionKey.Bytes())
-		parentBuf.WriteVLBytes(node.ParentHash)
+		w.WriteVLBytes(node.EncryptionKey.Bytes())
+		w.WriteVLBytes(node.ParentHash)
 		unmergedBuf := tls.NewWriter()
 		for _, leaf := range node.UnmergedLeaves {
 			unmergedBuf.WriteUint32(uint32(leaf))
 		}
-		parentBuf.WriteVLBytes(unmergedBuf.Bytes())
-		w.WriteVLBytes(parentBuf.Bytes())
+		w.WriteVLBytes(unmergedBuf.Bytes())
 	}
 
 	w.WriteVLBytes(leftHash)
@@ -361,7 +359,102 @@ func (t *RatchetTree) hashParent(idx NodeIndex) []byte {
 	return hash[:]
 }
 
-// Clone creates a deep copy.
+// GetSibling returns the sibling of a node.
+func (t *RatchetTree) GetSibling(node NodeIndex) NodeIndex {
+	parent, err := t.Parent(node)
+	if err != nil {
+		return node // should not happen for non-root
+	}
+	left, _ := t.LeftChild(parent)
+	if left == node {
+		right, _ := t.RightChild(parent)
+		return right
+	}
+	return left
+}
+
+// Resolution returns the resolution of a node (RFC §7.1).
+// The resolution of a node is an ordered list of non-blank nodes that collectively
+// cover all non-blank descendants of the node.
+func (t *RatchetTree) Resolution(idx NodeIndex) []NodeIndex {
+	if int(idx) >= len(t.Nodes) {
+		return nil
+	}
+
+	node := &t.Nodes[idx]
+
+	// 1. If the node is not blank, the resolution is the node itself,
+	// followed by its list of unmerged leaves.
+	if node.State == NodeStatePresent {
+		res := []NodeIndex{idx}
+		for _, leaf := range node.UnmergedLeaves {
+			res = append(res, LeafIndexToNodeIndex(leaf))
+		}
+		return res
+	}
+
+	// 2. If the node is blank and a leaf, the resolution is empty.
+	if IsLeaf(idx) {
+		return []NodeIndex{}
+	}
+
+	// 3. If the node is blank and an intermediate node, the resolution is the
+	// concatenation of the resolutions of its children.
+	left, _ := t.LeftChild(idx)
+	right, _ := t.RightChild(idx)
+
+	res := t.Resolution(left)
+	res = append(res, t.Resolution(right)...)
+
+	return res
+}
+
+// VerifyParentHashes verifica los parent hashes a lo largo del direct path (RFC §7.9).
+//
+// Para cada nodo del camino (excepto la raíz), el parent_hash almacenado en ese nodo
+// debe coincidir con ComputeParentHash(padre.EncryptionKey, padre.ParentHash, hermano.TreeHash).
+func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
+	path := t.DirectPath(leafIdx)
+	if len(path) <= 1 {
+		return nil
+	}
+
+	for i := 0; i < len(path)-1; i++ {
+		nodeIdx := path[i]
+		parentIdx, _ := t.Parent(nodeIdx)
+
+		node := &t.Nodes[nodeIdx]
+		parent := &t.Nodes[parentIdx]
+
+		if node.State != NodeStatePresent {
+			continue
+		}
+
+		siblingIdx := t.GetSibling(nodeIdx)
+		siblingHash := t.HashNode(siblingIdx)
+
+		var parentKey []byte
+		if parent.EncryptionKey != nil {
+			parentKey = parent.EncryptionKey.Bytes()
+		}
+
+		expected := ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+
+		var actual []byte
+		if IsLeaf(nodeIdx) && node.LeafData != nil {
+			actual = node.LeafData.ParentHash
+		} else {
+			actual = node.ParentHash
+		}
+
+		if !bytes.Equal(expected, actual) {
+			return fmt.Errorf("parent hash mismatch at node %d", nodeIdx)
+		}
+	}
+
+	return nil
+}
+
 func (t *RatchetTree) Clone() *RatchetTree {
 	cloned := &RatchetTree{
 		Nodes:     make([]Node, len(t.Nodes)),

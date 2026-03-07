@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
+	"github.com/openmls/go/framing"
 	"github.com/openmls/go/internal/tls"
+	"github.com/openmls/go/schedule"
 )
 
 // ProposalOrRefType - RFC 9420 §12.4
@@ -155,13 +157,14 @@ func UnmarshalUpdatePathNode(data []byte) (*UpdatePathNode, error) {
 
 // StagedCommit representa un commit preparado para ser mergeado
 type StagedCommit struct {
-	Commit             *Commit
-	Proposals          []*Proposal
-	WireFormat         uint16 // Necesario para transcript hash
-	FramedContentBytes []byte // Serialized FramedContent
-	Signature          []byte
-	ConfirmationTag    []byte
-	RootPathSecret     *ciphersuite.Secret // Para avanzar key schedule
+	Commit               *Commit
+	Proposals            []*Proposal
+	AuthenticatedContent *framing.AuthenticatedContent
+	RootPathSecret       *ciphersuite.Secret // Para avanzar key schedule
+	// Precalculado por el committer en Commit() — nil para receptores
+	PrecomputedEpochSecrets *schedule.EpochSecrets
+	PrecomputedGroupContext *GroupContext
+	PrecomputedInterimHash  []byte
 }
 
 // ConfirmationTag represents the confirmation tag in a commit.

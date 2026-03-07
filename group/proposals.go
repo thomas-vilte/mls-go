@@ -3,7 +3,7 @@ package group
 import (
 	"errors"
 
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // All proposal types according to RFC 9420 §12.1
@@ -197,6 +197,11 @@ func ValidateProposal(proposal *Proposal, capabilities *keypackages.Capabilities
 
 func isProposalTypeSupported(proposalType ProposalType, capabilities *keypackages.Capabilities) bool {
 	if capabilities == nil {
+		// Default to supporting basic proposal types if no capabilities provided
+		switch proposalType {
+		case ProposalTypeAdd, ProposalTypeUpdate, ProposalTypeRemove:
+			return true
+		}
 		return false
 	}
 

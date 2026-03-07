@@ -27,7 +27,7 @@ import (
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/group"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // TestVector represents a single interoperability test case.
@@ -40,7 +40,7 @@ type TestVector struct {
 	Epoch       uint64 `json:"epoch"`
 
 	// Key Packages (hex encoded)
-	KeyPackages []KeyPackageVector `json:"key_packages,omitempty"`
+	KeyPackages []KeyPackageVector `json:"keypackages,omitempty"`
 
 	// Group operations
 	Commits []CommitVector `json:"commits,omitempty"`

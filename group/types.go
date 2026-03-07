@@ -3,7 +3,7 @@ package group
 import (
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // ProposalType identifies the type of proposal.
@@ -47,6 +47,7 @@ type LeafNode struct {
 	EncryptionKey []byte
 	SignatureKey  []byte
 	Credential    *credentials.Credential
+	ParentHash    []byte
 }
 
 // Marshal serializes the LeafNode to TLS format.
@@ -56,6 +57,7 @@ func (ln *LeafNode) Marshal() []byte {
 	w.WriteVLBytes(ln.EncryptionKey)
 	w.WriteVLBytes(ln.SignatureKey)
 	w.WriteVLBytes(ln.Credential.Marshal())
+	w.WriteVLBytes(ln.ParentHash)
 	return w.Bytes()
 }
 
@@ -88,11 +90,17 @@ func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
 		return nil, err
 	}
 
+	parentHash, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+
 	return &LeafNode{
 		Index:         LeafNodeIndex(index),
 		EncryptionKey: encKey,
 		SignatureKey:  sigKey,
 		Credential:    credential,
+		ParentHash:    parentHash,
 	}, nil
 }
 
@@ -114,7 +122,36 @@ func ProposalMarshal(p *Proposal) []byte {
 		if p.Remove != nil {
 			w.WriteUint32(uint32(p.Remove.Removed))
 		}
-		// ... otros casos
+	case ProposalTypePreSharedKey:
+		if p.PreSharedKey != nil {
+			w.WriteUint8(p.PreSharedKey.PskType)
+			w.WriteVLBytes(p.PreSharedKey.PskID.ID)
+		}
+	case ProposalTypeReInit:
+		if p.ReInit != nil {
+			w.WriteVLBytes(p.ReInit.GroupID)
+			w.WriteUint16(uint16(p.ReInit.Version))
+			w.WriteUint16(uint16(p.ReInit.CipherSuite))
+			extBuf := tls.NewWriter()
+			for _, ext := range p.ReInit.Extensions {
+				extBuf.WriteUint16(ext.Type)
+				extBuf.WriteVLBytes(ext.Data)
+			}
+			w.WriteVLBytes(extBuf.Bytes())
+		}
+	case ProposalTypeExternalInit:
+		if p.ExternalInit != nil {
+			w.WriteVLBytes(p.ExternalInit.KemOutput)
+		}
+	case ProposalTypeGroupContextExtensions:
+		if p.GroupContextExtensions != nil {
+			extBuf := tls.NewWriter()
+			for _, ext := range p.GroupContextExtensions.Extensions {
+				extBuf.WriteUint16(ext.Type)
+				extBuf.WriteVLBytes(ext.Data)
+			}
+			w.WriteVLBytes(extBuf.Bytes())
+		}
 	}
 
 	return w.Bytes()
@@ -160,6 +197,56 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 		proposal.Remove = &RemoveProposal{Removed: LeafNodeIndex(removed)}
+	case ProposalTypePreSharedKey:
+		pskType, err := r.ReadUint8()
+		if err != nil {
+			return nil, err
+		}
+		pskID, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		proposal.PreSharedKey = &PreSharedKeyProposal{
+			PskType: pskType,
+			PskID:   PskID{PskType: pskType, ID: pskID},
+		}
+	case ProposalTypeReInit:
+		groupID, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		version, err := r.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		cs, err := r.ReadUint16()
+		if err != nil {
+			return nil, err
+		}
+		extData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		exts, _ := parseExtensions(extData)
+		proposal.ReInit = &ReInitProposal{
+			GroupID:     groupID,
+			Version:     keypackages.ProtocolVersion(version),
+			CipherSuite: keypackages.CipherSuite(cs),
+			Extensions:  exts,
+		}
+	case ProposalTypeExternalInit:
+		kemOutput, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		proposal.ExternalInit = &ExternalInitProposal{KemOutput: kemOutput}
+	case ProposalTypeGroupContextExtensions:
+		extData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		exts, _ := parseExtensions(extData)
+		proposal.GroupContextExtensions = &GroupContextExtensionsProposal{Extensions: exts}
 	}
 
 	return proposal, nil

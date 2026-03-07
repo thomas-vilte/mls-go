@@ -58,8 +58,10 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 		return nil, err
 	}
 
-	// TODO: Unmarshal leaf node data
-	_ = leafData
+	leafNode, err := UnmarshalLeafNodeData(leafData)
+	if err != nil {
+		return nil, err
+	}
 
 	nodesBytes, err := buf.ReadVLBytes()
 	if err != nil {
@@ -92,7 +94,7 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	}
 
 	return &UpdatePath{
-		LeafNode: nil,
+		LeafNode: leafNode,
 		Nodes:    nodes,
 	}, nil
 }

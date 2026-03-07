@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/openmls/go/ciphersuite"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // ProposalFilter valida y filtra proposals según RFC 9420 §12.2

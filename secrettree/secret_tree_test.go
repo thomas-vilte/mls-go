@@ -1,4 +1,4 @@
-package secret_tree
+package secrettree
 
 import (
 	"bytes"

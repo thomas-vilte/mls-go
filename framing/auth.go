@@ -4,9 +4,8 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/group"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/key_packages"
+	keypackages "github.com/openmls/go/keypackages"
 )
 
 // FramedContentAuthData implementa RFC 9420 §6.1.
@@ -36,7 +35,7 @@ type AuthenticatedContent struct {
 	WireFormat   WireFormat
 	Content      FramedContent
 	Auth         FramedContentAuthData
-	GroupContext *group.GroupContext // required for PublicMessage TBS; nil for PrivateMessage
+	GroupContext []byte // serialized GroupContext; required for PublicMessage TBS; nil for PrivateMessage
 }
 
 // MarshalForSigning serializa wire_format + content (utilizado en membership tag TBM).
@@ -67,8 +66,8 @@ func (ac *AuthenticatedContent) MarshalTBS() []byte {
 	w.WriteRaw(ac.Content.Marshal())
 	// RFC §6.1: GroupContext incluido cuando sender_type == member o new_member_commit
 	st := ac.Content.Sender.Type
-	if (st == SenderTypeMember || st == SenderTypeNewMemberCommit) && ac.GroupContext != nil {
-		w.WriteRaw(ac.GroupContext.Marshal())
+	if (st == SenderTypeMember || st == SenderTypeNewMemberCommit) && len(ac.GroupContext) > 0 {
+		w.WriteRaw(ac.GroupContext)
 	}
 	return w.Bytes()
 }

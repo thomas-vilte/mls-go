@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/group"
 	"github.com/openmls/go/internal/tls"
 	"github.com/openmls/go/schedule"
 )
@@ -24,7 +23,7 @@ type PublicMessage struct {
 func NewPublicMessage(
 	content FramedContent,
 	sigKey *ciphersuite.SignaturePrivateKey,
-	gc *group.GroupContext,
+	gc []byte, // serialized GroupContext
 	membershipKey *ciphersuite.Secret,
 ) (*PublicMessage, error) {
 	ac := &AuthenticatedContent{
