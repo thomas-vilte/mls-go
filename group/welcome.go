@@ -337,6 +337,16 @@ func (g *Group) CreateWelcome(
 		Data: treeData,
 	})
 
+	const extTypeExternalPub = uint16(0x0001)
+	externalPriv, err := ciphersuite.DeriveKeyPair(g.CipherSuite, g.EpochSecrets.ExternalSecret.AsSlice())
+	if err != nil {
+		return nil, fmt.Errorf("deriving external key pair: %w", err)
+	}
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: extTypeExternalPub,
+		Data: externalPriv.PublicKey().Bytes(),
+	})
+
 	// Firmar GroupInfo sobre los campos TBS (excluye Signature)
 	groupInfoTBS := groupInfo.MarshalTBS()
 	signature, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", groupInfoTBS)
@@ -565,18 +575,21 @@ func JoinFromWelcome(
 
 	// 10. Crear Group
 	group := &Group{
-		GroupID:               groupContext.GroupID,
-		Epoch:                 groupContext.Epoch,
-		CipherSuite:           welcome.CipherSuite,
-		GroupContext:          groupContext,
-		RatchetTree:           ratchetTree,
-		OwnLeafIndex:          ownLeafIndex,
-		EpochSecrets:          epochSecrets,
-		InterimTranscriptHash: []byte{}, // Inicial
-		Members:               make(map[LeafNodeIndex]*Member),
-		state:                 StateOperational,
-		KeySchedule:           keySchedule,
-		Proposals:             NewProposalStore(),
+		GroupID:      groupContext.GroupID,
+		Epoch:        groupContext.Epoch,
+		CipherSuite:  welcome.CipherSuite,
+		GroupContext: groupContext,
+		RatchetTree:  ratchetTree,
+		OwnLeafIndex: ownLeafIndex,
+		EpochSecrets: epochSecrets,
+		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(
+			groupContext.ConfirmedTranscriptHash,
+			groupInfo.ConfirmationTag,
+		),
+		Members:     make(map[LeafNodeIndex]*Member),
+		state:       StateOperational,
+		KeySchedule: keySchedule,
+		Proposals:   NewProposalStore(),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
 
