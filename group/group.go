@@ -218,7 +218,22 @@ func (g *Group) UpdateMember(
 	if newLeafNode == nil {
 		return nil, fmt.Errorf("new leaf node is nil")
 	}
-	_ = privateKeys
+	if privateKeys == nil {
+		return nil, fmt.Errorf("private keys are nil")
+	}
+	if privateKeys.SignatureKey == nil {
+		return nil, fmt.Errorf("signature key is nil")
+	}
+
+	// source = 2 (update) y firmar el TBS con el label del RFC
+	newLeafNode.LeafNodeSource = 2
+	sigKey := ciphersuite.NewSignaturePrivateKey(privateKeys.SignatureKey)
+	tbs := newLeafNode.MarshalTBS()
+	sig, err := ciphersuite.SignWithLabel(sigKey, "LeafNodeTBS", tbs)
+	if err != nil {
+		return nil, fmt.Errorf("signing leaf node: %w", err)
+	}
+	newLeafNode.Signature = sig.AsSlice()
 
 	// Convert treesync leaf data to keypackages leaf node.
 	kpLeafNode := &keypackages.LeafNode{
@@ -238,7 +253,6 @@ func (g *Group) UpdateMember(
 
 	// Store proposal
 	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
-
 	return proposal, nil
 }
 
@@ -604,6 +618,16 @@ func (g *Group) ProcessReceivedCommit(
 		return fmt.Errorf("unmarshaling commit: %w", err)
 	}
 
+	if ac.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
+		if commit.Path == nil || commit.Path.LeafNode == nil {
+			return fmt.Errorf("external commit missing update path")
+		}
+
+		treeDiff := g.RatchetTree.Clone()
+		extLeafIdx, _ := treeDiff.AddLeaf(*commit.Path.LeafNode)
+		senderLeafIdx = extLeafIdx
+	}
+
 	// Resolver proposals: inline o por referencia hash
 	proposals := make([]*Proposal, 0, len(commit.Proposals))
 	for _, por := range commit.Proposals {
@@ -695,7 +719,16 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// 1. Aplicar proposals al ratchet tree
 	senderIdx := g.OwnLeafIndex
 	if stagedCommit.AuthenticatedContent != nil {
-		senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		if stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
+			if stagedCommit.Commit == nil || stagedCommit.Commit.Path == nil || stagedCommit.Commit.Path.LeafNode == nil {
+				return fmt.Errorf("external commit missing update path")
+			}
+
+			extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
+			senderIdx = LeafNodeIndex(extLeafIdx)
+		} else {
+			senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		}
 	}
 	for _, proposal := range stagedCommit.Proposals {
 		if err := g.applyProposal(proposal, senderIdx); err != nil {
@@ -705,8 +738,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 
 	// 1.2 Aplicar UpdatePath si existe
 	if stagedCommit.Commit.Path != nil {
-		// Obtener índice de hoja del emisor desde AuthenticatedContent
-		senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		senderLeafIdx := treesync.LeafIndex(senderIdx)
 		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
 		// Verificar firma del leaf node del emisor (RFC §12.4.2)
@@ -801,6 +833,32 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
 		// Receptor: derivar desde init_secret del epoch actual
+		initSecretForNewEpoch := g.EpochSecrets.InitSecret
+		for _, proposal := range stagedCommit.Proposals {
+			if proposal.Type == ProposalTypeExternalInit && proposal.ExternalInit != nil {
+				externalPriv, deriveErr := ciphersuite.DeriveKeyPair(
+					g.CipherSuite,
+					g.EpochSecrets.ExternalSecret.AsSlice(),
+				)
+				if deriveErr != nil {
+					return fmt.Errorf("deriving external key pair: %w", deriveErr)
+				}
+
+				kemPub, parseErr := ecdh.P256().NewPublicKey(proposal.ExternalInit.KemOutput)
+				if parseErr != nil {
+					return fmt.Errorf("parsing kem_output: %w", parseErr)
+				}
+
+				sharedSecretBytes, decapErr := externalPriv.ECDH(kemPub)
+				if decapErr != nil {
+					return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
+				}
+
+				initSecretForNewEpoch = ciphersuite.NewSecret(sharedSecretBytes)
+				break
+			}
+		}
+
 		var commitSecret *ciphersuite.Secret
 		if stagedCommit.Commit != nil && stagedCommit.Commit.Path != nil {
 			commitSecret = stagedCommit.RootPathSecret
@@ -808,7 +866,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			commitSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
 		}
 
-		newKS := schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
+		newKS := schedule.NewKeySchedule(g.CipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
 		if _, err = newKS.ComputeJoinerSecret(); err != nil {
 			return fmt.Errorf("computing joiner secret: %w", err)
@@ -863,6 +921,8 @@ func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error
 		return g.applyUpdateProposal(proposal.Update, senderIdx)
 	case ProposalTypeRemove:
 		return g.applyRemoveProposal(proposal.Remove)
+	case ProposalTypeExternalInit:
+		return nil
 	default:
 		return fmt.Errorf("unsupported proposal type: %d", proposal.Type)
 	}
