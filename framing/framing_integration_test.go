@@ -357,6 +357,46 @@ func TestPublicMessage_MemberSenderNilKey(t *testing.T) {
 	}
 }
 
+func TestPublicMessage_MarshalIncludesMembershipTagForMember(t *testing.T) {
+	sigPriv, err := ciphersuite.GenerateSignaturePrivateKey()
+	if err != nil {
+		t.Fatalf("GenerateSignatureKey: %v", err)
+	}
+
+	content := framing.FramedContent{
+		GroupID: []byte("group"),
+		Epoch:   1,
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: 0},
+		Body:    framing.ProposalBody{Data: []byte("proposal")},
+	}
+
+	membershipKey := ciphersuite.NewSecret([]byte("0123456789abcdef0123456789abcdef"))
+	pm, err := framing.NewPublicMessage(
+		content,
+		sigPriv,
+		[]byte("gc"),
+		membershipKey,
+		ciphersuite.MLS128DHKEMP256,
+	)
+	if err != nil {
+		t.Fatalf("NewPublicMessage: %v", err)
+	}
+
+	if len(pm.MembershipTag) == 0 {
+		t.Fatal("membership tag should be present for member sender")
+	}
+
+	data := pm.Marshal()
+	pm2, err := framing.UnmarshalPublicMessage(data)
+	if err != nil {
+		t.Fatalf("UnmarshalPublicMessage: %v", err)
+	}
+
+	if len(pm2.MembershipTag) == 0 {
+		t.Fatal("membership tag should survive roundtrip")
+	}
+}
+
 // ============================================================================
 // Tests de PrivateMessage
 // ============================================================================

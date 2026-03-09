@@ -63,14 +63,6 @@ func (g *Group) ReceiveMessage(
 	if g.SecretTree == nil {
 		return nil, fmt.Errorf("secret tree not available")
 	}
-	if int(senderLeafIdx) >= int(g.RatchetTree.NumLeaves) {
-		return nil, fmt.Errorf(
-			"sender leaf index %d out of bounds (tree has %d leaves)",
-			senderLeafIdx,
-			g.RatchetTree.NumLeaves,
-		)
-	}
-
 	// resolve sender signature pubkey from ratchet tree
 	senderLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(senderLeafIdx))
 	var sigPubKey *ciphersuite.OpenMlsSignaturePublicKey

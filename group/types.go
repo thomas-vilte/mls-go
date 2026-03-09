@@ -233,3 +233,40 @@ type StoredProposal struct {
 	Proposal *Proposal
 	Sender   LeafNodeIndex
 }
+
+// ExternalSender represents an allowed external sender (RFC 9420 §12.1.8.1).
+//
+//	struct {
+//	    SignaturePublicKey signature_key;
+//	    Credential credential;
+//	} ExternalSender;
+type ExternalSender struct {
+	SignatureKey []byte
+	Credential   *credentials.Credential
+}
+
+// parseExternalSenders deserializes an ExternalSenders extension payload
+// (a variable-length vector of ExternalSender structs).
+func parseExternalSenders(data []byte) ([]ExternalSender, error) {
+	r := tls.NewReader(data)
+	// The extension data is already the inner payload (type+data stripped by parseExtensions).
+	// RFC encodes it as ExternalSender external_senders<V>, so the outer VL wrapper
+	// has already been removed; we read individual entries until EOF.
+	var senders []ExternalSender
+	for r.Remaining() > 0 {
+		sigKey, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		credBytes, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
+		cred, err := credentials.UnmarshalCredential(credBytes)
+		if err != nil {
+			return nil, err
+		}
+		senders = append(senders, ExternalSender{SignatureKey: sigKey, Credential: cred})
+	}
+	return senders, nil
+}

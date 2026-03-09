@@ -5,7 +5,9 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
+	"github.com/openmls/go/framing"
 	keypackages "github.com/openmls/go/keypackages"
+	"github.com/openmls/go/treesync"
 )
 
 func TestGroupCreation(t *testing.T) {
@@ -246,5 +248,103 @@ func TestGroupState(t *testing.T) {
 
 	if group.State() != StatePendingCommit {
 		t.Errorf("State should be StatePendingCommit, got %d", group.State())
+	}
+}
+
+func TestProcessPublicMessage_StoresProposal(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	proposal := NewRemoveProposal(group.OwnLeafIndex)
+	pmContent := framing.FramedContent{
+		GroupID: group.GroupID.AsSlice(),
+		Epoch:   group.Epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		Body:    framing.ProposalBody{Data: ProposalMarshal(proposal)},
+	}
+
+	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+	pm, err := framing.NewPublicMessage(
+		pmContent,
+		sigPriv,
+		group.GroupContext.Marshal(),
+		group.EpochSecrets.MembershipKey,
+		group.CipherSuite,
+	)
+	if err != nil {
+		t.Fatalf("NewPublicMessage failed: %v", err)
+	}
+
+	if err := group.ProcessPublicMessage(pm); err != nil {
+		t.Fatalf("ProcessPublicMessage failed: %v", err)
+	}
+
+	if len(group.Proposals.Proposals) != 1 {
+		t.Fatalf("stored proposals = %d, want 1", len(group.Proposals.Proposals))
+	}
+}
+
+func TestProcessPublicMessage_RejectsCommitWithPath(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	pmContent := framing.FramedContent{
+		GroupID: group.GroupID.AsSlice(),
+		Epoch:   group.Epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		Body: framing.CommitBody{Data: (&Commit{
+			Path: &UpdatePath{LeafNode: &treesync.LeafNodeData{
+				EncryptionKey:  []byte{1},
+				SignatureKey:   keyPackage.LeafNode.SignatureKey,
+				Credential:     keyPackage.LeafNode.Credential,
+				Capabilities:   &treesync.LeafNodeCapabilities{},
+				Lifetime:       &treesync.LeafNodeLifetime{},
+				LeafNodeSource: 3,
+				Signature:      []byte{1},
+			}},
+		}).Marshal()},
+	}
+
+	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+	pm, err := framing.NewPublicMessage(
+		pmContent,
+		sigPriv,
+		group.GroupContext.Marshal(),
+		group.EpochSecrets.MembershipKey,
+		group.CipherSuite,
+	)
+	if err != nil {
+		t.Fatalf("NewPublicMessage failed: %v", err)
+	}
+
+	err = group.ProcessPublicMessage(pm)
+	if err == nil {
+		t.Fatal("expected error for commit with path")
 	}
 }
