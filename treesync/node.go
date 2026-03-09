@@ -28,52 +28,66 @@ func (l *LeafNodeData) Marshal() []byte {
 }
 
 // MarshalTBS serializes the To-Be-Signed portion of LeafNode (RFC 9420 §7.2).
+// Field order per RFC: encryption_key, signature_key, credential, capabilities,
+// leaf_node_source, conditional(lifetime|parent_hash), extensions.
 func (l *LeafNodeData) MarshalTBS() []byte {
 	buf := tls.NewWriter()
 
-	// Credential
-	if l.Credential != nil {
-		buf.WriteVLBytes(l.Credential.Marshal())
-	} else {
-		buf.WriteVLBytes([]byte{})
-	}
-
-	// EncryptionKey
+	// 1. HPKEPublicKey encryption_key<V>
 	buf.WriteVLBytes(l.EncryptionKey)
 
-	// SignatureKey (formato uncompressed P-256: 0x04 || X || Y)
+	// 2. SignaturePublicKey signature_key<V>
 	buf.WriteVLBytes(l.marshalSignatureKey())
 
-	// Capabilities
-	capsBuf := tls.NewWriter()
-	if l.Capabilities != nil {
-		l.Capabilities.Marshal(capsBuf)
-	}
-	buf.WriteVLBytes(capsBuf.Bytes())
-
-	// Lifetime
-	if l.Lifetime != nil {
-		buf.WriteUint64(l.Lifetime.NotBefore)
-		buf.WriteUint64(l.Lifetime.NotAfter)
+	// 3. Credential credential (inline struct, no outer VL wrapper)
+	// RFC 9420 §5.3: credential_type (uint16) + body. Type 0 is a nil placeholder.
+	if l.Credential != nil {
+		buf.WriteRaw(l.Credential.Marshal())
 	} else {
-		buf.WriteUint64(0)
-		buf.WriteUint64(0)
+		buf.WriteUint16(0)    // credential_type = 0 (reserved, nil placeholder)
+		buf.WriteVLBytes(nil) // empty body
 	}
 
-	// Extensions
+	// 4. Capabilities capabilities (inline struct, each field is VL-prefixed internally)
+	caps := l.Capabilities
+	if caps == nil {
+		caps = &LeafNodeCapabilities{}
+	}
+	caps.Marshal(buf)
+
+	// 5. LeafNodeSource leaf_node_source
+	buf.WriteUint8(l.LeafNodeSource)
+
+	// 6. Conditional on source (RFC 9420 §7.2)
+	switch l.LeafNodeSource {
+	case 1: // key_package: Lifetime { not_before, not_after }
+		if l.Lifetime != nil {
+			buf.WriteUint64(l.Lifetime.NotBefore)
+			buf.WriteUint64(l.Lifetime.NotAfter)
+		} else {
+			buf.WriteUint64(0)
+			buf.WriteUint64(0)
+		}
+	case 2: // update: nothing
+	case 3: // commit: parent_hash<V>
+		buf.WriteVLBytes(l.ParentHash)
+	default:
+		// treat as key_package
+		if l.Lifetime != nil {
+			buf.WriteUint64(l.Lifetime.NotBefore)
+			buf.WriteUint64(l.Lifetime.NotAfter)
+		} else {
+			buf.WriteUint64(0)
+			buf.WriteUint64(0)
+		}
+	}
+
+	// 7. Extension extensions<V>
 	extBuf := tls.NewWriter()
 	for _, extData := range l.Extensions {
 		extBuf.WriteRaw(extData)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
-
-	// LeafNodeSource
-	buf.WriteUint8(l.LeafNodeSource)
-
-	// ParentHash (only if source == commit)
-	if l.LeafNodeSource == 3 { // commit
-		buf.WriteVLBytes(l.ParentHash)
-	}
 
 	return buf.Bytes()
 }
@@ -118,28 +132,19 @@ func UnmarshalLeafNodeData(data []byte) (*LeafNodeData, error) {
 }
 
 // UnmarshalLeafNodeDataFromReader deserializes a LeafNodeData from a TLS reader.
+// Reads in RFC 9420 §7.2 field order: encryption_key, signature_key, credential,
+// capabilities, leaf_node_source, conditional(lifetime|parent_hash), extensions, signature.
 func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	l := &LeafNodeData{}
+	var err error
 
-	// Credential
-	credData, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-	if len(credData) > 0 {
-		l.Credential, err = credentials.UnmarshalCredential(credData)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// EncryptionKey
+	// 1. encryption_key<V>
 	l.EncryptionKey, err = r.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	// SignatureKey (formato uncompressed P-256: 0x04 || X || Y)
+	// 2. signature_key<V>
 	sigKeyBytes, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -150,54 +155,63 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	}
 
-	// Capabilities
-	capsData, err := r.ReadVLBytes()
+	// 3. Credential (inline struct)
+	l.Credential, err = credentials.UnmarshalCredentialFromReader(r)
 	if err != nil {
 		return nil, err
-	}
-	if len(capsData) == 0 {
-		l.Capabilities = nil
-	} else {
-		l.Capabilities, err = UnmarshalCapabilities(tls.NewReader(capsData))
-		if err != nil {
-			return nil, err
-		}
 	}
 
-	// Lifetime
-	nb, err := r.ReadUint64()
+	// 4. Capabilities (inline struct)
+	l.Capabilities, err = UnmarshalCapabilities(r)
 	if err != nil {
 		return nil, err
 	}
-	na, err := r.ReadUint64()
-	if err != nil {
-		return nil, err
-	}
-	l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
 
-	// Extensions
-	extsData, err := r.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-	// For now, store raw extensions
-	l.Extensions = [][]byte{extsData}
-
-	// LeafNodeSource
+	// 5. leaf_node_source
 	l.LeafNodeSource, err = r.ReadUint8()
 	if err != nil {
 		return nil, err
 	}
 
-	// ParentHash (only if source == commit)
-	if l.LeafNodeSource == 3 {
+	// 6. Conditional on source
+	switch l.LeafNodeSource {
+	case 1: // key_package: Lifetime
+		nb, err := r.ReadUint64()
+		if err != nil {
+			return nil, err
+		}
+		na, err := r.ReadUint64()
+		if err != nil {
+			return nil, err
+		}
+		l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
+	case 2: // update: nothing
+	case 3: // commit: parent_hash<V>
 		l.ParentHash, err = r.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
+	default:
+		// treat as key_package
+		nb, err := r.ReadUint64()
+		if err != nil {
+			return nil, err
+		}
+		na, err := r.ReadUint64()
+		if err != nil {
+			return nil, err
+		}
+		l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
 	}
 
-	// Signature
+	// 7. extensions<V>
+	extsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	l.Extensions = [][]byte{extsData}
+
+	// 8. signature<V>
 	l.Signature, err = r.ReadVLBytes()
 	if err != nil {
 		return nil, err
