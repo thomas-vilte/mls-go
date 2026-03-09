@@ -1,8 +1,6 @@
 package schedule
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
@@ -30,17 +28,23 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 		return nil, fmt.Errorf("no PSKs provided")
 	}
 
-	if len(psks) == 1 {
-		return psks[0].Psk, nil
+	out := make([]byte, cs.HashLength())
+	for _, psk := range psks {
+		if len(psk.Psk) == 0 {
+			return nil, fmt.Errorf("empty PSK")
+		}
+
+		secret := ciphersuite.NewSecret(psk.Psk)
+		derived, err := secret.HKDFExpand([]byte("derived psk"), cs.HashLength())
+		if err != nil {
+			return nil, fmt.Errorf("deriving psk input: %w", err)
+		}
+
+		derivedBytes := derived.AsSlice()
+		for i := range out {
+			out[i] ^= derivedBytes[i]
+		}
 	}
 
-	// Combine multiple PSKs using HMAC
-	pskInput := psks[0].Psk
-	for i := 1; i < len(psks); i++ {
-		h := hmac.New(sha256.New, pskInput)
-		h.Write(psks[i].Psk)
-		pskInput = h.Sum(nil)
-	}
-
-	return pskInput, nil
+	return out, nil
 }

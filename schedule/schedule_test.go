@@ -193,7 +193,7 @@ func TestPSKCombination(t *testing.T) {
 		t.Error("psk_input should not be empty")
 	}
 
-	// Single PSK should return the PSK directly
+	// Single PSK should return a derived PSK input with hash length.
 	singlePsk := []Psk{
 		{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")},
 	}
@@ -201,8 +201,11 @@ func TestPSKCombination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputePskInput failed: %v", err)
 	}
-	if string(pskInput2) != "secret1" {
-		t.Error("single PSK should return the PSK directly")
+	if len(pskInput2) != cs.HashLength() {
+		t.Errorf("single PSK input length = %d, want %d", len(pskInput2), cs.HashLength())
+	}
+	if string(pskInput2) == "secret1" {
+		t.Error("single PSK should be derived, not returned directly")
 	}
 }
 

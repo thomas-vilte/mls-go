@@ -159,7 +159,7 @@ func (tvg *TestVectorGenerator) GenerateOneToOneJoin() (*TestVector, error) {
 	// Commit (simplified - no real UpdatePath yet)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	sigPub := sigPriv.PublicKey()
-	stagedCommit, err := aliceGroup.Commit(sigPriv, sigPub)
+	stagedCommit, err := aliceGroup.Commit(sigPriv, sigPub, nil)
 	if err != nil {
 		return nil, fmt.Errorf("committing: %w", err)
 	}
