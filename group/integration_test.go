@@ -87,7 +87,7 @@ func makeTwoMemberGroups(t *testing.T) (*Group, *Group, *testUser, *testUser) {
 	// Keep both group instances aligned on epoch secrets for message roundtrip checks.
 	bobGroup.EpochSecrets = aliceGroup.EpochSecrets
 	bobGroup.KeySchedule = schedule.NewKeySchedule(bobGroup.CipherSuite, bobGroup.EpochSecrets.InitSecret)
-	bobGroup.SecretTree, err = secrettree.NewTree(bobGroup.EpochSecrets.EncryptionSecret, bobGroup.RatchetTree.NumLeaves)
+	bobGroup.SecretTree, err = secrettree.NewTree(bobGroup.EpochSecrets.EncryptionSecret, bobGroup.RatchetTree.NumLeaves, bobGroup.CipherSuite)
 	if err != nil {
 		t.Fatalf("secrettree.NewTree(bob): %v", err)
 	}
