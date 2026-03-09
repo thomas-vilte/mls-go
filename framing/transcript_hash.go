@@ -22,6 +22,7 @@ type ConfirmedTranscriptHashInput struct {
 	WireFormat WireFormat
 	Content    FramedContent // debe ser ContentTypeCommit
 	Signature  []byte
+	RawInput   []byte // alternative: raw wire bytes (WireFormat+FramedContent+signature) for interop use
 }
 
 // NewConfirmedTranscriptHashInput construye el input a partir de un AuthenticatedContent de commit.
@@ -56,6 +57,13 @@ func (i *ConfirmedTranscriptHashInput) Compute(cs ciphersuite.CipherSuite, inter
 	}
 	data := append(interimHash, i.Marshal()...)
 	return hashByCipherSuite(cs, data), nil
+}
+
+// ComputeRaw calcula confirmed_transcript_hash[n] = Hash(interimHash || RawInput)
+// usando los bytes crudos del wire en lugar de re-serializar desde structs.
+func (i *ConfirmedTranscriptHashInput) ComputeRaw(cs ciphersuite.CipherSuite, interimHash []byte) []byte {
+	data := append(interimHash, i.RawInput...)
+	return hashByCipherSuite(cs, data)
 }
 
 // InterimTranscriptHashInput serializa el input para calcular el interim_transcript_hash

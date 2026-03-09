@@ -798,9 +798,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				return fmt.Errorf("missing PSK for proposal: %x", pskID)
 			}
 			psks = append(psks, schedule.Psk{
-				Psk:     pskBytes,
-				PskId:   pskID,
-				PskType: schedule.PskType(proposal.PreSharedKey.PskID.PskType),
+				Psk:      pskBytes,
+				PskId:    pskID,
+				PskNonce: proposal.PreSharedKey.PskID.Nonce,
+				PskType:  schedule.PskType(proposal.PreSharedKey.PskID.PskType),
 			})
 		}
 	}

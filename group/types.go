@@ -63,6 +63,7 @@ func ProposalMarshal(p *Proposal) []byte {
 		if p.PreSharedKey != nil {
 			w.WriteUint8(p.PreSharedKey.PskType)
 			w.WriteVLBytes(p.PreSharedKey.PskID.ID)
+			w.WriteVLBytes(p.PreSharedKey.PskID.Nonce)
 		}
 	case ProposalTypeReInit:
 		if p.ReInit != nil {
@@ -143,9 +144,13 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		if err != nil {
 			return nil, err
 		}
+		pskNonce, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, err
+		}
 		proposal.PreSharedKey = &PreSharedKeyProposal{
 			PskType: pskType,
-			PskID:   PskID{PskType: pskType, ID: pskID},
+			PskID:   PskID{PskType: pskType, ID: pskID, Nonce: pskNonce},
 		}
 	case ProposalTypeReInit:
 		groupID, err := r.ReadVLBytes()
