@@ -74,10 +74,10 @@ func UnmarshalFramedContent(data []byte) (*FramedContent, error) {
 // unmarshalFramedContentFromReader parsea un FramedContent desde un reader existente.
 // Utilizado internamente al parsear formatos wire compuestos (PublicMessage).
 func unmarshalFramedContentFromReader(r *tls.Reader) (*FramedContent, error) {
-	return unmarshalFramedContentFromReaderWithMode(r, false)
+	return unmarshalFramedContentFromReaderWithMode(r, false, false)
 }
 
-func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth bool) (*FramedContent, error) {
+func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth bool, withMembershipTag bool) (*FramedContent, error) {
 	groupID, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading group_id: %w", err)
@@ -98,7 +98,8 @@ func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading content_type: %w", err)
 	}
-	body, err := readFramedContentBody(r, ContentType(ct), sender.Type, expectsTrailingAuth)
+	hasMembershipTag := withMembershipTag && sender.Type == SenderTypeMember
+	body, err := readFramedContentBody(r, ContentType(ct), hasMembershipTag, expectsTrailingAuth)
 	if err != nil {
 		return nil, err
 	}

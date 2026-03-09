@@ -152,13 +152,26 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	}
 	seqNum := leaf.NextSequenceNumber()
 
-	contentKey, err := leaf.EncryptionKey(seqNum)
-	if err != nil {
-		return nil, fmt.Errorf("framing: deriving content key: %w", err)
-	}
-	contentNonce, err := leaf.Nonce(seqNum)
-	if err != nil {
-		return nil, fmt.Errorf("framing: deriving content nonce: %w", err)
+	var contentKey []byte
+	var contentNonce []byte
+	if p.Content.ContentType() == ContentTypeApplication {
+		contentKey, err = leaf.ApplicationKey(uint32(seqNum))
+		if err != nil {
+			return nil, fmt.Errorf("framing: deriving application content key: %w", err)
+		}
+		contentNonce, err = leaf.ApplicationNonce(uint32(seqNum))
+		if err != nil {
+			return nil, fmt.Errorf("framing: deriving application content nonce: %w", err)
+		}
+	} else {
+		contentKey, err = leaf.HandshakeKey(uint32(seqNum))
+		if err != nil {
+			return nil, fmt.Errorf("framing: deriving handshake content key: %w", err)
+		}
+		contentNonce, err = leaf.HandshakeNonce(uint32(seqNum))
+		if err != nil {
+			return nil, fmt.Errorf("framing: deriving handshake content nonce: %w", err)
+		}
 	}
 
 	// 5. XOR nonce[:4] con ReuseGuard (RFC §6.3.1)
@@ -283,23 +296,54 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	}
 	leaf.SetSequenceNumber(uint64(senderData.Generation))
 
-	contentKey, err := leaf.EncryptionKey(uint64(senderData.Generation))
-	if err != nil {
-		return nil, fmt.Errorf("framing: deriving content key: %w", err)
-	}
-	contentNonce, err := leaf.Nonce(uint64(senderData.Generation))
-	if err != nil {
-		return nil, fmt.Errorf("framing: deriving content nonce: %w", err)
-	}
-
-	// 5. XOR nonce[:4] con ReuseGuard (igual que en Encrypt)
-	for i := 0; i < ciphersuite.ReuseGuardBytes; i++ {
-		contentNonce[i] ^= senderData.ReuseGuard[i]
-	}
-
-	// 6. Reconstruir PrivateContentAAD y descifrar contenido
+	// 5. Reconstruir PrivateContentAAD y descifrar contenido
 	aad := buildPrivateContentAAD(pm.GroupID, pm.Epoch, pm.ContentType, pm.AuthenticatedData)
-	plaintext, err := ciphersuite.AESDecrypt(contentKey, contentNonce, pm.Ciphertext, aad)
+
+	decryptWithRatchet := func(handshake bool) ([]byte, error) {
+		var key []byte
+		var nonce []byte
+		if handshake {
+			key, err = leaf.HandshakeKey(senderData.Generation)
+			if err != nil {
+				return nil, fmt.Errorf("framing: deriving handshake content key: %w", err)
+			}
+			nonce, err = leaf.HandshakeNonce(senderData.Generation)
+			if err != nil {
+				return nil, fmt.Errorf("framing: deriving handshake content nonce: %w", err)
+			}
+		} else {
+			key, err = leaf.ApplicationKey(senderData.Generation)
+			if err != nil {
+				return nil, fmt.Errorf("framing: deriving application content key: %w", err)
+			}
+			nonce, err = leaf.ApplicationNonce(senderData.Generation)
+			if err != nil {
+				return nil, fmt.Errorf("framing: deriving application content nonce: %w", err)
+			}
+		}
+
+		for i := 0; i < ciphersuite.ReuseGuardBytes; i++ {
+			nonce[i] ^= senderData.ReuseGuard[i]
+		}
+
+		return ciphersuite.AESDecrypt(key, nonce, pm.Ciphertext, aad)
+	}
+
+	plaintext, err := func() ([]byte, error) {
+		if pm.ContentType == ContentTypeApplication {
+			return decryptWithRatchet(false)
+		}
+
+		pt, hsErr := decryptWithRatchet(true)
+		if hsErr == nil {
+			return pt, nil
+		}
+		pt, appErr := decryptWithRatchet(false)
+		if appErr == nil {
+			return pt, nil
+		}
+		return nil, hsErr
+	}()
 	if err != nil {
 		return nil, fmt.Errorf("%w: content: %v", ErrDecryptionFailed, err)
 	}
