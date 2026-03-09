@@ -50,15 +50,16 @@ type Node struct {
 
 // LeafNodeData contains leaf-specific data.
 type LeafNodeData struct {
-	Credential     *credentials.Credential
-	SignatureKey   *ecdsa.PublicKey
-	EncryptionKey  []byte
-	Capabilities   *LeafNodeCapabilities
-	Lifetime       *LeafNodeLifetime
-	Extensions     [][]byte
-	LeafNodeSource uint8
-	ParentHash     []byte
-	Signature      []byte
+	Credential      *credentials.Credential
+	SignatureKey    *ecdsa.PublicKey
+	SignatureKeyRaw []byte
+	EncryptionKey   []byte
+	Capabilities    *LeafNodeCapabilities
+	Lifetime        *LeafNodeLifetime
+	Extensions      [][]byte
+	LeafNodeSource  uint8
+	ParentHash      []byte
+	Signature       []byte
 }
 
 // LeafNodeCapabilities represents node capabilities.
@@ -324,8 +325,10 @@ func (t *RatchetTree) HashNode(idx NodeIndex) []byte {
 	node := &t.Nodes[idx]
 
 	if node.State == NodeStateEmpty {
-		emptyHash := sha256.Sum256([]byte{})
-		return emptyHash[:]
+		if IsLeaf(idx) {
+			return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), nil)
+		}
+		return t.hashParent(idx)
 	}
 
 	if IsLeaf(idx) {
@@ -356,6 +359,7 @@ func (t *RatchetTree) hashParent(idx NodeIndex) []byte {
 	// but the tree hash calculation itself is recursive.
 
 	w := tls.NewWriter()
+	w.WriteUint8(nodeTypeParent)
 
 	// optional<ParentNode> — byte de presencia seguido directo de los campos (RFC §7.8)
 	if node.State == NodeStateBlank || node.EncryptionKey == nil {
