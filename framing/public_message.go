@@ -101,7 +101,7 @@ func UnmarshalPublicMessage(data []byte) (*PublicMessage, error) {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidWireFormat, wf)
 	}
 
-	content, err := unmarshalFramedContentFromReaderWithMode(r, true)
+	content, err := unmarshalFramedContentFromReaderWithMode(r, true, true)
 	if err != nil {
 		return nil, err
 	}

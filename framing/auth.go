@@ -83,7 +83,7 @@ func UnmarshalAuthenticatedContent(data []byte) (*AuthenticatedContent, error) {
 		return nil, fmt.Errorf("framing: reading wire_format: %w", err)
 	}
 
-	content, err := unmarshalFramedContentFromReaderWithMode(r, true)
+	content, err := unmarshalFramedContentFromReaderWithMode(r, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading framed_content: %w", err)
 	}
@@ -143,7 +143,7 @@ func marshalPrivateMessageContent(body FramedContentBody, auth FramedContentAuth
 func unmarshalPrivateMessageContent(data []byte, ct ContentType) (*PrivateMessageContent, error) {
 	r := tls.NewReader(data)
 
-	body, err := readFramedContentBody(r, ct, SenderTypeMember, true)
+	body, err := readFramedContentBody(r, ct, false, true)
 	if err != nil {
 		return nil, err
 	}

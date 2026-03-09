@@ -19,7 +19,7 @@ func RegisterRawBodyDecoders(proposalDecoder, commitDecoder rawBodyDecoder) {
 	commitBodyDecoder = commitDecoder
 }
 
-func readFramedContentBody(r *tls.Reader, ct ContentType, senderType SenderType, expectsTrailingAuth bool) (FramedContentBody, error) {
+func readFramedContentBody(r *tls.Reader, ct ContentType, hasMembershipTag bool, expectsTrailingAuth bool) (FramedContentBody, error) {
 	switch ct {
 	case ContentTypeApplication:
 		bodyData, err := r.ReadVLBytes()
@@ -28,13 +28,13 @@ func readFramedContentBody(r *tls.Reader, ct ContentType, senderType SenderType,
 		}
 		return ApplicationData{Data: bodyData}, nil
 	case ContentTypeProposal:
-		bodyData, err := readRawBody(r, proposalBodyDecoder, ct, senderType, expectsTrailingAuth)
+		bodyData, err := readRawBody(r, proposalBodyDecoder, ct, hasMembershipTag, expectsTrailingAuth)
 		if err != nil {
 			return nil, fmt.Errorf("framing: reading proposal body: %w", err)
 		}
 		return ProposalBody{Data: bodyData}, nil
 	case ContentTypeCommit:
-		bodyData, err := readRawBody(r, commitBodyDecoder, ct, senderType, expectsTrailingAuth)
+		bodyData, err := readRawBody(r, commitBodyDecoder, ct, hasMembershipTag, expectsTrailingAuth)
 		if err != nil {
 			return nil, fmt.Errorf("framing: reading commit body: %w", err)
 		}
@@ -48,7 +48,7 @@ func readRawBody(
 	r *tls.Reader,
 	decoder rawBodyDecoder,
 	ct ContentType,
-	senderType SenderType,
+	hasMembershipTag bool,
 	expectsTrailingAuth bool,
 ) ([]byte, error) {
 	remaining := r.BytesAfterPosition()
@@ -70,7 +70,7 @@ func readRawBody(
 				continue
 			}
 		}
-		if !validAuthTail(remaining[i:], ct, senderType) {
+		if !validAuthTail(remaining[i:], ct, hasMembershipTag) {
 			continue
 		}
 
@@ -83,7 +83,7 @@ func readRawBody(
 	return nil, fmt.Errorf("unable to locate raw handshake body")
 }
 
-func validAuthTail(tail []byte, ct ContentType, senderType SenderType) bool {
+func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
 	r := tls.NewReader(tail)
 	if _, err := r.ReadVLBytes(); err != nil {
 		return false
@@ -93,7 +93,7 @@ func validAuthTail(tail []byte, ct ContentType, senderType SenderType) bool {
 			return false
 		}
 	}
-	if senderType == SenderTypeMember {
+	if hasMembershipTag {
 		if _, err := r.ReadVLBytes(); err != nil {
 			return false
 		}
