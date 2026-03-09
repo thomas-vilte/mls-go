@@ -49,7 +49,7 @@ type EncryptedGroupSecrets struct {
 type GroupSecrets struct {
 	JoinerSecret *ciphersuite.Secret
 	PathSecret   []byte
-	Psks         []*ciphersuite.HashReference
+	Psks         []PskID
 }
 
 // Marshal serializa GroupSecrets a formato TLS.
@@ -67,10 +67,9 @@ func (gs *GroupSecrets) Marshal() []byte {
 
 	pskBuf := tls.NewWriter()
 	for _, psk := range gs.Psks {
-		if psk == nil {
-			continue
-		}
-		pskBuf.WriteVLBytes(psk.AsSlice())
+		pskBuf.WriteUint8(psk.PskType)
+		pskBuf.WriteVLBytes(psk.ID)
+		pskBuf.WriteVLBytes(psk.Nonce)
 	}
 	w.WriteVLBytes(pskBuf.Bytes())
 
@@ -107,13 +106,21 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 	}
 
 	pskReader := tls.NewReader(pskData)
-	var psks []*ciphersuite.HashReference
+	var psks []PskID
 	for pskReader.Remaining() > 0 {
+		pskType, readErr := pskReader.ReadUint8()
+		if readErr != nil {
+			return nil, readErr
+		}
 		pskID, readErr := pskReader.ReadVLBytes()
 		if readErr != nil {
 			return nil, readErr
 		}
-		psks = append(psks, ciphersuite.NewHashReference(pskID))
+		pskNonce, readErr := pskReader.ReadVLBytes()
+		if readErr != nil {
+			return nil, readErr
+		}
+		psks = append(psks, PskID{PskType: pskType, ID: pskID, Nonce: pskNonce})
 	}
 
 	return &GroupSecrets{
@@ -478,15 +485,13 @@ func JoinFromWelcome(
 
 	var psks []schedule.Psk
 	for _, pskRef := range groupSecrets.Psks {
-		if pskRef == nil {
-			continue
-		}
 		if externalPsks != nil {
-			if pskBytes, ok := externalPsks[string(pskRef.Value)]; ok {
+			if pskBytes, ok := externalPsks[string(pskRef.ID)]; ok {
 				psks = append(psks, schedule.Psk{
-					PskType: schedule.PskTypeExternal,
-					PskId:   pskRef.Value,
-					Psk:     pskBytes,
+					PskType:  schedule.PskType(pskRef.PskType),
+					PskId:    pskRef.ID,
+					PskNonce: pskRef.Nonce,
+					Psk:      pskBytes,
 				})
 			}
 		}
@@ -613,12 +618,6 @@ func JoinFromWelcome(
 			}
 		}
 	}
-	if ownLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(ownLeafIndex)); ownLeaf != nil && ownLeaf.LeafData != nil {
-		if err := ownLeaf.LeafData.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid own leaf from welcome: %w", err)
-		}
-	}
-
 	// 10. Crear Group
 	group := &Group{
 		GroupID:      groupContext.GroupID,
@@ -640,6 +639,11 @@ func JoinFromWelcome(
 		CachedPsks:  make(map[string][]byte),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
+	if externalPsks != nil {
+		for id, pskBytes := range externalPsks {
+			group.CachedPsks[id] = append([]byte(nil), pskBytes...)
+		}
+	}
 
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
