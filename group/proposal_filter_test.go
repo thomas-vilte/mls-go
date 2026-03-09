@@ -6,6 +6,7 @@ import (
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/keypackages"
+	"github.com/openmls/go/treesync"
 )
 
 func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {
@@ -31,12 +32,21 @@ func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {
 
 func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 	group, kp := createTestGroup(t)
+	group.Members[1] = &Member{LeafIndex: 1, Active: true}
+	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+		EncryptionKey: []byte{1},
+		SignatureKey:  kp.LeafNode.SignatureKey,
+		Credential:    kp.LeafNode.Credential,
+		Capabilities:  toTreeSyncCapabilities(kp.LeafNode.Capabilities),
+		Signature:     []byte{1},
+	})
 
 	pf := NewProposalFilter(
 		group.GroupContext,
 		group.OwnLeafIndex,
 		group.Members,
 		group.CipherSuite,
+		group.RatchetTree,
 	)
 
 	tests := []struct {
@@ -101,12 +111,23 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 
 func TestProposalFilter_CheckDuplicates(t *testing.T) {
 	group, kp := createTestGroup(t)
+	group.Members[1] = &Member{LeafIndex: 1, Active: true}
+	group.Members[2] = &Member{LeafIndex: 2, Active: true}
+	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+		EncryptionKey: []byte{1}, SignatureKey: kp.LeafNode.SignatureKey, Credential: kp.LeafNode.Credential,
+		Capabilities: toTreeSyncCapabilities(kp.LeafNode.Capabilities), Signature: []byte{1},
+	})
+	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+		EncryptionKey: []byte{2}, SignatureKey: kp.LeafNode.SignatureKey, Credential: kp.LeafNode.Credential,
+		Capabilities: toTreeSyncCapabilities(kp.LeafNode.Capabilities), Signature: []byte{1},
+	})
 
 	pf := NewProposalFilter(
 		group.GroupContext,
 		group.OwnLeafIndex,
 		group.Members,
 		group.CipherSuite,
+		group.RatchetTree,
 	)
 
 	tests := []struct {
@@ -170,6 +191,7 @@ func TestProposalFilter_ValidateCombinations(t *testing.T) {
 		group.OwnLeafIndex,
 		group.Members,
 		group.CipherSuite,
+		group.RatchetTree,
 	)
 
 	tests := []struct {
@@ -224,6 +246,7 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 		committer,
 		group.Members,
 		group.CipherSuite,
+		group.RatchetTree,
 	)
 
 	// Crear proposals en orden aleatorio
@@ -301,12 +324,14 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	_, _ = group.AddMember(newKp)
 	// Aplicar el add proposal manualmente para que esté en members
 	group.applyAddProposal(&AddProposal{KeyPackage: newKp})
+	group.Members[1] = &Member{LeafIndex: 1, Active: true}
 
 	pf := NewProposalFilter(
 		group.GroupContext,
 		group.OwnLeafIndex,
 		group.Members,
 		group.CipherSuite,
+		group.RatchetTree,
 	)
 
 	// Proposals válidos

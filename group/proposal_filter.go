@@ -1,11 +1,13 @@
 package group
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 
 	"github.com/openmls/go/ciphersuite"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/openmls/go/keypackages"
+	"github.com/openmls/go/treesync"
 )
 
 // ProposalFilter valida y filtra proposals según RFC 9420 §12.2
@@ -14,6 +16,7 @@ type ProposalFilter struct {
 	committer    LeafNodeIndex
 	members      map[LeafNodeIndex]*Member
 	cipherSuite  ciphersuite.CipherSuite
+	tree         *treesync.RatchetTree
 }
 
 // NewProposalFilter crea un nuevo filtro de proposals.
@@ -22,12 +25,14 @@ func NewProposalFilter(
 	committer LeafNodeIndex,
 	members map[LeafNodeIndex]*Member,
 	cipherSuite ciphersuite.CipherSuite,
+	tree *treesync.RatchetTree,
 ) *ProposalFilter {
 	return &ProposalFilter{
 		groupContext: groupContext,
 		committer:    committer,
 		members:      members,
 		cipherSuite:  cipherSuite,
+		tree:         tree,
 	}
 }
 
@@ -95,44 +100,50 @@ func (pf *ProposalFilter) validateSingleProposal(
 	capabilities *keypackages.Capabilities,
 ) error {
 	proposal := fp.Proposal
-
-	// Validación básica
 	if err := ValidateProposal(proposal, capabilities); err != nil {
 		return err
 	}
-
-	// Reglas específicas por tipo
 	switch proposal.Type {
+	case ProposalTypeAdd:
+		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
+			if err := validateCapabilitiesCompatible(
+				pf.cipherSuite,
+				toTreeSyncCapabilities(proposal.Add.KeyPackage.LeafNode.Capabilities),
+			); err != nil {
+				return err
+			}
+		}
 	case ProposalTypeUpdate:
-		// RFC §12.2: No puede haber Update del committer mismo
 		if fp.Sender == pf.committer {
 			return fmt.Errorf("committer cannot update itself: %w", ErrInvalidProposal)
 		}
-
+		leaf := pf.tree.GetLeaf(treesync.LeafIndex(fp.Sender))
+		if leaf == nil || leaf.State != treesync.NodeStatePresent {
+			return fmt.Errorf("update proposal from non-present leaf %d: %w", fp.Sender, ErrInvalidProposal)
+		}
+		if proposal.Update != nil && proposal.Update.LeafNode != nil {
+			if err := validateCapabilitiesCompatible(
+				pf.cipherSuite,
+				toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities),
+			); err != nil {
+				return err
+			}
+		}
 	case ProposalTypeRemove:
-		// RFC §12.2: No puede haber Remove del committer
 		if proposal.Remove != nil && proposal.Remove.Removed == pf.committer {
 			return fmt.Errorf("cannot remove the committer: %w", ErrInvalidProposal)
 		}
-
-		// Verificar que el miembro a remover existe
 		if proposal.Remove != nil {
 			if _, exists := pf.members[proposal.Remove.Removed]; !exists {
 				return fmt.Errorf("removing non-existent member at index %d: %w",
 					proposal.Remove.Removed, ErrInvalidProposal)
 			}
 		}
-
 	case ProposalTypeExternalInit:
-		// RFC §12.2: ExternalInit solo puede venir de external senders
-		// Por ahora, asumimos que sender > max_members indica external
-		// En implementación real, verificar SenderType
 		if int(fp.Sender) < len(pf.members) {
-			// Podría ser válido si es un resync, pero por ahora rechazamos
 			return fmt.Errorf("external init from internal sender: %w", ErrInvalidProposal)
 		}
 	}
-
 	return nil
 }
 
@@ -246,8 +257,8 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 	if kp == nil {
 		return ""
 	}
-	// Usar InitKey como identificador único simplificado
-	return string(kp.InitKey)
+	h := sha256.Sum256(kp.Marshal())
+	return string(h[:])
 }
 
 // FilterProposalsForCommit es una función helper que filtra proposals para un commit.
@@ -268,7 +279,65 @@ func (g *Group) FilterProposalsForCommit(
 		g.OwnLeafIndex,
 		g.Members,
 		g.CipherSuite,
+		g.RatchetTree,
 	)
 
 	return pf.FilterAndValidateProposals(filtered, capabilities)
+}
+
+func validateCapabilitiesCompatible(
+	groupCS ciphersuite.CipherSuite,
+	leafCaps *treesync.LeafNodeCapabilities,
+) error {
+	if leafCaps == nil {
+		return fmt.Errorf("missing leaf capabilities: %w", ErrInvalidProposal)
+	}
+
+	supportsVersion := false
+	for _, v := range leafCaps.ProtocolVersions {
+		if v == 0x0001 {
+			supportsVersion = true
+			break
+		}
+	}
+	if !supportsVersion {
+		return fmt.Errorf("leaf does not support MLS 1.0: %w", ErrInvalidProposal)
+	}
+
+	supportCS := false
+	for _, cs := range leafCaps.CipherSuites {
+		if ciphersuite.CipherSuite(cs) == groupCS {
+			supportCS = true
+			break
+		}
+	}
+	if !supportCS {
+		return fmt.Errorf("leaf does not support group cipher suite: %d: %w", groupCS, ErrInvalidProposal)
+	}
+
+	return nil
+}
+
+func toTreeSyncCapabilities(caps *keypackages.Capabilities) *treesync.LeafNodeCapabilities {
+	if caps == nil {
+		return nil
+	}
+
+	versions := make([]uint16, len(caps.ProtocolVersions))
+	for i, v := range caps.ProtocolVersions {
+		versions[i] = uint16(v)
+	}
+
+	cipherSuites := make([]uint16, len(caps.CipherSuites))
+	for i, cs := range caps.CipherSuites {
+		cipherSuites[i] = uint16(cs)
+	}
+
+	return &treesync.LeafNodeCapabilities{
+		ProtocolVersions: versions,
+		CipherSuites:     cipherSuites,
+		Extensions:       append([]uint16(nil), caps.Extensions...),
+		Proposals:        append([]uint16(nil), caps.Proposals...),
+		Credentials:      append([]uint16(nil), caps.Credentials...),
+	}
 }
