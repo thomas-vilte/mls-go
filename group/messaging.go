@@ -51,13 +51,6 @@ func (g *Group) ReceiveMessage(
 	pm *framing.PrivateMessage,
 	senderLeafIdx LeafNodeIndex,
 ) ([]byte, error) {
-	if int(senderLeafIdx) >= int(g.RatchetTree.NumLeaves) {
-		return nil, fmt.Errorf(
-			"sender leaf index %d out of bounds (tree has %d leaves)",
-			senderLeafIdx,
-			g.RatchetTree.NumLeaves,
-		)
-	}
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}

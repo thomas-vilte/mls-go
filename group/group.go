@@ -1142,31 +1142,93 @@ func NewGroupFromReInit(
 	if myKP == nil || myPriv == nil {
 		return nil, fmt.Errorf("key package/private keys are nil")
 	}
+	if myKP.LeafNode == nil {
+		return nil, fmt.Errorf("key package leaf node is nil")
+	}
+
 	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
+	ratchetTree := treesync.NewRatchetTree(1)
+	leafData := treesync.LeafNodeData{
+		EncryptionKey:  myKP.InitKey,
+		SignatureKey:   myKP.LeafNode.SignatureKey,
+		Credential:     myKP.LeafNode.Credential,
+		Capabilities:   toTreeSyncCapabilities(myKP.LeafNode.Capabilities),
+		Lifetime:       keyPackageToTreeSyncLifetime(myKP.LeafNode.Lifetime),
+		Extensions:     keyPackageExtensionsToTreeSync(myKP.LeafNode.Extensions),
+		LeafNodeSource: 1,
+		ParentHash:     append([]byte(nil), myKP.LeafNode.ParentHash...),
+		Signature:      append([]byte(nil), myKP.LeafNode.Signature...),
+	}
+	if leafData.Capabilities == nil {
+		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
+	}
+	if err := leafData.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid reinit leaf node: %w", err)
+	}
+	_, _ = ratchetTree.AddLeaf(leafData)
+
+	groupContext := &GroupContext{
+		Version:                 reInit.Version,
+		CipherSuite:             cs,
+		GroupID:                 NewGroupID(reInit.GroupID),
+		Epoch:                   NewGroupEpoch(0),
+		TreeHash:                ratchetTree.TreeHash(),
+		ConfirmedTranscriptHash: []byte{},
+		Extensions:              reInit.Extensions,
+	}
+
 	initSecret := ciphersuite.ZeroSecret(cs.HashLength())
 	keySchedule := schedule.NewKeySchedule(cs, initSecret)
 	commitSecret := ciphersuite.ZeroSecret(cs.HashLength())
 	keySchedule.SetCommitSecret(commitSecret)
-	// GroupContext for the new epoch from ReInit is not yet known; use empty bytes.
-	if _, err := keySchedule.ComputeJoinerSecret([]byte{}); err != nil {
-		return nil, err
+
+	groupContextBytes := groupContext.Marshal()
+	if _, err := keySchedule.ComputeJoinerSecret(groupContextBytes); err != nil {
+		return nil, fmt.Errorf("computing joiner secret: %w", err)
 	}
+
 	resumptionPsk := schedule.Psk{
 		PskType: schedule.PskTypeResumption,
 		PskId:   reInit.GroupID,
 		Psk:     resumptionSecret.AsSlice(),
 	}
 	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("computing reinit psk secret: %w", err)
 	}
-	group, err := NewGroup(NewGroupID(reInit.GroupID), cs, myKP, myPriv)
+	if _, err := keySchedule.ComputeEpochSecret(groupContextBytes); err != nil {
+		return nil, fmt.Errorf("computing reinit epoch secret: %w", err)
+	}
+	epochSecrets, err := keySchedule.DeriveEpochSecrets()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("deriving reinit epoch secrets: %w", err)
 	}
-	group.GroupContext.Version = reInit.Version
-	group.GroupContext.Extensions = reInit.Extensions
-	group.KeySchedule = keySchedule
+	group := &Group{
+		GroupID:               groupContext.GroupID,
+		Epoch:                 groupContext.Epoch,
+		CipherSuite:           cs,
+		GroupContext:          groupContext,
+		RatchetTree:           ratchetTree,
+		OwnLeafIndex:          NewLeafNodeIndex(0),
+		EpochSecrets:          epochSecrets,
+		Proposals:             NewProposalStore(),
+		ProposalByRef:         make(map[string]*Proposal),
+		KeySchedule:           keySchedule,
+		InterimTranscriptHash: []byte{},
+		Members:               make(map[LeafNodeIndex]*Member),
+		state:                 StateOperational,
+		CachedPsks:            make(map[string][]byte),
+	}
 	group.CachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves)
+	if err != nil {
+		return nil, fmt.Errorf("initializing secret tree: %w", err)
+	}
+	group.Members[NewLeafNodeIndex(0)] = &Member{
+		LeafIndex:  NewLeafNodeIndex(0),
+		KeyPackage: myKP,
+		Credential: myKP.LeafNode.Credential,
+		Active:     true,
+	}
 	return group, nil
 }
 
