@@ -53,6 +53,23 @@ func EncryptWithLabel(
 	return encryptWithLabelInternal(publicKey, encContext, plaintext, ciphersuite)
 }
 
+func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) ([]byte, []byte, error) {
+	pub, err := ecdh.P256().NewPublicKey(recipientPubKeyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing recipient public key: %w", err)
+	}
+	ephPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	sharedSecret, err := ephPriv.ECDH(pub)
+	if err != nil {
+		return nil, nil, err
+	}
+	kemOutput := ephPriv.PublicKey().Bytes()
+	return kemOutput, sharedSecret, nil
+}
+
 func encryptWithLabelInternal(
 	publicKey []byte,
 	encContext *EncryptContext,

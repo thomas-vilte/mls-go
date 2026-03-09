@@ -83,6 +83,7 @@ type Group struct {
 	Members               map[LeafNodeIndex]*Member
 	state                 GroupState
 	SecretTree            *secrettree.Tree
+	CachedPsks            map[string][]byte
 }
 
 // NewGroup This is the entry point for creating a new group.
@@ -123,7 +124,9 @@ func NewGroup(
 	commitSecret := ciphersuite.ZeroSecret(cipherSuite.HashLength())
 	keySchedule.SetCommitSecret(commitSecret)
 
-	_, err := keySchedule.ComputeJoinerSecret()
+	groupContextBytes := groupContext.Marshal()
+
+	_, err := keySchedule.ComputeJoinerSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing joiner secret: %w", err)
 	}
@@ -132,14 +135,7 @@ func NewGroup(
 	if err != nil {
 		return nil, fmt.Errorf("computing psk secret: %w", err)
 	}
-
-	groupContextBytes := groupContext.Marshal()
-	_, err = keySchedule.ComputeIntermediateSecret(groupContextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("computing intermediate secret: %w", err)
-	}
-
-	_, err = keySchedule.ComputeEpochSecret()
+	_, err = keySchedule.ComputeEpochSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing epoch secret: %w", err)
 	}
@@ -164,6 +160,7 @@ func NewGroup(
 		InterimTranscriptHash: []byte{}, // string vacio
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
+		CachedPsks:            make(map[string][]byte),
 	}
 
 	// Initialize secret tree
@@ -218,7 +215,22 @@ func (g *Group) UpdateMember(
 	if newLeafNode == nil {
 		return nil, fmt.Errorf("new leaf node is nil")
 	}
-	_ = privateKeys
+	if privateKeys == nil {
+		return nil, fmt.Errorf("private keys are nil")
+	}
+	if privateKeys.SignatureKey == nil {
+		return nil, fmt.Errorf("signature key is nil")
+	}
+
+	// source = 2 (update) y firmar el TBS con el label del RFC
+	newLeafNode.LeafNodeSource = 2
+	sigKey := ciphersuite.NewSignaturePrivateKey(privateKeys.SignatureKey)
+	tbs := newLeafNode.MarshalTBS()
+	sig, err := ciphersuite.SignWithLabel(sigKey, "LeafNodeTBS", tbs)
+	if err != nil {
+		return nil, fmt.Errorf("signing leaf node: %w", err)
+	}
+	newLeafNode.Signature = sig.AsSlice()
 
 	// Convert treesync leaf data to keypackages leaf node.
 	kpLeafNode := &keypackages.LeafNode{
@@ -238,7 +250,6 @@ func (g *Group) UpdateMember(
 
 	// Store proposal
 	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
-
 	return proposal, nil
 }
 
@@ -276,6 +287,7 @@ func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 func (g *Group) Commit(
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
+	psks []schedule.Psk,
 ) (*StagedCommit, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state: %w", ErrInvalidGroupState)
@@ -371,18 +383,16 @@ func (g *Group) Commit(
 	}
 
 	// Avanzar key schedule para calcular confirmation_key del nuevo epoch
+	newGCBytes := newGC.Marshal()
 	newKS := schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
 	newKS.SetCommitSecret(commitSecret)
-	if _, err = newKS.ComputeJoinerSecret(); err != nil {
+	if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
 		return nil, fmt.Errorf("new epoch joiner secret: %w", err)
 	}
-	if _, err = newKS.ComputePskSecret(nil); err != nil {
+	if _, err = newKS.ComputePskSecret(psks); err != nil {
 		return nil, fmt.Errorf("new epoch psk secret: %w", err)
 	}
-	if _, err = newKS.ComputeIntermediateSecret(newGC.Marshal()); err != nil {
-		return nil, fmt.Errorf("new epoch intermediate secret: %w", err)
-	}
-	if _, err = newKS.ComputeEpochSecret(); err != nil {
+	if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
 		return nil, fmt.Errorf("new epoch epoch secret: %w", err)
 	}
 	newEpochSecrets, err := newKS.DeriveEpochSecrets()
@@ -620,8 +630,19 @@ func (g *Group) ProcessReceivedCommit(
 
 	// Descifrar path secret con nuestra clave HPKE privada
 	var rootPathSecret *ciphersuite.Secret
-	if commit.Path != nil {
-		rootPathSecret, err = g.decryptPathSecret(senderLeafIdx, commit.Path, myHpkePrivKeyBytes)
+	if ac.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
+		if commit.Path == nil || commit.Path.LeafNode == nil {
+			return fmt.Errorf("external commit missing update path")
+		}
+		treeDiff := g.RatchetTree.Clone()
+		extLeafIdx, _ := treeDiff.AddLeaf(*commit.Path.LeafNode)
+		senderLeafIdx = extLeafIdx
+		rootPathSecret, err = g.decryptPathSecret(treeDiff, senderLeafIdx, commit.Path, myHpkePrivKeyBytes)
+		if err != nil {
+			return fmt.Errorf("decrypting path secret (external): %w", err)
+		}
+	} else if commit.Path != nil {
+		rootPathSecret, err = g.decryptPathSecret(g.RatchetTree, senderLeafIdx, commit.Path, myHpkePrivKeyBytes)
 		if err != nil {
 			return fmt.Errorf("decrypting path secret: %w", err)
 		}
@@ -641,21 +662,21 @@ func (g *Group) ProcessReceivedCommit(
 // descifra con HPKE y deriva hacia adelante hasta obtener el commit_secret.
 // RFC 9420 §12.4.1
 func (g *Group) decryptPathSecret(
+	tree *treesync.RatchetTree,
 	senderLeafIdx treesync.LeafIndex,
 	updatePath *UpdatePath,
 	myPrivKeyBytes []byte,
 ) (*ciphersuite.Secret, error) {
-	directPath := g.RatchetTree.DirectPath(senderLeafIdx)
-	copath := g.RatchetTree.Copath(senderLeafIdx)
+	directPath := tree.DirectPath(senderLeafIdx)
+	copath := tree.Copath(senderLeafIdx)
 	myNodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(g.OwnLeafIndex))
 
 	for i := 1; i < len(directPath); i++ {
-		res := g.RatchetTree.Resolution(copath[i-1])
+		res := tree.Resolution(copath[i-1])
 		for j, resIdx := range res {
 			if resIdx != myNodeIdx {
 				continue
 			}
-			// Encontramos nuestra posición en la resolución
 			nodeIdx := i - 1
 			if nodeIdx >= len(updatePath.Nodes) || j >= len(updatePath.Nodes[nodeIdx].EncryptedPathSecrets) {
 				return nil, fmt.Errorf("path secret index out of bounds at level %d", i)
@@ -671,8 +692,6 @@ func (g *Group) decryptPathSecret(
 			if err != nil {
 				return nil, fmt.Errorf("decrypting path secret at level %d: %w", i, err)
 			}
-
-			// Derivar hacia adelante hasta el commit_secret (último path secret)
 			pathSecret := ciphersuite.NewSecret(psBytes)
 			for k := i + 1; k < len(directPath); k++ {
 				pathSecret, err = pathSecret.DeriveSecret(g.CipherSuite, "path")
@@ -695,7 +714,16 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// 1. Aplicar proposals al ratchet tree
 	senderIdx := g.OwnLeafIndex
 	if stagedCommit.AuthenticatedContent != nil {
-		senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		if stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
+			if stagedCommit.Commit == nil || stagedCommit.Commit.Path == nil || stagedCommit.Commit.Path.LeafNode == nil {
+				return fmt.Errorf("external commit missing update path")
+			}
+
+			extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
+			senderIdx = LeafNodeIndex(extLeafIdx)
+		} else {
+			senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		}
 	}
 	for _, proposal := range stagedCommit.Proposals {
 		if err := g.applyProposal(proposal, senderIdx); err != nil {
@@ -703,10 +731,31 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
+	hasReInit := false
+	for _, proposal := range stagedCommit.Proposals {
+		if proposal.Type == ProposalTypeReInit {
+			hasReInit = true
+			break
+		}
+	}
+
+	var psks []schedule.Psk
+	for _, proposal := range stagedCommit.Proposals {
+		if proposal.Type == ProposalTypePreSharedKey && proposal.PreSharedKey != nil {
+			pskID := proposal.PreSharedKey.PskID.ID
+			if pskBytes, ok := g.CachedPsks[string(pskID)]; ok {
+				psks = append(psks, schedule.Psk{
+					Psk:     pskBytes,
+					PskId:   pskID,
+					PskType: schedule.PskTypeExternal,
+				})
+			}
+		}
+	}
+
 	// 1.2 Aplicar UpdatePath si existe
 	if stagedCommit.Commit.Path != nil {
-		// Obtener índice de hoja del emisor desde AuthenticatedContent
-		senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+		senderLeafIdx := treesync.LeafIndex(senderIdx)
 		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
 		// Verificar firma del leaf node del emisor (RFC §12.4.2)
@@ -795,12 +844,39 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// Actualizar también Group directamente
 	g.Epoch = g.GroupContext.Epoch
 	g.InterimTranscriptHash = interimTranscriptHash
+	g.ConfirmationTag = stagedCommit.AuthenticatedContent.Auth.ConfirmationTag
 	// 6. Avanzar key schedule → nuevos EpochSecrets
 	if stagedCommit.PrecomputedEpochSecrets != nil {
 		// Committer: usar epoch secrets precalculados en Commit()
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
 		// Receptor: derivar desde init_secret del epoch actual
+		initSecretForNewEpoch := g.EpochSecrets.InitSecret
+		for _, proposal := range stagedCommit.Proposals {
+			if proposal.Type == ProposalTypeExternalInit && proposal.ExternalInit != nil {
+				externalPriv, deriveErr := ciphersuite.DeriveKeyPair(
+					g.CipherSuite,
+					g.EpochSecrets.ExternalSecret.AsSlice(),
+				)
+				if deriveErr != nil {
+					return fmt.Errorf("deriving external key pair: %w", deriveErr)
+				}
+
+				kemPub, parseErr := ecdh.P256().NewPublicKey(proposal.ExternalInit.KemOutput)
+				if parseErr != nil {
+					return fmt.Errorf("parsing kem_output: %w", parseErr)
+				}
+
+				sharedSecretBytes, decapErr := externalPriv.ECDH(kemPub)
+				if decapErr != nil {
+					return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
+				}
+
+				initSecretForNewEpoch = ciphersuite.NewSecret(sharedSecretBytes)
+				break
+			}
+		}
+
 		var commitSecret *ciphersuite.Secret
 		if stagedCommit.Commit != nil && stagedCommit.Commit.Path != nil {
 			commitSecret = stagedCommit.RootPathSecret
@@ -808,18 +884,16 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			commitSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
 		}
 
-		newKS := schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
+		newGCBytes := g.GroupContext.Marshal()
+		newKS := schedule.NewKeySchedule(g.CipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
-		if _, err = newKS.ComputeJoinerSecret(); err != nil {
+		if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
 			return fmt.Errorf("computing joiner secret: %w", err)
 		}
-		if _, err = newKS.ComputePskSecret(nil); err != nil {
+		if _, err = newKS.ComputePskSecret(psks); err != nil {
 			return fmt.Errorf("computing psk secret: %w", err)
 		}
-		if _, err = newKS.ComputeIntermediateSecret(g.GroupContext.Marshal()); err != nil {
-			return fmt.Errorf("computing intermediate secret: %w", err)
-		}
-		if _, err = newKS.ComputeEpochSecret(); err != nil {
+		if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
 			return fmt.Errorf("computing epoch secret: %w", err)
 		}
 		var newEpochSecrets *schedule.EpochSecrets
@@ -850,7 +924,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// 7. Limpiar estado
 	g.Proposals.Clear()
 	g.PendingCommit = nil
-	g.state = StateOperational
+	if hasReInit {
+		g.state = StateInactive
+	} else {
+		g.state = StateOperational
+	}
 	return nil
 }
 
@@ -863,6 +941,10 @@ func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error
 		return g.applyUpdateProposal(proposal.Update, senderIdx)
 	case ProposalTypeRemove:
 		return g.applyRemoveProposal(proposal.Remove)
+	case ProposalTypeExternalInit:
+		return nil
+	case ProposalTypeReInit:
+		return nil
 	default:
 		return fmt.Errorf("unsupported proposal type: %d", proposal.Type)
 	}
@@ -965,77 +1047,128 @@ func (g *Group) MemberCount() int {
 	return count
 }
 
-// EncryptApplicationMessage cifre un mensaje de aplicación.
-func (g *Group) EncryptApplicationMessage(plaintext []byte) (*framing.MLSMessage, error) {
-	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not operational")
-	}
-
-	// 1. Preparar FramedContent
-	content := framing.FramedContent{
-		GroupID: g.GroupID.AsSlice(),
-		Epoch:   g.Epoch.AsUint64(),
-		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.OwnLeafIndex)},
-		Body:    framing.ApplicationData{Data: plaintext},
-	}
-
-	// 2. Encriptar usando framing
-	// Necesitamos los secrets del SecretTree
-	_, err := g.SecretTree.LeafForIndex(uint32(g.OwnLeafIndex))
-	if err != nil {
-		return nil, err
-	}
-
-	params := framing.EncryptParams{
-		Content:          content,
-		SenderLeafIndex:  uint32(g.OwnLeafIndex),
-		CipherSuite:      g.CipherSuite,
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
-		SigKey:           nil, // TODO: Necesitamos clave de firma real
-		GroupContext:     g.GroupContext.Marshal(),
-	}
-
-	// Por ahora delegamos a framing.Encrypt (esto retornará un PrivateMessage)
-	privMsg, err := framing.Encrypt(params)
-	if err != nil {
-		return nil, err
-	}
-
-	return framing.NewMLSMessagePrivate(privMsg), nil
-}
-
-// DecryptApplicationMessage descifra un mensaje de aplicación.
-func (g *Group) DecryptApplicationMessage(msg *framing.MLSMessage) ([]byte, error) {
-	// 1. Validar tipo de mensaje
-	privMsg, ok := msg.AsPrivate()
-	if !ok {
-		return nil, fmt.Errorf("not a private message")
-	}
-
-	// 2. Desencriptar usando framing
-	params := framing.DecryptParams{
-		CipherSuite:      g.CipherSuite,
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
-		GroupContext:     g.GroupContext.Marshal(),
-	}
-
-	ac, err := framing.Decrypt(privMsg, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Extraer plaintext
-	appData, ok := ac.Content.Body.(framing.ApplicationData)
-	if !ok {
-		return nil, fmt.Errorf("not application data")
-	}
-
-	return appData.Data, nil
-}
-
 // State returns the current state of the group.
 func (g *Group) State() GroupState {
 	return g.state
+}
+
+// NewGroupFromReInit creates a successor group from a ReInit proposal.
+func NewGroupFromReInit(
+	reInit *ReInitProposal,
+	resumptionSecret *ciphersuite.Secret,
+	myKP *keypackages.KeyPackage,
+	myPriv *keypackages.KeyPackagePrivateKeys,
+) (*Group, error) {
+	if reInit == nil {
+		return nil, fmt.Errorf("reinit proposal is nil")
+	}
+	if resumptionSecret == nil {
+		return nil, fmt.Errorf("resumption secret is nil")
+	}
+	if myKP == nil || myPriv == nil {
+		return nil, fmt.Errorf("key package/private keys are nil")
+	}
+	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
+	initSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	keySchedule := schedule.NewKeySchedule(cs, initSecret)
+	commitSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	keySchedule.SetCommitSecret(commitSecret)
+	// GroupContext for the new epoch from ReInit is not yet known; use empty bytes.
+	if _, err := keySchedule.ComputeJoinerSecret([]byte{}); err != nil {
+		return nil, err
+	}
+	resumptionPsk := schedule.Psk{
+		PskType: schedule.PskTypeResumption,
+		PskId:   reInit.GroupID,
+		Psk:     resumptionSecret.AsSlice(),
+	}
+	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {
+		return nil, err
+	}
+	group, err := NewGroup(NewGroupID(reInit.GroupID), cs, myKP, myPriv)
+	if err != nil {
+		return nil, err
+	}
+	group.GroupContext.Version = reInit.Version
+	group.GroupContext.Extensions = reInit.Extensions
+	group.KeySchedule = keySchedule
+	group.CachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
+	return group, nil
+}
+
+// GetGroupInfo returns a signed GroupInfo for the current epoch (RFC 9420 §12.4.3.2).
+func (g *Group) GetGroupInfo(
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+) (*GroupInfo, error) {
+	if g.state != StateOperational {
+		return nil, fmt.Errorf("group not operational")
+	}
+	return g.buildSignedGroupInfo(signerPrivKey)
+}
+
+func (g *Group) buildSignedGroupInfo(
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+) (*GroupInfo, error) {
+	if signerPrivKey == nil {
+		return nil, fmt.Errorf("signer private key is nil")
+	}
+
+	extensions := make([]Extension, len(g.GroupContext.Extensions))
+	copy(extensions, g.GroupContext.Extensions)
+
+	groupInfo := &GroupInfo{
+		GroupContext:    g.GroupContext,
+		Extensions:      extensions,
+		ConfirmationTag: g.ConfirmationTag,
+		Signer:          g.OwnLeafIndex,
+		RatchetTree:     g.RatchetTree,
+	}
+
+	// ratchet_tree 0x0002
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: 0x0002,
+		Data: g.RatchetTree.MarshalTree(),
+	})
+
+	// external_pub 0x0001
+	externalPriv, err := ciphersuite.DeriveKeyPair(
+		g.CipherSuite,
+		g.EpochSecrets.ExternalSecret.AsSlice(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("deriving external key pair: %w", err)
+	}
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: 0x0001,
+		Data: externalPriv.PublicKey().Bytes(),
+	})
+
+	tbs := groupInfo.MarshalTBS()
+	sig, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", tbs)
+	if err != nil {
+		return nil, fmt.Errorf("signing group info: %w", err)
+	}
+	groupInfo.Signature = sig.AsSlice()
+
+	return groupInfo, nil
+}
+
+func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
+	if pm == nil {
+		return fmt.Errorf("public message is nil")
+	}
+	if pm.Content.Sender.Type != framing.SenderTypeMember {
+		return nil
+	}
+	if g.EpochSecrets == nil || g.EpochSecrets.MembershipKey == nil {
+		return fmt.Errorf("membership_key not available")
+	}
+	return pm.VerifyMembershipTag(g.EpochSecrets.MembershipKey)
+}
+
+func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
+	if g.CachedPsks == nil {
+		g.CachedPsks = make(map[string][]byte)
+	}
+	g.CachedPsks[string(pskID)] = pskBytes
 }

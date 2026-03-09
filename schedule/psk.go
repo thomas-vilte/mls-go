@@ -1,11 +1,10 @@
 package schedule
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
+	"github.com/openmls/go/internal/tls"
 )
 
 // PskType identifies the type of Pre-Shared Key.
@@ -24,23 +23,54 @@ type Psk struct {
 	Psk     []byte
 }
 
-// ComputePskInput computes the PSK input for the key schedule.
+// ComputePskInput computes psk_secret according to RFC 9420 §8.4.
 func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	if len(psks) == 0 {
 		return nil, fmt.Errorf("no PSKs provided")
 	}
-
-	if len(psks) == 1 {
-		return psks[0].Psk, nil
+	out := make([]byte, cs.HashLength())
+	count := uint16(len(psks))
+	for i, psk := range psks {
+		if len(psk.Psk) == 0 {
+			return nil, fmt.Errorf("empty PSK at index %d", i)
+		}
+		zeroSalt := ciphersuite.ZeroSecret(cs.HashLength())
+		pskSecret := ciphersuite.NewSecret(psk.Psk)
+		extracted, err := zeroSalt.HKDFExtract(pskSecret)
+		if err != nil {
+			return nil, fmt.Errorf("extracting PSK %d: %w", i, err)
+		}
+		label := PSKLabel{
+			PskType: psk.PskType,
+			PskID:   psk.PskId,
+			Index:   uint16(i),
+			Count:   count,
+		}
+		pskLabel, err := extracted.KdfExpandLabel("derived psk", label.Marshal(), cs.HashLength())
+		if err != nil {
+			return nil, fmt.Errorf("expanding PSK label %d: %w", i, err)
+		}
+		labelBytes := pskLabel.AsSlice()
+		for j := range out {
+			out[j] ^= labelBytes[j]
+		}
 	}
+	return out, nil
+}
 
-	// Combine multiple PSKs using HMAC
-	pskInput := psks[0].Psk
-	for i := 1; i < len(psks); i++ {
-		h := hmac.New(sha256.New, pskInput)
-		h.Write(psks[i].Psk)
-		pskInput = h.Sum(nil)
-	}
+// PSKLabel according to RFC 9420 §8.4
+type PSKLabel struct {
+	PskType PskType
+	PskID   []byte
+	Index   uint16
+	Count   uint16
+}
 
-	return pskInput, nil
+func (l PSKLabel) Marshal() []byte {
+	w := tls.NewWriter()
+	w.WriteUint8(uint8(l.PskType))
+	w.WriteVLBytes(l.PskID)
+	w.WriteUint16(l.Index)
+	w.WriteUint16(l.Count)
+	return w.Bytes()
 }

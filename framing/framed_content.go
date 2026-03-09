@@ -44,6 +44,15 @@ func (fc *FramedContent) ContentType() ContentType {
 	return fc.Body.ContentType()
 }
 
+// ApplicationData returns the application payload if the body type is application.
+func (fc *FramedContent) ApplicationData() ([]byte, bool) {
+	app, ok := fc.Body.(ApplicationData)
+	if !ok {
+		return nil, false
+	}
+	return app.Data, true
+}
+
 // Marshal serializa FramedContent según TLS encoding del RFC
 func (fc *FramedContent) Marshal() []byte {
 	w := tls.NewWriter()

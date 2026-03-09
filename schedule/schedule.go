@@ -42,15 +42,15 @@ type EpochSecrets struct {
 
 // KeySchedule implements the MLS key schedule state machine.
 type KeySchedule struct {
-	ciphersuite        ciphersuite.CipherSuite
-	initSecret         *ciphersuite.Secret
-	commitSecret       *ciphersuite.Secret
-	joinerSecret       *ciphersuite.Secret
-	pskSecret          *ciphersuite.Secret
-	intermediateSecret *ciphersuite.Secret
-	welcomeSecret      *ciphersuite.Secret
-	epochSecret        *ciphersuite.Secret
-	groupContext       []byte
+	ciphersuite   ciphersuite.CipherSuite
+	initSecret    *ciphersuite.Secret
+	commitSecret  *ciphersuite.Secret
+	joinerSecret  *ciphersuite.Secret
+	rawPskSecret  *ciphersuite.Secret // raw psk_secret (before Extract with joiner_secret)
+	pskSecret     *ciphersuite.Secret // stores member_secret = Extract(joiner_secret, rawPskSecret)
+	welcomeSecret *ciphersuite.Secret
+	epochSecret   *ciphersuite.Secret
+	groupContext  []byte
 }
 
 // NewKeySchedule creates a new key schedule.
@@ -74,8 +74,17 @@ func (ks *KeySchedule) SetCommitSecret(commitSecret *ciphersuite.Secret) {
 	ks.commitSecret = commitSecret
 }
 
-// ComputeJoinerSecret computes joiner_secret = HKDF.Extract(init_secret, commit_secret).
-func (ks *KeySchedule) ComputeJoinerSecret() (*ciphersuite.Secret, error) {
+// SetJoinerSecret sets joiner_secret directly.
+// This is used by Welcome recipients that already possess joiner_secret.
+func (ks *KeySchedule) SetJoinerSecret(joinerSecret *ciphersuite.Secret) {
+	ks.joinerSecret = joinerSecret
+}
+
+// ComputeJoinerSecret computes joiner_secret per RFC 9420 §8:
+//
+//  1. intermediate = HKDF-Extract(init_secret, commit_secret)
+//  2. joiner_secret = ExpandWithLabel(intermediate, "joiner", GroupContext, Nh)
+func (ks *KeySchedule) ComputeJoinerSecret(groupContext []byte) (*ciphersuite.Secret, error) {
 	if ks.initSecret == nil {
 		return nil, fmt.Errorf("init_secret is nil")
 	}
@@ -85,70 +94,70 @@ func (ks *KeySchedule) ComputeJoinerSecret() (*ciphersuite.Secret, error) {
 		commitSecret = ciphersuite.ZeroSecret(ks.ciphersuite.HashLength())
 	}
 
-	joinerSecret, err := ks.initSecret.HKDFExtract(commitSecret)
+	intermediate, err := ks.initSecret.HKDFExtract(commitSecret)
 	if err != nil {
-		return nil, fmt.Errorf("HKDF extract failed: %w", err)
+		return nil, fmt.Errorf("HKDF extract intermediate: %w", err)
+	}
+
+	joinerSecret, err := intermediate.KdfExpandLabel("joiner", groupContext, ks.ciphersuite.HashLength())
+	if err != nil {
+		return nil, fmt.Errorf("ExpandWithLabel joiner_secret: %w", err)
 	}
 
 	ks.joinerSecret = joinerSecret
 	return joinerSecret, nil
 }
 
-// ComputePskSecret computes psk_secret from PSKs.
+// ComputePskSecret computes member_secret from PSKs.
 func (ks *KeySchedule) ComputePskSecret(psks []Psk) (*ciphersuite.Secret, error) {
 	if ks.joinerSecret == nil {
 		return nil, fmt.Errorf("joiner_secret not computed")
 	}
-
+	var pskSecret *ciphersuite.Secret
 	if len(psks) == 0 {
-		ks.pskSecret = ks.joinerSecret
-		return ks.pskSecret, nil
+		pskSecret = ciphersuite.ZeroSecret(ks.ciphersuite.HashLength())
+	} else {
+		pskInput, err := ComputePskInput(psks, ks.ciphersuite)
+		if err != nil {
+			return nil, fmt.Errorf("computing psk input: %w", err)
+		}
+		pskSecret = ciphersuite.NewSecret(pskInput)
 	}
-
-	pskInput, err := ComputePskInput(psks, ks.ciphersuite)
+	ks.rawPskSecret = pskSecret
+	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecret)
 	if err != nil {
-		return nil, fmt.Errorf("computing PSK input: %w", err)
+		return nil, fmt.Errorf("HKDF extract member_secret: %w", err)
 	}
-
-	pskSecret := ciphersuite.NewSecret(pskInput)
-	pskSecret, err = ks.joinerSecret.HKDFExtract(pskSecret)
-	if err != nil {
-		return nil, fmt.Errorf("HKDF extract failed: %w", err)
-	}
-
-	ks.pskSecret = pskSecret
-	return pskSecret, nil
+	ks.pskSecret = memberSecret
+	return memberSecret, nil
 }
 
-// ComputeIntermediateSecret computes intermediate_secret = HKDF.Extract(psk_secret, group_context).
-func (ks *KeySchedule) ComputeIntermediateSecret(groupContext []byte) (*ciphersuite.Secret, error) {
+// SetPskSecretDirect injects a raw psk_secret directly (used for Welcome recipients
+// and interop testing where psk_secret is provided externally).
+func (ks *KeySchedule) SetPskSecretDirect(pskSecret *ciphersuite.Secret) error {
+	if ks.joinerSecret == nil {
+		return fmt.Errorf("joiner_secret not computed")
+	}
+	ks.rawPskSecret = pskSecret
+	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecret)
+	if err != nil {
+		return fmt.Errorf("HKDF extract member_secret: %w", err)
+	}
+	ks.pskSecret = memberSecret
+	return nil
+}
+
+// ComputeEpochSecret computes epoch_secret = ExpandWithLabel(member_secret, "epoch", GroupContext, Nh).
+func (ks *KeySchedule) ComputeEpochSecret(groupContext []byte) (*ciphersuite.Secret, error) {
 	if ks.pskSecret == nil {
-		return nil, fmt.Errorf("psk_secret not computed")
+		return nil, fmt.Errorf("member_secret not computed (call ComputePskSecret first)")
 	}
-
-	groupContextSecret := ciphersuite.NewSecret(groupContext)
-	intermediateSecret, err := ks.pskSecret.HKDFExtract(groupContextSecret)
+	epochSecret, err := ks.pskSecret.KdfExpandLabel("epoch", groupContext, ks.ciphersuite.HashLength())
 	if err != nil {
-		return nil, fmt.Errorf("HKDF extract failed: %w", err)
+		return nil, fmt.Errorf("deriving epoch_secret: %w", err)
 	}
-
-	ks.intermediateSecret = intermediateSecret
-	ks.groupContext = groupContext
-	return intermediateSecret, nil
-}
-
-// ComputeEpochSecret computes epoch_secret = HKDF.Expand(intermediate_secret, "epoch").
-func (ks *KeySchedule) ComputeEpochSecret() (*ciphersuite.Secret, error) {
-	if ks.intermediateSecret == nil {
-		return nil, fmt.Errorf("intermediate_secret not computed")
-	}
-
-	epochSecret, err := ks.intermediateSecret.HKDFExpand([]byte("epoch"), ks.ciphersuite.HashLength())
-	if err != nil {
-		return nil, fmt.Errorf("HKDF expand failed: %w", err)
-	}
-
 	ks.epochSecret = epochSecret
+	ks.groupContext = groupContext
 	return epochSecret, nil
 }
 
@@ -161,56 +170,57 @@ func (ks *KeySchedule) DeriveEpochSecrets() (*EpochSecrets, error) {
 	secrets := &EpochSecrets{}
 	var err error
 
-	// sender_data_secret (RFC §8)
-	secrets.SenderDataSecret, err = ks.epochSecret.HKDFExpand([]byte("sender data"), ks.ciphersuite.HashLength())
+	// All epoch secrets use DeriveSecret = KdfExpandLabel(label, [], Nh) per RFC 9420 §8.
+	// sender_data_secret
+	secrets.SenderDataSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "sender data")
 	if err != nil {
 		return nil, fmt.Errorf("deriving sender_data_secret: %w", err)
 	}
 
 	// encryption_secret
-	secrets.EncryptionSecret, err = ks.epochSecret.HKDFExpand([]byte("encryption"), ks.ciphersuite.HashLength())
+	secrets.EncryptionSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "encryption")
 	if err != nil {
 		return nil, fmt.Errorf("deriving encryption_secret: %w", err)
 	}
 
 	// exporter_secret
-	secrets.ExporterSecret, err = ks.epochSecret.HKDFExpand([]byte("exporter"), ks.ciphersuite.HashLength())
+	secrets.ExporterSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "exporter")
 	if err != nil {
 		return nil, fmt.Errorf("deriving exporter_secret: %w", err)
 	}
 
-	// authentication_secret
-	secrets.AuthenticationSecret, err = ks.epochSecret.HKDFExpand([]byte("authentication"), ks.ciphersuite.HashLength())
+	// authentication_secret (= epoch_authenticator in RFC 9420)
+	secrets.AuthenticationSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "authentication")
 	if err != nil {
 		return nil, fmt.Errorf("deriving authentication_secret: %w", err)
 	}
 
-	// confirmation_key (32 bytes)
-	secrets.ConfirmationKey, err = ks.epochSecret.HKDFExpand([]byte("confirm"), 32)
+	// confirmation_key
+	secrets.ConfirmationKey, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "confirm")
 	if err != nil {
 		return nil, fmt.Errorf("deriving confirmation_key: %w", err)
 	}
 
-	// membership_key (32 bytes)
-	secrets.MembershipKey, err = ks.epochSecret.HKDFExpand([]byte("membership"), 32)
+	// membership_key
+	secrets.MembershipKey, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "membership")
 	if err != nil {
 		return nil, fmt.Errorf("deriving membership_key: %w", err)
 	}
 
 	// external_secret
-	secrets.ExternalSecret, err = ks.epochSecret.HKDFExpand([]byte("external"), ks.ciphersuite.HashLength())
+	secrets.ExternalSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "external")
 	if err != nil {
 		return nil, fmt.Errorf("deriving external_secret: %w", err)
 	}
 
-	// resumption_secret
-	secrets.ResumptionSecret, err = ks.epochSecret.HKDFExpand([]byte("resumption"), ks.ciphersuite.HashLength())
+	// resumption_psk
+	secrets.ResumptionSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "resumption")
 	if err != nil {
-		return nil, fmt.Errorf("deriving resumption_secret: %w", err)
+		return nil, fmt.Errorf("deriving resumption_psk: %w", err)
 	}
 
 	// init_secret (for next epoch)
-	secrets.InitSecret, err = ks.epochSecret.HKDFExpand([]byte("init"), ks.ciphersuite.HashLength())
+	secrets.InitSecret, err = ks.epochSecret.DeriveSecret(ks.ciphersuite, "init")
 	if err != nil {
 		return nil, fmt.Errorf("deriving init_secret: %w", err)
 	}
@@ -218,15 +228,18 @@ func (ks *KeySchedule) DeriveEpochSecrets() (*EpochSecrets, error) {
 	return secrets, nil
 }
 
-// ComputeWelcomeSecret computes welcome_secret for joining via Welcome.
+// ComputeWelcomeSecret computes welcome_secret per RFC 9420 §8:
+//
+//	welcome_secret = DeriveSecret(member_secret, "welcome")
+//	             = ExpandWithLabel(member_secret, "welcome", [], Nh)
 func (ks *KeySchedule) ComputeWelcomeSecret() (*ciphersuite.Secret, error) {
-	if ks.joinerSecret == nil {
-		return nil, fmt.Errorf("joiner_secret not computed")
+	if ks.pskSecret == nil {
+		return nil, fmt.Errorf("member_secret not computed (call ComputePskSecret first)")
 	}
 
-	welcomeSecret, err := ks.joinerSecret.HKDFExpand([]byte("welcome"), sha256.Size)
+	welcomeSecret, err := ks.pskSecret.DeriveSecret(ks.ciphersuite, "welcome")
 	if err != nil {
-		return nil, fmt.Errorf("HKDF expand failed: %w", err)
+		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
 	ks.welcomeSecret = welcomeSecret
@@ -239,12 +252,14 @@ func (ks *KeySchedule) WelcomeKeyNonce() ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("welcome_secret not computed")
 	}
 
-	welcomeKey, err := ks.welcomeSecret.HKDFExpand([]byte("key"), 16)
+	// RFC 9420 §8: welcome_key/nonce use ExpandWithLabel (KdfExpandLabel)
+	// RFC 9420 §8: welcome_key/nonce use ExpandWithLabel (KdfExpandLabel)
+	welcomeKey, err := ks.welcomeSecret.KdfExpandLabel("key", []byte{}, ks.ciphersuite.AeadKeyLength())
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving welcome_key: %w", err)
 	}
 
-	welcomeNonce, err := ks.welcomeSecret.HKDFExpand([]byte("nonce"), 12)
+	welcomeNonce, err := ks.welcomeSecret.KdfExpandLabel("nonce", []byte{}, ks.ciphersuite.AeadNonceLength())
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving welcome_nonce: %w", err)
 	}

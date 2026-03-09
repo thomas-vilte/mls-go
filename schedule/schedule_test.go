@@ -21,7 +21,8 @@ func TestKeyScheduleFlow(t *testing.T) {
 	ks.SetCommitSecret(commitSecret)
 
 	// Compute joiner_secret
-	joinerSecret, err := ks.ComputeJoinerSecret()
+	groupContext := []byte("test group context")
+	joinerSecret, err := ks.ComputeJoinerSecret(groupContext)
 	if err != nil {
 		t.Fatalf("Failed to compute joiner_secret: %v", err)
 	}
@@ -35,18 +36,8 @@ func TestKeyScheduleFlow(t *testing.T) {
 		t.Fatalf("Failed to compute psk_secret: %v", err)
 	}
 
-	// Compute intermediate_secret
-	groupContext := []byte("test group context")
-	intermediateSecret, err := ks.ComputeIntermediateSecret(groupContext)
-	if err != nil {
-		t.Fatalf("Failed to compute intermediate_secret: %v", err)
-	}
-	if intermediateSecret == nil || intermediateSecret.Len() == 0 {
-		t.Error("intermediate_secret should not be empty")
-	}
-
 	// Compute epoch_secret
-	epochSecret, err := ks.ComputeEpochSecret()
+	epochSecret, err := ks.ComputeEpochSecret(groupContext)
 	if err != nil {
 		t.Fatalf("Failed to compute epoch_secret: %v", err)
 	}
@@ -97,9 +88,14 @@ func TestWelcomeSecretDerivation(t *testing.T) {
 	commitSecret := ciphersuite.ZeroSecretCS(cs)
 	ks.SetCommitSecret(commitSecret)
 
-	_, err := ks.ComputeJoinerSecret()
+	_, err := ks.ComputeJoinerSecret([]byte("test group context"))
 	if err != nil {
 		t.Fatalf("ComputeJoinerSecret failed: %v", err)
+	}
+
+	_, err = ks.ComputePskSecret([]Psk{})
+	if err != nil {
+		t.Fatalf("ComputePskSecret failed: %v", err)
 	}
 
 	// Compute welcome_secret
@@ -193,7 +189,7 @@ func TestPSKCombination(t *testing.T) {
 		t.Error("psk_input should not be empty")
 	}
 
-	// Single PSK should return the PSK directly
+	// Single PSK should return a derived PSK input with hash length.
 	singlePsk := []Psk{
 		{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")},
 	}
@@ -201,8 +197,11 @@ func TestPSKCombination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputePskInput failed: %v", err)
 	}
-	if string(pskInput2) != "secret1" {
-		t.Error("single PSK should return the PSK directly")
+	if len(pskInput2) != cs.HashLength() {
+		t.Errorf("single PSK input length = %d, want %d", len(pskInput2), cs.HashLength())
+	}
+	if string(pskInput2) == "secret1" {
+		t.Error("single PSK should be derived, not returned directly")
 	}
 }
 

@@ -66,8 +66,14 @@ func (gs *GroupSecrets) Marshal() []byte {
 		w.WriteUint8(0)
 	}
 
-	// Psks (simplified - empty for now)
-	w.WriteVLBytes([]byte{})
+	pskBuf := tls.NewWriter()
+	for _, psk := range gs.Psks {
+		if psk == nil {
+			continue
+		}
+		pskBuf.WriteVLBytes(psk.AsSlice())
+	}
+	w.WriteVLBytes(pskBuf.Bytes())
 
 	return w.Bytes()
 }
@@ -96,16 +102,25 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 		}
 	}
 
-	// Skip Psks
-	_, err = r.ReadVLBytes()
+	pskData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+
+	pskReader := tls.NewReader(pskData)
+	var psks []*ciphersuite.HashReference
+	for pskReader.Remaining() > 0 {
+		pskID, readErr := pskReader.ReadVLBytes()
+		if readErr != nil {
+			return nil, readErr
+		}
+		psks = append(psks, ciphersuite.NewHashReference(pskID))
 	}
 
 	return &GroupSecrets{
 		JoinerSecret: joinerSecret,
 		PathSecret:   pathSecret,
-		Psks:         nil,
+		Psks:         psks,
 	}, nil
 }
 
@@ -320,30 +335,10 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("deriving welcome secret: %w", err)
 	}
 
-	// 2. Construir GroupInfo
-	groupInfo := &GroupInfo{
-		GroupContext:    g.GroupContext,
-		Extensions:      g.GroupContext.Extensions,
-		ConfirmationTag: g.ConfirmationTag,
-		Signer:          g.OwnLeafIndex,
-		RatchetTree:     g.RatchetTree,
-	}
-
-	// Serializar ratchet tree como extensión (RFC §12.4.3.3)
-	const extTypeRatchetTree = 0x0002
-	treeData := g.RatchetTree.MarshalTree()
-	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: extTypeRatchetTree,
-		Data: treeData,
-	})
-
-	// Firmar GroupInfo sobre los campos TBS (excluye Signature)
-	groupInfoTBS := groupInfo.MarshalTBS()
-	signature, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", groupInfoTBS)
+	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey)
 	if err != nil {
-		return nil, fmt.Errorf("signing group info: %w", err)
+		return nil, err
 	}
-	groupInfo.Signature = signature.AsSlice()
 
 	// 3. Encriptar GroupInfo completo (con firma) con welcome_secret (RFC §11.2.2)
 	groupInfoBytes := groupInfo.Marshal()
@@ -413,6 +408,7 @@ func JoinFromWelcome(
 	welcome *Welcome,
 	myKeyPackage *keypackages.KeyPackage,
 	myPrivateKeys *keypackages.KeyPackagePrivateKeys,
+	externalPsks map[string][]byte,
 ) (*Group, error) {
 	// 1. Calcular mi key_package_ref
 	myRef := keyPackageRef(myKeyPackage)
@@ -446,6 +442,22 @@ func JoinFromWelcome(
 	groupSecrets, err := UnmarshalGroupSecrets(secretsData)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling group secrets: %w", err)
+	}
+
+	var psks []schedule.Psk
+	for _, pskRef := range groupSecrets.Psks {
+		if pskRef == nil {
+			continue
+		}
+		if externalPsks != nil {
+			if pskBytes, ok := externalPsks[string(pskRef.Value)]; ok {
+				psks = append(psks, schedule.Psk{
+					PskType: schedule.PskTypeExternal,
+					PskId:   pskRef.Value,
+					Psk:     pskBytes,
+				})
+			}
+		}
 	}
 
 	// 4. Derivar welcome_secret desde joiner_secret
@@ -483,16 +495,21 @@ func JoinFromWelcome(
 	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
 	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
+	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == extTypeRatchetTree {
 			parsed, parseErr := treesync.UnmarshalTree(ext.Data)
 			if parseErr == nil {
 				ratchetTree = parsed
+				break
 			}
-			break
+			ratchetTreeParseErr = parseErr
 		}
 	}
 	if ratchetTree == nil {
+		if ratchetTreeParseErr != nil {
+			return nil, fmt.Errorf("parsing ratchet_tree extension: %w", ratchetTreeParseErr)
+		}
 		ratchetTree = treesync.NewRatchetTree(1)
 	}
 	groupInfo.RatchetTree = ratchetTree
@@ -500,7 +517,7 @@ func JoinFromWelcome(
 	// 7. Verificar firma de GroupInfo (RFC §12.4.3.1)
 	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
 	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
-		return nil, fmt.Errorf("missing signer leaf in ratchet tree")
+		return nil, fmt.Errorf("missing signer leaf in ratchet tree: signer=%d num_leaves=%d", groupInfo.Signer, ratchetTree.NumLeaves)
 	}
 	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
 	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
@@ -512,36 +529,20 @@ func JoinFromWelcome(
 	// 8. Inicializar GroupContext desde GroupInfo
 	groupContext := groupInfo.GroupContext
 
-	// 9. Avanzar key schedule desde joiner_secret
-	keySchedule := schedule.NewKeySchedule(welcome.CipherSuite, groupSecrets.JoinerSecret)
+	// 9. Avanzar key schedule desde joiner_secret provisto por Welcome.
+	keySchedule := schedule.NewKeySchedule(
+		welcome.CipherSuite,
+		ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()),
+	)
+	keySchedule.SetJoinerSecret(groupSecrets.JoinerSecret)
 
-	if groupSecrets.PathSecret != nil {
-		// Derivar commit_secret desde path_secret
-		pathSecret := ciphersuite.NewSecret(groupSecrets.PathSecret)
-		keySchedule.SetCommitSecret(pathSecret)
-	} else {
-		// Sin UpdatePath, usar zero secret
-		keySchedule.SetCommitSecret(ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()))
-	}
-
-	// Continuar con derivaciones del key schedule
-	_, err = keySchedule.ComputeJoinerSecret()
-	if err != nil {
-		return nil, fmt.Errorf("computing joiner secret: %w", err)
-	}
-
-	_, err = keySchedule.ComputePskSecret(nil)
+	_, err = keySchedule.ComputePskSecret(psks)
 	if err != nil {
 		return nil, fmt.Errorf("computing psk secret: %w", err)
 	}
 
 	groupContextBytes := groupContext.Marshal()
-	_, err = keySchedule.ComputeIntermediateSecret(groupContextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("computing intermediate secret: %w", err)
-	}
-
-	_, err = keySchedule.ComputeEpochSecret()
+	_, err = keySchedule.ComputeEpochSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing epoch secret: %w", err)
 	}
@@ -565,18 +566,22 @@ func JoinFromWelcome(
 
 	// 10. Crear Group
 	group := &Group{
-		GroupID:               groupContext.GroupID,
-		Epoch:                 groupContext.Epoch,
-		CipherSuite:           welcome.CipherSuite,
-		GroupContext:          groupContext,
-		RatchetTree:           ratchetTree,
-		OwnLeafIndex:          ownLeafIndex,
-		EpochSecrets:          epochSecrets,
-		InterimTranscriptHash: []byte{}, // Inicial
-		Members:               make(map[LeafNodeIndex]*Member),
-		state:                 StateOperational,
-		KeySchedule:           keySchedule,
-		Proposals:             NewProposalStore(),
+		GroupID:      groupContext.GroupID,
+		Epoch:        groupContext.Epoch,
+		CipherSuite:  welcome.CipherSuite,
+		GroupContext: groupContext,
+		RatchetTree:  ratchetTree,
+		OwnLeafIndex: ownLeafIndex,
+		EpochSecrets: epochSecrets,
+		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(
+			groupContext.ConfirmedTranscriptHash,
+			groupInfo.ConfirmationTag,
+		),
+		Members:     make(map[LeafNodeIndex]*Member),
+		state:       StateOperational,
+		KeySchedule: keySchedule,
+		Proposals:   NewProposalStore(),
+		CachedPsks:  make(map[string][]byte),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
 
