@@ -562,37 +562,16 @@ func (g *Group) createUpdatePath(
 func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
 	case ProposalTypeAdd:
-		caps := toTreeSyncCapabilities(proposal.Add.KeyPackage.LeafNode.Capabilities)
-		if caps == nil {
-			caps = &treesync.LeafNodeCapabilities{}
-		}
-		leafData := treesync.LeafNodeData{
-			EncryptionKey:  proposal.Add.KeyPackage.InitKey,
-			SignatureKey:   proposal.Add.KeyPackage.LeafNode.SignatureKey,
-			Credential:     proposal.Add.KeyPackage.LeafNode.Credential,
-			Capabilities:   caps,
-			Lifetime:       keyPackageToTreeSyncLifetime(proposal.Add.KeyPackage.LeafNode.Lifetime),
-			LeafNodeSource: 1, // key_package
-			Signature:      append([]byte(nil), proposal.Add.KeyPackage.LeafNode.Signature...),
-		}
+		leafData := *keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
+		leafData.EncryptionKey = proposal.Add.KeyPackage.InitKey
 		tree.AddLeaf(leafData)
 	case ProposalTypeRemove:
 		nodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(proposal.Remove.Removed))
 		tree.BlankNode(nodeIdx)
+		tree.TruncateTrailingBlanks()
 	case ProposalTypeUpdate:
 		leafIdx := treesync.LeafIndex(senderIdx)
-		caps := toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities)
-		if caps == nil {
-			caps = &treesync.LeafNodeCapabilities{}
-		}
-		leafData := treesync.LeafNodeData{
-			EncryptionKey: proposal.Update.LeafNode.EncryptionKey,
-			SignatureKey:  proposal.Update.LeafNode.SignatureKey,
-			Credential:    proposal.Update.LeafNode.Credential,
-			Capabilities:  caps,
-			Lifetime:      keyPackageToTreeSyncLifetime(proposal.Update.LeafNode.Lifetime),
-			Signature:     append([]byte(nil), proposal.Update.LeafNode.Signature...),
-		}
+		leafData := *keyPackageLeafToTreeSync(proposal.Update.LeafNode)
 		tree.SetLeaf(leafIdx, leafData)
 	case ProposalTypeGroupContextExtensions:
 		if proposal.GroupContextExtensions != nil {
