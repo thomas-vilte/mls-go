@@ -25,6 +25,7 @@ func NewPublicMessage(
 	sigKey *ciphersuite.SignaturePrivateKey,
 	gc []byte, // serialized GroupContext
 	membershipKey *ciphersuite.Secret,
+	cs ciphersuite.CipherSuite,
 ) (*PublicMessage, error) {
 	ac := &AuthenticatedContent{
 		WireFormat:   WireFormatPublicMessage,
@@ -42,17 +43,14 @@ func NewPublicMessage(
 	if content.Sender.Type == SenderTypeMember && membershipKey != nil {
 		ac.Auth = auth
 		tbm := marshalAuthenticatedContentTBM(ac)
-		tag, err := membershipKey.Hmac(tbm)
-		if err != nil {
-			return nil, fmt.Errorf("framing: computing membership_tag: %w", err)
-		}
+		tag := schedule.ComputeMembershipTag(cs, membershipKey.AsSlice(), tbm)
 		pm.MembershipTag = tag
 	}
 	return pm, nil
 }
 
 // VerifyMembershipTag verifica el membership_tag utilizando schedule.VerifyMembershipTag.
-func (pm *PublicMessage) VerifyMembershipTag(membershipKey *ciphersuite.Secret) error {
+func (pm *PublicMessage) VerifyMembershipTag(cs ciphersuite.CipherSuite, membershipKey *ciphersuite.Secret) error {
 	if pm.Content.Sender.Type != SenderTypeMember {
 		return nil // no aplica para remitentes que no son miembros
 	}
@@ -62,7 +60,7 @@ func (pm *PublicMessage) VerifyMembershipTag(membershipKey *ciphersuite.Secret) 
 		Auth:       pm.Auth,
 	}
 	tbm := marshalAuthenticatedContentTBM(ac)
-	if !schedule.VerifyMembershipTag(membershipKey.AsSlice(), tbm, pm.MembershipTag) {
+	if !schedule.VerifyMembershipTag(cs, membershipKey.AsSlice(), tbm, pm.MembershipTag) {
 		return ErrInvalidMembershipTag
 	}
 	return nil

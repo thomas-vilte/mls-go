@@ -2,7 +2,6 @@ package group
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
@@ -311,9 +310,15 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 }
 
 // keyPackageRef calcula la referencia de un KeyPackage (hash).
-func keyPackageRef(kp *keypackages.KeyPackage) []byte {
-	hash := sha256.Sum256(kp.Marshal())
-	return hash[:]
+func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byte {
+	if kp == nil {
+		return nil
+	}
+	sum, err := ciphersuite.Hash(cs, kp.Marshal())
+	if err != nil {
+		return nil
+	}
+	return sum
 }
 
 // CreateWelcome genera un Welcome message para nuevos miembros.
@@ -366,7 +371,7 @@ func (g *Group) CreateWelcome(
 
 	for _, kp := range newMemberKeyPackages {
 		// Calcular key_package_ref (hash del key package)
-		kpRef := keyPackageRef(kp)
+		kpRef := keyPackageRef(kp, g.CipherSuite)
 
 		// Construir GroupSecrets
 		groupSecrets := &GroupSecrets{
@@ -411,7 +416,7 @@ func JoinFromWelcome(
 	externalPsks map[string][]byte,
 ) (*Group, error) {
 	// 1. Calcular mi key_package_ref
-	myRef := keyPackageRef(myKeyPackage)
+	myRef := keyPackageRef(myKeyPackage, welcome.CipherSuite)
 
 	// 2. Buscar mis GroupSecrets encriptados
 	var myEncryptedSecrets *EncryptedGroupSecrets
@@ -574,6 +579,7 @@ func JoinFromWelcome(
 		OwnLeafIndex: ownLeafIndex,
 		EpochSecrets: epochSecrets,
 		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(
+			welcome.CipherSuite,
 			groupContext.ConfirmedTranscriptHash,
 			groupInfo.ConfirmationTag,
 		),
@@ -603,4 +609,24 @@ func JoinFromWelcome(
 	}
 
 	return group, nil
+}
+
+func verifyGroupInfoSignature(groupInfo *GroupInfo, tree *treesync.RatchetTree) error {
+	if groupInfo == nil {
+		return fmt.Errorf("group info is nil")
+	}
+	if tree == nil {
+		return fmt.Errorf("ratchet tree is nil")
+	}
+	signerLeaf := tree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
+	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
+		return fmt.Errorf("missing signer leaf in ratchet tree")
+	}
+	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
+	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+	sig := ciphersuite.NewSignature(groupInfo.Signature)
+	if err := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); err != nil {
+		return fmt.Errorf("invalid group info signature: %w", err)
+	}
+	return nil
 }

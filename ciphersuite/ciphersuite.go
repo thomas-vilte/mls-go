@@ -83,9 +83,12 @@
 package ciphersuite
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"hash"
 )
 
 // Version information
@@ -174,6 +177,26 @@ func (cs CipherSuite) HPKEConfig() HPKEConfig {
 		}
 	default:
 		return HPKEConfig{}
+	}
+}
+
+// HashFunction returns the hash constructor for the ciphersuite.
+func (cs CipherSuite) HashFunction() func() hash.Hash {
+	switch cs {
+	case MLS128DHKEMP256:
+		return sha256.New
+	case 3:
+		return sha256.New
+	case 4:
+		return sha512.New384
+	case 5:
+		return sha512.New384
+	case 6:
+		return sha512.New384
+	case 7:
+		return sha512.New
+	default:
+		return sha256.New
 	}
 }
 
@@ -340,4 +363,14 @@ func EqualCT(a, b []byte) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare(a, b) == 1
+}
+
+func Hash(cs CipherSuite, data []byte) ([]byte, error) {
+	h := cs.HashFunction()
+	if h == nil {
+		return nil, fmt.Errorf("unsupported ciphersuite for hash: %d", cs)
+	}
+	hs := h()
+	_, _ = hs.Write(data)
+	return hs.Sum(nil), nil
 }

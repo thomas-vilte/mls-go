@@ -329,7 +329,7 @@ func TestPublicMessage_NonMemberSender(t *testing.T) {
 	}
 
 	// VerifyMembershipTag debería retornar nil para non-member
-	err := pm.VerifyMembershipTag(nil)
+	err := pm.VerifyMembershipTag(ciphersuite.MLS128DHKEMP256, nil)
 	if err != nil {
 		t.Errorf("VerifyMembershipTag should return nil for non-member: %v", err)
 	}

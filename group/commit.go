@@ -1,7 +1,6 @@
 package group
 
 import (
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
@@ -92,10 +91,15 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 }
 
 // ComputeProposalRef calcula el hash de referencia de un proposal (RFC 9420 §12.4).
-func ComputeProposalRef(p *Proposal) []byte {
-	data := ProposalMarshal(p)
-	hash := sha256.Sum256(data)
-	return hash[:]
+func ComputeProposalRef(p *Proposal, cs ciphersuite.CipherSuite) []byte {
+	if p == nil {
+		return nil
+	}
+	sum, err := ciphersuite.Hash(cs, ProposalMarshal(p))
+	if err != nil {
+		return nil
+	}
+	return sum
 }
 
 // UpdatePathNode represents a node in the update path.
