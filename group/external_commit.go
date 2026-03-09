@@ -55,6 +55,9 @@ func ExternalCommit(
 	if tree == nil {
 		return nil, nil, fmt.Errorf("ratchet tree not present in GroupInfo")
 	}
+	if err := verifyGroupInfoSignature(groupInfo, tree); err != nil {
+		return nil, nil, err
+	}
 
 	// 2. HPKE Encap to external_pub.
 	kemOutput, sharedSecret, err := ciphersuite.EncapToBytes(externalPubBytes, cs)
@@ -247,6 +250,7 @@ func ExternalCommit(
 	var interimHashForNewMember []byte
 	if len(groupInfo.ConfirmationTag) > 0 {
 		interimHashForNewMember = schedule.ComputeInterimTranscriptHash(
+			cs,
 			groupContext.ConfirmedTranscriptHash,
 			groupInfo.ConfirmationTag,
 		)
@@ -289,11 +293,12 @@ func ExternalCommit(
 	}
 
 	confirmationTag := schedule.ComputeConfirmationTag(
+		cs,
 		epochSecrets.ConfirmationKey.AsSlice(),
 		confirmedHash,
 	)
 	ac.Auth.ConfirmationTag = confirmationTag
-	newInterimHash := schedule.ComputeInterimTranscriptHash(confirmedHash, confirmationTag)
+	newInterimHash := schedule.ComputeInterimTranscriptHash(cs, confirmedHash, confirmationTag)
 
 	// 8. Build local group state for the new member.
 	group := &Group{

@@ -123,14 +123,15 @@ func TestWelcomeSecretDerivation(t *testing.T) {
 func TestConfirmationTag(t *testing.T) {
 	confirmationKey := []byte("test confirmation key 12345678")
 	confirmedTranscriptHash := []byte("test transcript hash 12345678")
+	cs := ciphersuite.MLS128DHKEMP256
 
-	tag := ComputeConfirmationTag(confirmationKey, confirmedTranscriptHash)
+	tag := ComputeConfirmationTag(cs, confirmationKey, confirmedTranscriptHash)
 	if len(tag) != 32 {
 		t.Errorf("confirmation_tag should be 32 bytes, got %d", len(tag))
 	}
 
 	// Verify tag is deterministic
-	tag2 := ComputeConfirmationTag(confirmationKey, confirmedTranscriptHash)
+	tag2 := ComputeConfirmationTag(cs, confirmationKey, confirmedTranscriptHash)
 	if string(tag) != string(tag2) {
 		t.Error("confirmation_tag should be deterministic")
 	}
@@ -139,20 +140,21 @@ func TestConfirmationTag(t *testing.T) {
 func TestMembershipTag(t *testing.T) {
 	membershipKey := []byte("test membership key 123456789")
 	authenticatedContent := []byte("test authenticated content")
+	cs := ciphersuite.MLS128DHKEMP256
 
-	tag := ComputeMembershipTag(membershipKey, authenticatedContent)
+	tag := ComputeMembershipTag(cs, membershipKey, authenticatedContent)
 	if len(tag) == 0 {
 		t.Error("membership_tag should not be empty")
 	}
 
 	// Verify tag
-	if !VerifyMembershipTag(membershipKey, authenticatedContent, tag) {
+	if !VerifyMembershipTag(cs, membershipKey, authenticatedContent, tag) {
 		t.Error("VerifyMembershipTag should return true for valid tag")
 	}
 
 	// Verify with wrong content
 	wrongContent := []byte("wrong content")
-	if VerifyMembershipTag(membershipKey, wrongContent, tag) {
+	if VerifyMembershipTag(cs, membershipKey, wrongContent, tag) {
 		t.Error("VerifyMembershipTag should return false for wrong content")
 	}
 }
@@ -162,13 +164,13 @@ func TestTranscriptHashes(t *testing.T) {
 	framedContent := []byte("test framed content")
 	signature := []byte("test signature")
 
-	confirmedHash := ComputeTranscriptHash(interimTranscriptHash, framedContent, signature)
+	confirmedHash := ComputeTranscriptHash(ciphersuite.MLS128DHKEMP256, interimTranscriptHash, framedContent, signature)
 	if len(confirmedHash) != 32 {
 		t.Errorf("confirmed_transcript_hash should be 32 bytes, got %d", len(confirmedHash))
 	}
 
 	confirmationTag := []byte("test confirmation tag")
-	interimHash := ComputeInterimTranscriptHash(confirmedHash, confirmationTag)
+	interimHash := ComputeInterimTranscriptHash(ciphersuite.MLS128DHKEMP256, confirmedHash, confirmationTag)
 	if len(interimHash) != 32 {
 		t.Errorf("interim_transcript_hash should be 32 bytes, got %d", len(interimHash))
 	}

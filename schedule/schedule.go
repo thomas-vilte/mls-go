@@ -9,7 +9,6 @@ package schedule
 
 import (
 	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 
@@ -267,43 +266,42 @@ func (ks *KeySchedule) WelcomeKeyNonce() ([]byte, []byte, error) {
 	return welcomeKey.AsSlice(), welcomeNonce.AsSlice(), nil
 }
 
-// ComputeConfirmationTag computes confirmation_tag.
-func ComputeConfirmationTag(confirmationKey, confirmedTranscriptHash []byte) []byte {
-	h := hmac.New(sha256.New, confirmationKey)
+// ComputeConfirmationTag computes confirmation_tag using the ciphersuite hash.
+func ComputeConfirmationTag(cs ciphersuite.CipherSuite, confirmationKey, confirmedTranscriptHash []byte) []byte {
+	h := hmac.New(cs.HashFunction(), confirmationKey)
 	h.Write(confirmedTranscriptHash)
 	return h.Sum(nil)
 }
 
-// ComputeMembershipTag computes membership_tag.
-func ComputeMembershipTag(membershipKey, authenticatedContent []byte) []byte {
-	h := hmac.New(sha256.New, membershipKey)
+// ComputeMembershipTag computes membership_tag using the ciphersuite hash.
+func ComputeMembershipTag(cs ciphersuite.CipherSuite, membershipKey, authenticatedContent []byte) []byte {
+	h := hmac.New(cs.HashFunction(), membershipKey)
 	h.Write(authenticatedContent)
 	return h.Sum(nil)
 }
 
 // VerifyMembershipTag verifies a membership_tag.
-func VerifyMembershipTag(membershipKey, authenticatedContent, membershipTag []byte) bool {
-	expected := ComputeMembershipTag(membershipKey, authenticatedContent)
+func VerifyMembershipTag(cs ciphersuite.CipherSuite, membershipKey, authenticatedContent, membershipTag []byte) bool {
+	expected := ComputeMembershipTag(cs, membershipKey, authenticatedContent)
 	return subtle.ConstantTimeCompare(expected, membershipTag) == 1
 }
 
-// ComputeTranscriptHash computes the transcript hash.
-func ComputeTranscriptHash(interimTranscriptHash, framedContent, signature []byte) []byte {
+// ComputeTranscriptHash should also use cipher suite hash if querés dejarlo RFC-aligned.
+func ComputeTranscriptHash(cs ciphersuite.CipherSuite, interimTranscriptHash, framedContent, signature []byte) []byte {
 	buf := tls.NewWriter()
 	buf.WriteRaw(interimTranscriptHash)
 	buf.WriteRaw(framedContent)
 	buf.WriteVLBytes(signature)
-
-	hash := sha256.Sum256(buf.Bytes())
-	return hash[:]
+	h := cs.HashFunction()()
+	_, _ = h.Write(buf.Bytes())
+	return h.Sum(nil)
 }
 
-// ComputeInterimTranscriptHash computes interim_transcript_hash.
-func ComputeInterimTranscriptHash(confirmedTranscriptHash, confirmationTag []byte) []byte {
+func ComputeInterimTranscriptHash(cs ciphersuite.CipherSuite, confirmedTranscriptHash, confirmationTag []byte) []byte {
 	buf := tls.NewWriter()
 	buf.WriteRaw(confirmedTranscriptHash)
 	buf.WriteVLBytes(confirmationTag)
-
-	hash := sha256.Sum256(buf.Bytes())
-	return hash[:]
+	h := cs.HashFunction()()
+	_, _ = h.Write(buf.Bytes())
+	return h.Sum(nil)
 }

@@ -402,12 +402,13 @@ func (g *Group) Commit(
 
 	// confirmation_tag = MAC(confirmation_key, confirmed_transcript_hash) (RFC §8.2)
 	confirmationTag := schedule.ComputeConfirmationTag(
+		g.CipherSuite,
 		newEpochSecrets.ConfirmationKey.AsSlice(),
 		confirmedHash,
 	)
 	ac.Auth.ConfirmationTag = confirmationTag
 
-	newInterimHash := schedule.ComputeInterimTranscriptHash(confirmedHash, confirmationTag)
+	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
 
 	// 7. Crear StagedCommit con datos precalculados para el committer
 	stagedCommit := &StagedCommit{
@@ -590,7 +591,7 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex) []byte {
 	if g.ProposalByRef == nil {
 		g.ProposalByRef = make(map[string]*Proposal)
 	}
-	ref := ComputeProposalRef(p)
+	ref := ComputeProposalRef(p, g.CipherSuite)
 	g.ProposalByRef[string(ref)] = p
 	g.Proposals.AddProposal(p, sender)
 	return ref
@@ -612,6 +613,19 @@ func (g *Group) ProcessReceivedCommit(
 	commit, err := UnmarshalCommit(commitBody.Data)
 	if err != nil {
 		return fmt.Errorf("unmarshaling commit: %w", err)
+	}
+
+	if ac.Content.Sender.Type == framing.SenderTypeMember {
+		senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
+		if senderLeaf == nil || senderLeaf.LeafData == nil || senderLeaf.LeafData.SignatureKey == nil {
+			return fmt.Errorf("missing sender signature key")
+		}
+
+		rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
+			return fmt.Errorf("commit signature verification failed: %w", err)
+		}
 	}
 
 	// Resolver proposals: inline o por referencia hash
@@ -904,6 +918,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 
 		// Verificar confirmation_tag del commit (RFC §12.4.2)
 		expectedTag := schedule.ComputeConfirmationTag(
+			g.CipherSuite,
 			newEpochSecrets.ConfirmationKey.AsSlice(),
 			confirmedTranscriptHash,
 		)
@@ -1157,13 +1172,37 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 	if pm == nil {
 		return fmt.Errorf("public message is nil")
 	}
-	if pm.Content.Sender.Type != framing.SenderTypeMember {
+
+	switch pm.Content.Sender.Type {
+	case framing.SenderTypeMember:
+		senderIdx := LeafNodeIndex(pm.Content.Sender.LeafIndex)
+		leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(senderIdx))
+		if leaf == nil || leaf.LeafData == nil || leaf.LeafData.SignatureKey == nil {
+			return fmt.Errorf("missing sender signature key")
+		}
+
+		rawKey := treesync.MarshalSignatureKey(leaf.LeafData.SignatureKey)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		ac := &framing.AuthenticatedContent{
+			WireFormat: framing.WireFormatPublicMessage,
+			Content:    pm.Content,
+			Auth:       pm.Auth,
+		}
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), pm.Auth.Signature); err != nil {
+			return fmt.Errorf("public message signature verification failed: %w", err)
+		}
+
+		if g.EpochSecrets == nil || g.EpochSecrets.MembershipKey == nil {
+			return fmt.Errorf("membership_key not available")
+		}
+		return pm.VerifyMembershipTag(g.CipherSuite, g.EpochSecrets.MembershipKey)
+	case framing.SenderTypeExternal:
+		return fmt.Errorf("external public message verification not implemented")
+	case framing.SenderTypeNewMemberProposal, framing.SenderTypeNewMemberCommit:
+		return nil
+	default:
 		return nil
 	}
-	if g.EpochSecrets == nil || g.EpochSecrets.MembershipKey == nil {
-		return fmt.Errorf("membership_key not available")
-	}
-	return pm.VerifyMembershipTag(g.EpochSecrets.MembershipKey)
 }
 
 func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
