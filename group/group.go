@@ -83,6 +83,7 @@ type Group struct {
 	Members               map[LeafNodeIndex]*Member
 	state                 GroupState
 	SecretTree            *secrettree.Tree
+	CachedPsks            map[string][]byte
 }
 
 // NewGroup This is the entry point for creating a new group.
@@ -123,7 +124,9 @@ func NewGroup(
 	commitSecret := ciphersuite.ZeroSecret(cipherSuite.HashLength())
 	keySchedule.SetCommitSecret(commitSecret)
 
-	_, err := keySchedule.ComputeJoinerSecret()
+	groupContextBytes := groupContext.Marshal()
+
+	_, err := keySchedule.ComputeJoinerSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing joiner secret: %w", err)
 	}
@@ -132,14 +135,7 @@ func NewGroup(
 	if err != nil {
 		return nil, fmt.Errorf("computing psk secret: %w", err)
 	}
-
-	groupContextBytes := groupContext.Marshal()
-	_, err = keySchedule.ComputeIntermediateSecret(groupContextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("computing intermediate secret: %w", err)
-	}
-
-	_, err = keySchedule.ComputeEpochSecret()
+	_, err = keySchedule.ComputeEpochSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing epoch secret: %w", err)
 	}
@@ -164,6 +160,7 @@ func NewGroup(
 		InterimTranscriptHash: []byte{}, // string vacio
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
+		CachedPsks:            make(map[string][]byte),
 	}
 
 	// Initialize secret tree
@@ -386,18 +383,16 @@ func (g *Group) Commit(
 	}
 
 	// Avanzar key schedule para calcular confirmation_key del nuevo epoch
+	newGCBytes := newGC.Marshal()
 	newKS := schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
 	newKS.SetCommitSecret(commitSecret)
-	if _, err = newKS.ComputeJoinerSecret(); err != nil {
+	if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
 		return nil, fmt.Errorf("new epoch joiner secret: %w", err)
 	}
 	if _, err = newKS.ComputePskSecret(psks); err != nil {
 		return nil, fmt.Errorf("new epoch psk secret: %w", err)
 	}
-	if _, err = newKS.ComputeIntermediateSecret(newGC.Marshal()); err != nil {
-		return nil, fmt.Errorf("new epoch intermediate secret: %w", err)
-	}
-	if _, err = newKS.ComputeEpochSecret(); err != nil {
+	if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
 		return nil, fmt.Errorf("new epoch epoch secret: %w", err)
 	}
 	newEpochSecrets, err := newKS.DeriveEpochSecrets()
@@ -744,6 +739,20 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
+	var psks []schedule.Psk
+	for _, proposal := range stagedCommit.Proposals {
+		if proposal.Type == ProposalTypePreSharedKey && proposal.PreSharedKey != nil {
+			pskID := proposal.PreSharedKey.PskID.ID
+			if pskBytes, ok := g.CachedPsks[string(pskID)]; ok {
+				psks = append(psks, schedule.Psk{
+					Psk:     pskBytes,
+					PskId:   pskID,
+					PskType: schedule.PskTypeExternal,
+				})
+			}
+		}
+	}
+
 	// 1.2 Aplicar UpdatePath si existe
 	if stagedCommit.Commit.Path != nil {
 		senderLeafIdx := treesync.LeafIndex(senderIdx)
@@ -875,18 +884,16 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			commitSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
 		}
 
+		newGCBytes := g.GroupContext.Marshal()
 		newKS := schedule.NewKeySchedule(g.CipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
-		if _, err = newKS.ComputeJoinerSecret(); err != nil {
+		if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
 			return fmt.Errorf("computing joiner secret: %w", err)
 		}
-		if _, err = newKS.ComputePskSecret(nil); err != nil {
+		if _, err = newKS.ComputePskSecret(psks); err != nil {
 			return fmt.Errorf("computing psk secret: %w", err)
 		}
-		if _, err = newKS.ComputeIntermediateSecret(g.GroupContext.Marshal()); err != nil {
-			return fmt.Errorf("computing intermediate secret: %w", err)
-		}
-		if _, err = newKS.ComputeEpochSecret(); err != nil {
+		if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
 			return fmt.Errorf("computing epoch secret: %w", err)
 		}
 		var newEpochSecrets *schedule.EpochSecrets
@@ -1061,21 +1068,31 @@ func NewGroupFromReInit(
 	if myKP == nil || myPriv == nil {
 		return nil, fmt.Errorf("key package/private keys are nil")
 	}
-
-	group, err := NewGroup(
-		NewGroupID(reInit.GroupID),
-		ciphersuite.CipherSuite(reInit.CipherSuite),
-		myKP,
-		myPriv,
-	)
+	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
+	initSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	keySchedule := schedule.NewKeySchedule(cs, initSecret)
+	commitSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	keySchedule.SetCommitSecret(commitSecret)
+	// GroupContext for the new epoch from ReInit is not yet known; use empty bytes.
+	if _, err := keySchedule.ComputeJoinerSecret([]byte{}); err != nil {
+		return nil, err
+	}
+	resumptionPsk := schedule.Psk{
+		PskType: schedule.PskTypeResumption,
+		PskId:   reInit.GroupID,
+		Psk:     resumptionSecret.AsSlice(),
+	}
+	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {
+		return nil, err
+	}
+	group, err := NewGroup(NewGroupID(reInit.GroupID), cs, myKP, myPriv)
 	if err != nil {
 		return nil, err
 	}
-
-	group.KeySchedule = schedule.NewKeySchedule(ciphersuite.CipherSuite(reInit.CipherSuite), resumptionSecret)
 	group.GroupContext.Version = reInit.Version
 	group.GroupContext.Extensions = reInit.Extensions
-
+	group.KeySchedule = keySchedule
+	group.CachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
 	return group, nil
 }
 
@@ -1147,4 +1164,11 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		return fmt.Errorf("membership_key not available")
 	}
 	return pm.VerifyMembershipTag(g.EpochSecrets.MembershipKey)
+}
+
+func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
+	if g.CachedPsks == nil {
+		g.CachedPsks = make(map[string][]byte)
+	}
+	g.CachedPsks[string(pskID)] = pskBytes
 }

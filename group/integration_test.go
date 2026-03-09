@@ -78,7 +78,7 @@ func makeTwoMemberGroups(t *testing.T) (*Group, *Group, *testUser, *testUser) {
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
-	bobGroup, err := JoinFromWelcome(welcome, bob.kp, bob.priv)
+	bobGroup, err := JoinFromWelcome(welcome, bob.kp, bob.priv, nil)
 	if err != nil {
 		t.Fatalf("JoinFromWelcome: %v", err)
 	}

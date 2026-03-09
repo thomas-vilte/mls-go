@@ -53,9 +53,9 @@ func (w *Writer) WriteUint64(v uint64) {
 // WriteVLBytes writes a variable-length byte vector.
 //
 // Format: length<V> || data
-// where length is encoded as ULEB128
+// where length is encoded as MLS varint (RFC 9420 §3.5)
 func (w *Writer) WriteVLBytes(data []byte) {
-	w.WriteULEB128(uint32(len(data)))
+	w.WriteMLSVarint(uint32(len(data)))
 	w.buf = append(w.buf, data...)
 }
 
@@ -64,13 +64,21 @@ func (w *Writer) WriteRaw(data []byte) {
 	w.buf = append(w.buf, data...)
 }
 
-// WriteULEB128 writes an unsigned integer in ULEB128 format.
-func (w *Writer) WriteULEB128(v uint32) {
-	for v >= 0x80 {
-		w.buf = append(w.buf, byte(v)|0x80)
-		v >>= 7
+// WriteMLSVarint writes an unsigned integer in MLS variable-length encoding (RFC 9420 §3.5).
+//
+// Encoding:
+//   - 0–63: 1 byte (high 2 bits = 00)
+//   - 64–16383: 2 bytes (high 2 bits = 01)
+//   - 16384–1073741823: 4 bytes (high 2 bits = 10)
+func (w *Writer) WriteMLSVarint(v uint32) {
+	switch {
+	case v < 64:
+		w.buf = append(w.buf, byte(v))
+	case v < 16384:
+		w.buf = append(w.buf, byte(0x40|(v>>8)), byte(v&0xFF))
+	default:
+		w.buf = append(w.buf, byte(0x80|(v>>24)), byte((v>>16)&0xFF), byte((v>>8)&0xFF), byte(v&0xFF))
 	}
-	w.buf = append(w.buf, byte(v))
 }
 
 // Reader reads TLS presentation language format.
@@ -154,7 +162,7 @@ func (r *Reader) ReadUint64() (uint64, error) {
 
 // ReadVLBytes reads a variable-length byte vector.
 func (r *Reader) ReadVLBytes() ([]byte, error) {
-	length, err := r.ReadULEB128()
+	length, err := r.ReadMLSVarint()
 	if err != nil {
 		return nil, err
 	}
@@ -170,31 +178,36 @@ func (r *Reader) ReadVLBytes() ([]byte, error) {
 	return data, nil
 }
 
-// ReadULEB128 reads an unsigned integer in ULEB128 format.
-func (r *Reader) ReadULEB128() (uint32, error) {
-	var result uint32
-	var shift uint
-
-	for {
-		if r.pos >= len(r.buf) {
-			return 0, errors.New("buffer underrun")
-		}
-
-		b := r.buf[r.pos]
-		r.pos++
-
-		result |= uint32(b&0x7F) << shift
-		if b&0x80 == 0 {
-			break
-		}
-
-		shift += 7
-		if shift >= 32 {
-			return 0, errors.New("ULEB128 overflow")
-		}
+// ReadMLSVarint reads an unsigned integer in MLS variable-length encoding (RFC 9420 §3.5).
+func (r *Reader) ReadMLSVarint() (uint32, error) {
+	if r.pos >= len(r.buf) {
+		return 0, errors.New("buffer underrun")
 	}
 
-	return result, nil
+	b0 := r.buf[r.pos]
+	prefix := b0 >> 6
+
+	switch prefix {
+	case 0: // 1-byte: 0–63
+		r.pos++
+		return uint32(b0 & 0x3F), nil
+	case 1: // 2-byte: 64–16383
+		if r.pos+2 > len(r.buf) {
+			return 0, errors.New("buffer underrun")
+		}
+		v := uint32(b0&0x3F)<<8 | uint32(r.buf[r.pos+1])
+		r.pos += 2
+		return v, nil
+	case 2: // 4-byte: 16384–1073741823
+		if r.pos+4 > len(r.buf) {
+			return 0, errors.New("buffer underrun")
+		}
+		v := uint32(b0&0x3F)<<24 | uint32(r.buf[r.pos+1])<<16 | uint32(r.buf[r.pos+2])<<8 | uint32(r.buf[r.pos+3])
+		r.pos += 4
+		return v, nil
+	default:
+		return 0, fmt.Errorf("invalid MLS varint prefix 0x%02x", b0)
+	}
 }
 
 // ReadBytes reads n bytes.
