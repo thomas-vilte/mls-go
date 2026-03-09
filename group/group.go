@@ -1163,6 +1163,16 @@ func (g *Group) State() GroupState {
 	return g.state
 }
 
+// EpochAuthenticator returns the epoch authenticator bytes (RFC 9420 §8).
+//
+// In this implementation, epoch_authenticator maps to authentication_secret.
+func (g *Group) EpochAuthenticator() []byte {
+	if g == nil || g.EpochSecrets == nil || g.EpochSecrets.AuthenticationSecret == nil {
+		return nil
+	}
+	return append([]byte(nil), g.EpochSecrets.AuthenticationSecret.AsSlice()...)
+}
+
 // NewGroupFromReInit creates a successor group from a ReInit proposal.
 func NewGroupFromReInit(
 	reInit *ReInitProposal,
