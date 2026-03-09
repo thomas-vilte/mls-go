@@ -288,6 +288,25 @@ func (t *RatchetTree) BlankNode(idx NodeIndex) {
 	}
 }
 
+// TruncateTrailingBlanks removes blank or empty leaves from the end of the tree.
+func (t *RatchetTree) TruncateTrailingBlanks() {
+	for t.NumLeaves > 1 {
+		lastLeafIdx := LeafIndex(t.NumLeaves - 1)
+		lastNodeIdx := LeafIndexToNodeIndex(lastLeafIdx)
+		if int(lastNodeIdx) >= len(t.Nodes) {
+			break
+		}
+
+		last := t.Nodes[lastNodeIdx]
+		if last.State == NodeStatePresent {
+			break
+		}
+
+		t.NumLeaves--
+		t.Nodes = t.Nodes[:t.NumLeaves*2-1]
+	}
+}
+
 // TreeHash computes the tree hash (RFC §7.8).
 func (t *RatchetTree) TreeHash() []byte {
 	if t.NumLeaves == 0 {

@@ -568,6 +568,11 @@ func JoinFromWelcome(
 			}
 		}
 	}
+	if ownLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(ownLeafIndex)); ownLeaf != nil && ownLeaf.LeafData != nil {
+		if err := ownLeaf.LeafData.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid own leaf from welcome: %w", err)
+		}
+	}
 
 	// 10. Crear Group
 	group := &Group{

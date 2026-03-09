@@ -237,7 +237,8 @@ func (g *Group) UpdateMember(
 		EncryptionKey: newLeafNode.EncryptionKey,
 		SignatureKey:  newLeafNode.SignatureKey,
 		Credential:    newLeafNode.Credential,
-		Capabilities:  &keypackages.Capabilities{},
+		Capabilities:  treeSyncToKeyPackageCapabilities(newLeafNode.Capabilities),
+		Lifetime:      treeSyncToKeyPackageLifetime(newLeafNode.Lifetime),
 	}
 
 	// Create Update proposal
@@ -353,8 +354,8 @@ func (g *Group) Commit(
 		GroupContext: groupContextBytes,
 	}
 
-	// Firmar el TBS
-	sig, err := sigPrivKey.Sign(ac.MarshalTBS())
+	// Firmar el TBS con label (RFC §6.1 / §5.1.2)
+	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "FramedContentTBS", ac.MarshalTBS())
 	if err != nil {
 		return nil, fmt.Errorf("signing commit: %w", err)
 	}
@@ -524,11 +525,19 @@ func (g *Group) createUpdatePath(
 		return nil, nil, fmt.Errorf("converting signature public key: %w", err)
 	}
 
+	var caps *treesync.LeafNodeCapabilities
+	if ownLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(g.OwnLeafIndex)); ownLeaf != nil && ownLeaf.LeafData != nil {
+		caps = ownLeaf.LeafData.Capabilities
+	}
+	if caps == nil {
+		caps = &treesync.LeafNodeCapabilities{}
+	}
+
 	leafNodeData := &treesync.LeafNodeData{
 		EncryptionKey:  leafSecret.AsSlice(),
 		SignatureKey:   sigPubKeyECDSA,
 		Credential:     g.Members[g.OwnLeafIndex].Credential,
-		Capabilities:   &treesync.LeafNodeCapabilities{},
+		Capabilities:   caps,
 		Lifetime:       &treesync.LeafNodeLifetime{},
 		LeafNodeSource: 3, // commit
 		ParentHash:     tree.Nodes[directPath[0]].ParentHash,
@@ -553,13 +562,18 @@ func (g *Group) createUpdatePath(
 func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
 	case ProposalTypeAdd:
+		caps := toTreeSyncCapabilities(proposal.Add.KeyPackage.LeafNode.Capabilities)
+		if caps == nil {
+			caps = &treesync.LeafNodeCapabilities{}
+		}
 		leafData := treesync.LeafNodeData{
 			EncryptionKey:  proposal.Add.KeyPackage.InitKey,
 			SignatureKey:   proposal.Add.KeyPackage.LeafNode.SignatureKey,
 			Credential:     proposal.Add.KeyPackage.LeafNode.Credential,
-			Capabilities:   &treesync.LeafNodeCapabilities{},
-			Lifetime:       &treesync.LeafNodeLifetime{},
+			Capabilities:   caps,
+			Lifetime:       keyPackageToTreeSyncLifetime(proposal.Add.KeyPackage.LeafNode.Lifetime),
 			LeafNodeSource: 1, // key_package
+			Signature:      append([]byte(nil), proposal.Add.KeyPackage.LeafNode.Signature...),
 		}
 		tree.AddLeaf(leafData)
 	case ProposalTypeRemove:
@@ -567,12 +581,23 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 		tree.BlankNode(nodeIdx)
 	case ProposalTypeUpdate:
 		leafIdx := treesync.LeafIndex(senderIdx)
+		caps := toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities)
+		if caps == nil {
+			caps = &treesync.LeafNodeCapabilities{}
+		}
 		leafData := treesync.LeafNodeData{
 			EncryptionKey: proposal.Update.LeafNode.EncryptionKey,
 			SignatureKey:  proposal.Update.LeafNode.SignatureKey,
 			Credential:    proposal.Update.LeafNode.Credential,
+			Capabilities:  caps,
+			Lifetime:      keyPackageToTreeSyncLifetime(proposal.Update.LeafNode.Lifetime),
+			Signature:     append([]byte(nil), proposal.Update.LeafNode.Signature...),
 		}
 		tree.SetLeaf(leafIdx, leafData)
+	case ProposalTypeGroupContextExtensions:
+		if proposal.GroupContextExtensions != nil {
+			g.GroupContext.Extensions = proposal.GroupContextExtensions.Extensions
+		}
 	}
 	return nil
 }
@@ -615,16 +640,27 @@ func (g *Group) ProcessReceivedCommit(
 		return fmt.Errorf("unmarshaling commit: %w", err)
 	}
 
-	if ac.Content.Sender.Type == framing.SenderTypeMember {
+	switch ac.Content.Sender.Type {
+	case framing.SenderTypeMember:
+		// RFC §12.4.2: verify signature using the sender's leaf key from the tree.
 		senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
 		if senderLeaf == nil || senderLeaf.LeafData == nil || senderLeaf.LeafData.SignatureKey == nil {
 			return fmt.Errorf("missing sender signature key")
 		}
-
 		rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
 		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("commit signature verification failed: %w", err)
+		}
+	case framing.SenderTypeNewMemberCommit:
+		// RFC §12.4.3.2: external committer's key is in the UpdatePath LeafNode.
+		if commit.Path == nil || commit.Path.LeafNode == nil || commit.Path.LeafNode.SignatureKey == nil {
+			return fmt.Errorf("external commit missing leaf node signature key")
+		}
+		rawKey := treesync.MarshalSignatureKey(commit.Path.LeafNode.SignatureKey)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
+			return fmt.Errorf("external commit signature verification failed: %w", err)
 		}
 	}
 
@@ -757,13 +793,15 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	for _, proposal := range stagedCommit.Proposals {
 		if proposal.Type == ProposalTypePreSharedKey && proposal.PreSharedKey != nil {
 			pskID := proposal.PreSharedKey.PskID.ID
-			if pskBytes, ok := g.CachedPsks[string(pskID)]; ok {
-				psks = append(psks, schedule.Psk{
-					Psk:     pskBytes,
-					PskId:   pskID,
-					PskType: schedule.PskTypeExternal,
-				})
+			pskBytes, ok := g.CachedPsks[string(pskID)]
+			if !ok {
+				return fmt.Errorf("missing PSK for proposal: %x", pskID)
 			}
+			psks = append(psks, schedule.Psk{
+				Psk:     pskBytes,
+				PskId:   pskID,
+				PskType: schedule.PskType(proposal.PreSharedKey.PskID.PskType),
+			})
 		}
 	}
 
@@ -978,15 +1016,26 @@ func (g *Group) applyAddProposal(add *AddProposal) error {
 	if err := add.KeyPackage.Validate(); err != nil {
 		return fmt.Errorf("invalid key package: %w", err)
 	}
+	if add.KeyPackage.LeafNode == nil {
+		return fmt.Errorf("invalid key package leaf node")
+	}
 
 	// Insertar en el árbol
 	leafData := treesync.LeafNodeData{
 		EncryptionKey:  add.KeyPackage.InitKey,
 		SignatureKey:   add.KeyPackage.LeafNode.SignatureKey,
 		Credential:     add.KeyPackage.LeafNode.Credential,
-		Capabilities:   &treesync.LeafNodeCapabilities{},
-		Lifetime:       &treesync.LeafNodeLifetime{},
-		LeafNodeSource: 1, // key_package
+		Capabilities:   toTreeSyncCapabilities(add.KeyPackage.LeafNode.Capabilities),
+		Lifetime:       keyPackageToTreeSyncLifetime(add.KeyPackage.LeafNode.Lifetime),
+		LeafNodeSource: 1,
+		Signature:      append([]byte(nil), add.KeyPackage.LeafNode.Signature...),
+	}
+	if leafData.Capabilities == nil {
+		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
+	}
+
+	if err := keyPackageLeafToTreeSync(add.KeyPackage.LeafNode).Validate(); err != nil {
+		return fmt.Errorf("invalid add leaf node: %w", err)
 	}
 
 	leafIdx, _ := g.RatchetTree.AddLeaf(leafData)
@@ -1008,10 +1057,19 @@ func (g *Group) applyUpdateProposal(update *UpdateProposal, senderIdx LeafNodeIn
 	if update == nil || update.LeafNode == nil {
 		return fmt.Errorf("invalid Update proposal")
 	}
+	if err := keyPackageLeafToTreeSync(update.LeafNode).Validate(); err != nil {
+		return fmt.Errorf("invalid update leaf node: %w", err)
+	}
 	leafData := treesync.LeafNodeData{
 		EncryptionKey: update.LeafNode.EncryptionKey,
 		SignatureKey:  update.LeafNode.SignatureKey,
 		Credential:    update.LeafNode.Credential,
+		Capabilities:  toTreeSyncCapabilities(update.LeafNode.Capabilities),
+		Lifetime:      keyPackageToTreeSyncLifetime(update.LeafNode.Lifetime),
+		Signature:     append([]byte(nil), update.LeafNode.Signature...),
+	}
+	if leafData.Capabilities == nil {
+		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
 	}
 	return g.RatchetTree.SetLeaf(treesync.LeafIndex(senderIdx), leafData)
 }
@@ -1025,6 +1083,7 @@ func (g *Group) applyRemoveProposal(remove *RemoveProposal) error {
 	// Blank the node
 	nodeIndex := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(remove.Removed))
 	g.RatchetTree.BlankNode(nodeIndex)
+	g.RatchetTree.TruncateTrailingBlanks()
 
 	// Mark member as inactive
 	if member, ok := g.Members[remove.Removed]; ok {
@@ -1210,4 +1269,74 @@ func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
 		g.CachedPsks = make(map[string][]byte)
 	}
 	g.CachedPsks[string(pskID)] = pskBytes
+}
+
+func keyPackageToTreeSyncLifetime(lifetime *keypackages.Lifetime) *treesync.LeafNodeLifetime {
+	if lifetime == nil {
+		return nil
+	}
+	return &treesync.LeafNodeLifetime{NotBefore: lifetime.NotBefore, NotAfter: lifetime.NotAfter}
+}
+
+func keyPackageExtensionsToTreeSync(exts []keypackages.Extension) [][]byte {
+	if len(exts) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(exts))
+	for i, ext := range exts {
+		out[i] = append([]byte(nil), ext.Data...)
+	}
+	return out
+}
+
+func treeSyncToKeyPackageCapabilities(caps *treesync.LeafNodeCapabilities) *keypackages.Capabilities {
+	if caps == nil {
+		return nil
+	}
+
+	versions := make([]keypackages.ProtocolVersion, len(caps.ProtocolVersions))
+	for i, v := range caps.ProtocolVersions {
+		versions[i] = keypackages.ProtocolVersion(v)
+	}
+
+	cipherSuites := make([]keypackages.CipherSuite, len(caps.CipherSuites))
+	for i, cs := range caps.CipherSuites {
+		cipherSuites[i] = keypackages.CipherSuite(cs)
+	}
+
+	return &keypackages.Capabilities{
+		ProtocolVersions: versions,
+		CipherSuites:     cipherSuites,
+		Extensions:       append([]uint16(nil), caps.Extensions...),
+		Proposals:        append([]uint16(nil), caps.Proposals...),
+		Credentials:      append([]uint16(nil), caps.Credentials...),
+	}
+}
+
+func treeSyncToKeyPackageLifetime(lifetime *treesync.LeafNodeLifetime) *keypackages.Lifetime {
+	if lifetime == nil {
+		return nil
+	}
+	return &keypackages.Lifetime{NotBefore: lifetime.NotBefore, NotAfter: lifetime.NotAfter}
+}
+
+func keyPackageLeafToTreeSync(leaf *keypackages.LeafNode) *treesync.LeafNodeData {
+	if leaf == nil {
+		return nil
+	}
+	leafData := &treesync.LeafNodeData{
+		EncryptionKey:  leaf.EncryptionKey,
+		SignatureKey:   leaf.SignatureKey,
+		Credential:     leaf.Credential,
+		Capabilities:   toTreeSyncCapabilities(leaf.Capabilities),
+		Lifetime:       keyPackageToTreeSyncLifetime(leaf.Lifetime),
+		Extensions:     keyPackageExtensionsToTreeSync(leaf.Extensions),
+		LeafNodeSource: leaf.LeafNodeSource,
+		ParentHash:     append([]byte(nil), leaf.ParentHash...),
+		Signature:      append([]byte(nil), leaf.Signature...),
+	}
+	if leafData.Capabilities == nil {
+		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
+	}
+	return leafData
 }
