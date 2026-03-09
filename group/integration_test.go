@@ -1,12 +1,15 @@
 package group
 
 import (
+	"bytes"
+	"testing"
+
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
 	keypackages "github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
 	"github.com/openmls/go/secrettree"
-	"testing"
+	"github.com/openmls/go/treesync"
 )
 
 type testUser struct {
@@ -51,7 +54,7 @@ func makeTwoMemberGroups(t *testing.T) (*Group, *Group, *testUser, *testUser) {
 	}
 	// Capture key schedule material before merge.
 	initSecret := aliceGroup.EpochSecrets.InitSecret.Clone()
-	sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub)
+	sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -165,5 +168,90 @@ func TestExternalCommitRoundTrip(t *testing.T) {
 	}
 	if charlieGroup.Epoch.AsUint64() != 2 {
 		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.Epoch.AsUint64())
+	}
+}
+
+func TestConfirmationTagPersistence(t *testing.T) {
+	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
+
+	if len(aliceGroup.ConfirmationTag) == 0 {
+		t.Fatalf("alice confirmation tag should not be empty after merge")
+	}
+
+	groupInfo, err := aliceGroup.GetGroupInfo(alice.sigPriv)
+	if err != nil {
+		t.Fatalf("GetGroupInfo: %v", err)
+	}
+
+	if !bytes.Equal(groupInfo.ConfirmationTag, aliceGroup.ConfirmationTag) {
+		t.Fatalf("group info confirmation tag mismatch")
+	}
+
+	charlie := newTestUser(t, "charlie-confirmation")
+	charlieGroup, sc, err := ExternalCommit(
+		groupInfo,
+		aliceGroup.CipherSuite,
+		charlie.sigPriv,
+		charlie.sigPub,
+	)
+	if err != nil {
+		t.Fatalf("ExternalCommit: %v", err)
+	}
+
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit(external): %v", err)
+	}
+
+	if aliceGroup.Epoch.AsUint64() != 2 {
+		t.Fatalf("alice epoch = %d, want 2", aliceGroup.Epoch.AsUint64())
+	}
+	if charlieGroup.Epoch.AsUint64() != 2 {
+		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.Epoch.AsUint64())
+	}
+	if len(aliceGroup.ConfirmationTag) == 0 {
+		t.Fatalf("alice confirmation tag should not be empty in epoch 2")
+	}
+}
+
+func TestExternalCommitReceiver(t *testing.T) {
+	alice := newTestUser(t, "alice-external")
+	charlie := newTestUser(t, "charlie-external")
+
+	groupID, err := NewGroupIDRandom()
+	if err != nil {
+		t.Fatalf("NewGroupIDRandom: %v", err)
+	}
+
+	aliceGroup, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, alice.kp, alice.priv)
+	if err != nil {
+		t.Fatalf("NewGroup(alice): %v", err)
+	}
+
+	groupInfo, err := aliceGroup.GetGroupInfo(alice.sigPriv)
+	if err != nil {
+		t.Fatalf("GetGroupInfo: %v", err)
+	}
+
+	_, staged, err := ExternalCommit(
+		groupInfo,
+		aliceGroup.CipherSuite,
+		charlie.sigPriv,
+		charlie.sigPub,
+	)
+	if err != nil {
+		t.Fatalf("ExternalCommit: %v", err)
+	}
+
+	err = aliceGroup.ProcessReceivedCommit(
+		staged.AuthenticatedContent,
+		treesync.LeafIndex(0),
+		alice.priv.InitKey.Bytes(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessReceivedCommit(external): %v", err)
+	}
+
+	if aliceGroup.Epoch.AsUint64() != 1 {
+		t.Fatalf("alice epoch = %d, want 1", aliceGroup.Epoch.AsUint64())
 	}
 }

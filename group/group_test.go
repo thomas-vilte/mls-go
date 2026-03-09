@@ -164,7 +164,7 @@ func TestGroupCommit(t *testing.T) {
 	// Commit
 	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
-	stagedCommit, err := group.Commit(sigPriv, sigPub)
+	stagedCommit, err := group.Commit(sigPriv, sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestGroupState(t *testing.T) {
 	_, _ = group.AddMember(newKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
-	_, _ = group.Commit(sigPriv, sigPub)
+	_, _ = group.Commit(sigPriv, sigPub, nil)
 
 	if group.State() != StatePendingCommit {
 		t.Errorf("State should be StatePendingCommit, got %d", group.State())
