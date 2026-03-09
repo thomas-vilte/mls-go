@@ -53,95 +53,52 @@ func EncryptWithLabel(
 	return encryptWithLabelInternal(publicKey, encContext, plaintext, ciphersuite)
 }
 
+// EncapToBytes performs DHKEM encapsulation, returning (kem_output, shared_secret).
+// shared_secret is the DHKEM ExtractAndExpand result (RFC 9180 §4.1).
 func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) ([]byte, []byte, error) {
-	pub, err := ecdh.P256().NewPublicKey(recipientPubKeyBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing recipient public key: %w", err)
-	}
-	ephPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	sharedSecret, enc, err := dhkemEncap(recipientPubKeyBytes, cs)
 	if err != nil {
 		return nil, nil, err
 	}
-	sharedSecret, err := ephPriv.ECDH(pub)
-	if err != nil {
-		return nil, nil, err
-	}
-	kemOutput := ephPriv.PublicKey().Bytes()
-	return kemOutput, sharedSecret, nil
+	return enc, sharedSecret, nil
+}
+
+// DecapToBytes performs DHKEM decapsulation, returning the shared_secret.
+// shared_secret is the DHKEM ExtractAndExpand result (RFC 9180 §4.1).
+func DecapToBytes(enc, privKeyBytes []byte, cs CipherSuite) ([]byte, error) {
+	return dhkemDecap(enc, privKeyBytes, cs)
 }
 
 func encryptWithLabelInternal(
 	publicKey []byte,
 	encContext *EncryptContext,
 	plaintext []byte,
-	ciphersuite CipherSuite,
+	cs CipherSuite,
 ) (*HpkeCiphertext, error) {
 	contextBytes := encContext.Marshal()
 
-	// Generate ephemeral key pair
-	privKey, err := ecdh.P256().GenerateKey(rand.Reader)
+	sharedSecret, enc, err := dhkemEncap(publicKey, cs)
 	if err != nil {
-		return nil, fmt.Errorf("generating ephemeral key: %w", err)
+		return nil, fmt.Errorf("DHKEM encap: %w", err)
 	}
 
-	// Parse recipient public key
-	pubKey, err := ecdh.P256().NewPublicKey(publicKey)
-	if err != nil {
-		return nil, fmt.Errorf("parsing public key: %w", err)
-	}
-
-	// DH key agreement
-	sharedSecret, err := privKey.ECDH(pubKey)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH: %w", err)
-	}
-
-	// Extract ephemeral public key
-	kemOutput := privKey.PublicKey().Bytes()
-
-	// Derive keys using HKDF
-	suiteID := hpkeSuiteID(ciphersuite)
-	info := append(suiteID, contextBytes...)
-
-	// secret = Extract(dh_secret, psk)
-	// For Base mode, psk is empty
-	secret := hkdfExtract(sharedSecret, nil)
-
-	// key = Expand(secret, "key", Nk)
-	key, err := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
-	if err != nil {
-		return nil, fmt.Errorf("hkdf expand key: %w", err)
-	}
-
-	// base_nonce = Expand(secret, "base_nonce", Nn)
-	baseNonce, err := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
-	if err != nil {
-		return nil, fmt.Errorf("hkdf expand nonce: %w", err)
-	}
-
-	// seq = 0
-	seq := make([]byte, 12)
-
-	// nonce = base_nonce XOR seq
-	nonce := xorBytes(baseNonce, seq)
-
-	// Encrypt using AES-GCM
-	block, err := aes.NewCipher(key)
+	key, baseNonce, err := hpkeKeyScheduleBase(sharedSecret, contextBytes, cs)
 	if err != nil {
 		return nil, err
 	}
 
+	// seq = 0 → nonce = base_nonce XOR I2OSP(0, Nn) = base_nonce
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
 
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-
-	return &HpkeCiphertext{
-		KEMOutput:  kemOutput,
-		Ciphertext: ciphertext,
-	}, nil
+	ct := aead.Seal(nil, baseNonce, plaintext, nil)
+	return &HpkeCiphertext{KEMOutput: enc, Ciphertext: ct}, nil
 }
 
 // DecryptWithLabel decrypts with HPKE and label (RFC 9420 §5.1.3).
@@ -164,123 +121,168 @@ func decryptWithLabelInternal(
 	privateKey []byte,
 	encContext *EncryptContext,
 	ciphertext *HpkeCiphertext,
-	ciphersuite CipherSuite,
+	cs CipherSuite,
 ) ([]byte, error) {
 	contextBytes := encContext.Marshal()
 
-	// Parse recipient private key
-	privKey, err := ecdh.P256().NewPrivateKey(privateKey)
+	sharedSecret, err := dhkemDecap(ciphertext.KEMOutput, privateKey, cs)
 	if err != nil {
-		return nil, fmt.Errorf("parsing private key: %w", err)
+		return nil, fmt.Errorf("DHKEM decap: %w", err)
 	}
 
-	// Parse ephemeral public key
-	pubKey, err := ecdh.P256().NewPublicKey(ciphertext.KEMOutput)
+	key, baseNonce, err := hpkeKeyScheduleBase(sharedSecret, contextBytes, cs)
 	if err != nil {
-		return nil, fmt.Errorf("parsing ephemeral public key: %w", err)
+		return nil, err
 	}
 
-	// DH key agreement
-	sharedSecret, err := privKey.ECDH(pubKey)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH: %w", err)
-	}
-
-	// Derive keys using HKDF
-	suiteID := hpkeSuiteID(ciphersuite)
-	info := append(suiteID, contextBytes...)
-
-	// secret = Extract(dh_secret, psk)
-	secret := hkdfExtract(sharedSecret, nil)
-
-	// key = Expand(secret, "key", Nk)
-	key, err := hkdfExpand(secret, labeledExpand(info, "key", suiteID), 16)
-	if err != nil {
-		return nil, fmt.Errorf("hkdf expand key: %w", err)
-	}
-
-	// base_nonce = Expand(secret, "base_nonce", Nn)
-	baseNonce, err := hkdfExpand(secret, labeledExpand(info, "base_nonce", suiteID), 12)
-	if err != nil {
-		return nil, fmt.Errorf("hkdf expand nonce: %w", err)
-	}
-
-	// seq = 0
-	seq := make([]byte, 12)
-
-	// nonce = base_nonce XOR seq
-	nonce := xorBytes(baseNonce, seq)
-
-	// Decrypt using AES-GCM
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("%w: creating cipher: %v", ErrAeadDecryption, err)
 	}
-
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, fmt.Errorf("%w: creating GCM: %v", ErrAeadDecryption, err)
 	}
 
-	plaintext, err := aead.Open(nil, nonce, ciphertext.Ciphertext, nil)
+	plaintext, err := aead.Open(nil, baseNonce, ciphertext.Ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAeadDecryption, err)
 	}
-
 	return plaintext, nil
 }
 
-// DeriveKeyPair derives an HPKE key pair from a secret (RFC 9180 §4.1).
+// DeriveKeyPair derives an HPKE key pair from IKM (RFC 9180 §4.1).
 func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
-	// For DHKEM(P-256, HKDF-SHA256)
-	// dkp_prk = Extract("", ikm)
-	dkpPrk := hkdfExtract(ikm, nil)
-
-	// info = labeledExpand("", "dkp_sk", suite_id)
-	suiteID := hpkeSuiteID(cs)
-	info := labeledExpand(nil, "dkp_sk", suiteID)
-
-	// sk = Expand(dkp_prk, info, Nsk)
-	// Nsk = 32 for P-256
-	skBytes, err := hkdfExpand(dkpPrk, info, 32)
+	// DeriveKeyPair uses kem_suite_id (RFC 9180 §4.1)
+	kemID := kemSuiteID(cs)
+	dkpPrk := hpkeLabeledExtract(nil, "dkp_prk", ikm, kemID)
+	skBytes, err := hpkeLabeledExpand(dkpPrk, "sk", nil, 32, kemID)
 	if err != nil {
 		return nil, err
 	}
-
 	return ecdh.P256().NewPrivateKey(skBytes)
 }
 
-func hpkeSuiteID(cs CipherSuite) []byte {
-	// suite_id = "HPKE" || 0x00 || kem_id || kdf_id || aead_id
-	config := cs.HPKEConfig()
-	suiteID := make([]byte, 10)
-	suiteID[0] = 'H'
-	suiteID[1] = 'P'
-	suiteID[2] = 'K'
-	suiteID[3] = 'E'
-	suiteID[4] = 0x00
-	suiteID[5] = 0x00
-	suiteID[6] = byte(config.KEM >> 8)
-	suiteID[7] = byte(config.KEM)
-	suiteID[8] = byte(config.KDF >> 8)
-	suiteID[9] = byte(config.KDF)
-	return suiteID
-}
-
-func labeledExpand(info []byte, label string, suiteID []byte) []byte {
-	// labeled_info = "HPKE-v1" || suite_id || label || 0x00 || info
-	labeledInfo := []byte("HPKE-v1")
-	labeledInfo = append(labeledInfo, suiteID...)
-	labeledInfo = append(labeledInfo, []byte(label)...)
-	labeledInfo = append(labeledInfo, 0x00)
-	labeledInfo = append(labeledInfo, info...)
-	return labeledInfo
-}
-
-func xorBytes(a, b []byte) []byte {
-	result := make([]byte, len(a))
-	for i := range a {
-		result[i] = a[i] ^ b[i]
+// dhkemEncap performs DHKEM(P-256, HKDF-SHA256) encapsulation (RFC 9180 §4.1).
+// Returns (shared_secret, kem_output).
+func dhkemEncap(pkR []byte, cs CipherSuite) (sharedSecret, enc []byte, err error) {
+	skE, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
 	}
-	return result
+	pkRKey, err := ecdh.P256().NewPublicKey(pkR)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing recipient public key: %w", err)
+	}
+	dh, err := skE.ECDH(pkRKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ECDH: %w", err)
+	}
+	enc = skE.PublicKey().Bytes()
+	kemCtx := append(enc, pkR...)
+	sharedSecret, err = dhkemExtractAndExpand(dh, kemCtx, cs)
+	return sharedSecret, enc, err
+}
+
+// dhkemDecap performs DHKEM(P-256, HKDF-SHA256) decapsulation (RFC 9180 §4.1).
+func dhkemDecap(enc, skR []byte, cs CipherSuite) ([]byte, error) {
+	privKey, err := ecdh.P256().NewPrivateKey(skR)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key: %w", err)
+	}
+	pkE, err := ecdh.P256().NewPublicKey(enc)
+	if err != nil {
+		return nil, fmt.Errorf("parsing ephemeral public key: %w", err)
+	}
+	dh, err := privKey.ECDH(pkE)
+	if err != nil {
+		return nil, fmt.Errorf("ECDH: %w", err)
+	}
+	pkR := privKey.PublicKey().Bytes()
+	kemCtx := append(enc, pkR...)
+	return dhkemExtractAndExpand(dh, kemCtx, cs)
+}
+
+// dhkemExtractAndExpand implements ExtractAndExpand for DHKEM(P-256).
+// Uses "eae_prk" label for extract (as in hpke-rs used by OpenMLS test vectors).
+func dhkemExtractAndExpand(dh, kemCtx []byte, cs CipherSuite) ([]byte, error) {
+	kemID := kemSuiteID(cs)
+	prk := hpkeLabeledExtract(nil, "eae_prk", dh, kemID)
+	return hpkeLabeledExpand(prk, "shared_secret", kemCtx, 32, kemID)
+}
+
+// hpkeKeyScheduleBase runs the HPKE KeySchedule for base mode (RFC 9180 §5.1).
+// info is the serialized EncryptContext.
+func hpkeKeyScheduleBase(sharedSecret, info []byte, cs CipherSuite) (key, baseNonce []byte, err error) {
+	suiteID := hpkeSuiteID(cs)
+
+	// ks_context = mode(0x00) || LabeledExtract("", "psk_id_hash", psk_id="") ||
+	//                             LabeledExtract("", "info_hash", info)
+	// RFC 9180 §5.1 — psk_id_hash and info_hash use LabeledExtract, NOT plain Hash()
+	pskIDHash := hpkeLabeledExtract(nil, "psk_id_hash", nil, suiteID)
+	infoHash := hpkeLabeledExtract(nil, "info_hash", info, suiteID)
+
+	ksContext := []byte{0x00} // mode = base
+	ksContext = append(ksContext, pskIDHash...)
+	ksContext = append(ksContext, infoHash...)
+
+	// secret = LabeledExtract(shared_secret, "secret", psk="")
+	secret := hpkeLabeledExtract(sharedSecret, "secret", nil, suiteID)
+
+	// key = LabeledExpand(secret, "key", ks_context, Nk)
+	key, err = hpkeLabeledExpand(secret, "key", ksContext, 16, suiteID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("expand key: %w", err)
+	}
+
+	// base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
+	baseNonce, err = hpkeLabeledExpand(secret, "base_nonce", ksContext, 12, suiteID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("expand nonce: %w", err)
+	}
+
+	return key, baseNonce, nil
+}
+
+// hpkeSuiteID returns the full HPKE suite ID (RFC 9180 §5.1).
+// suite_id = "HPKE" || I2OSP(kem_id, 2) || I2OSP(kdf_id, 2) || I2OSP(aead_id, 2)
+func hpkeSuiteID(cs CipherSuite) []byte {
+	config := cs.HPKEConfig()
+	return []byte{
+		'H', 'P', 'K', 'E',
+		byte(config.KEM >> 8), byte(config.KEM),
+		byte(config.KDF >> 8), byte(config.KDF),
+		byte(config.AEAD >> 8), byte(config.AEAD),
+	}
+}
+
+// kemSuiteID returns the KEM-specific suite ID (RFC 9180 §4.1).
+// kem_suite_id = "KEM" || I2OSP(kem_id, 2)
+func kemSuiteID(cs CipherSuite) []byte {
+	config := cs.HPKEConfig()
+	return []byte{
+		'K', 'E', 'M',
+		byte(config.KEM >> 8), byte(config.KEM),
+	}
+}
+
+// hpkeLabeledExtract computes HKDF-Extract with HPKE v1 labeling (RFC 9180 §4).
+// LabeledExtract(salt, label, ikm) = HKDF-Extract(salt, "HPKE-v1" || suite_id || label || ikm)
+func hpkeLabeledExtract(salt []byte, label string, ikm, suiteID []byte) []byte {
+	labeled := []byte("HPKE-v1")
+	labeled = append(labeled, suiteID...)
+	labeled = append(labeled, []byte(label)...)
+	labeled = append(labeled, ikm...)
+	return hkdfExtract(salt, labeled)
+}
+
+// hpkeLabeledExpand computes HKDF-Expand with HPKE v1 labeling (RFC 9180 §4).
+// LabeledExpand(prk, label, info, L) = HKDF-Expand(prk, I2OSP(L,2) || "HPKE-v1" || suite_id || label || info, L)
+func hpkeLabeledExpand(prk []byte, label string, info []byte, length int, suiteID []byte) ([]byte, error) {
+	labeled := []byte{byte(length >> 8), byte(length)} // I2OSP(L, 2)
+	labeled = append(labeled, []byte("HPKE-v1")...)
+	labeled = append(labeled, suiteID...)
+	labeled = append(labeled, []byte(label)...)
+	labeled = append(labeled, info...)
+	return hkdfExpand(prk, labeled, length)
 }

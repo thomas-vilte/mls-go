@@ -26,8 +26,8 @@ func (a ApplicationData) ContentType() ContentType { return ContentTypeApplicati
 func (p ProposalBody) ContentType() ContentType    { return ContentTypeProposal }
 func (c CommitBody) ContentType() ContentType      { return ContentTypeCommit }
 func (a ApplicationData) marshal(w *tls.Writer)    { w.WriteVLBytes(a.Data) }
-func (p ProposalBody) marshal(w *tls.Writer)       { w.WriteVLBytes(p.Data) }
-func (c CommitBody) marshal(w *tls.Writer)         { w.WriteVLBytes(c.Data) }
+func (p ProposalBody) marshal(w *tls.Writer)       { w.WriteRaw(p.Data) }
+func (c CommitBody) marshal(w *tls.Writer)         { w.WriteRaw(c.Data) }
 
 // FramedContent implementa RFC 9420 §6.1 completo
 // Es el núcleo de todo mensaje MLS
@@ -74,6 +74,10 @@ func UnmarshalFramedContent(data []byte) (*FramedContent, error) {
 // unmarshalFramedContentFromReader parsea un FramedContent desde un reader existente.
 // Utilizado internamente al parsear formatos wire compuestos (PublicMessage).
 func unmarshalFramedContentFromReader(r *tls.Reader) (*FramedContent, error) {
+	return unmarshalFramedContentFromReaderWithMode(r, false)
+}
+
+func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth bool) (*FramedContent, error) {
 	groupID, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading group_id: %w", err)
@@ -94,20 +98,9 @@ func unmarshalFramedContentFromReader(r *tls.Reader) (*FramedContent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading content_type: %w", err)
 	}
-	bodyData, err := r.ReadVLBytes()
+	body, err := readFramedContentBody(r, ContentType(ct), sender.Type, expectsTrailingAuth)
 	if err != nil {
-		return nil, fmt.Errorf("framing: reading body: %w", err)
-	}
-	var body FramedContentBody
-	switch ContentType(ct) {
-	case ContentTypeApplication:
-		body = ApplicationData{Data: bodyData}
-	case ContentTypeProposal:
-		body = ProposalBody{Data: bodyData}
-	case ContentTypeCommit:
-		body = CommitBody{Data: bodyData}
-	default:
-		return nil, fmt.Errorf("%w: %d", ErrInvalidContentType, ct)
+		return nil, err
 	}
 	return &FramedContent{
 		GroupID:           groupID,
