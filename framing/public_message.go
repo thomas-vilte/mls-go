@@ -51,13 +51,23 @@ func NewPublicMessage(
 
 // VerifyMembershipTag verifica el membership_tag utilizando schedule.VerifyMembershipTag.
 func (pm *PublicMessage) VerifyMembershipTag(cs ciphersuite.CipherSuite, membershipKey *ciphersuite.Secret) error {
+	return pm.VerifyMembershipTagWithContext(cs, membershipKey, nil)
+}
+
+// VerifyMembershipTagWithContext verifies membership_tag using the provided GroupContext bytes.
+func (pm *PublicMessage) VerifyMembershipTagWithContext(
+	cs ciphersuite.CipherSuite,
+	membershipKey *ciphersuite.Secret,
+	gc []byte,
+) error {
 	if pm.Content.Sender.Type != SenderTypeMember {
 		return nil // no aplica para remitentes que no son miembros
 	}
 	ac := &AuthenticatedContent{
-		WireFormat: WireFormatPublicMessage,
-		Content:    pm.Content,
-		Auth:       pm.Auth,
+		WireFormat:   WireFormatPublicMessage,
+		Content:      pm.Content,
+		Auth:         pm.Auth,
+		GroupContext: gc,
 	}
 	tbm := marshalAuthenticatedContentTBM(ac)
 	if !schedule.VerifyMembershipTag(cs, membershipKey.AsSlice(), tbm, pm.MembershipTag) {

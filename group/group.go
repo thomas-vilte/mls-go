@@ -985,6 +985,58 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	return nil
 }
 
+func (g *Group) ProcessPublicMessage(pm *framing.PublicMessage) error {
+	if pm == nil {
+		return fmt.Errorf("public message is nil")
+	}
+
+	if err := g.VerifyPublicMessage(pm); err != nil {
+		return err
+	}
+
+	switch pm.Content.ContentType() {
+	case framing.ContentTypeProposal:
+		body, ok := pm.Content.Body.(framing.ProposalBody)
+		if !ok {
+			return fmt.Errorf("invalid proposal body")
+		}
+		proposal, err := UnmarshalProposal(body.Data)
+		if err != nil {
+			return fmt.Errorf("unmarshaling proposal: %w", err)
+		}
+		sender := LeafNodeIndex(pm.Content.Sender.LeafIndex)
+		if pm.Content.Sender.Type == framing.SenderTypeExternal {
+			sender = LeafNodeIndex(g.RatchetTree.NumLeaves + pm.Content.Sender.SenderIndex)
+		}
+		g.StoreProposal(proposal, sender)
+		return nil
+	case framing.ContentTypeCommit:
+		body, ok := pm.Content.Body.(framing.CommitBody)
+		if !ok {
+			return fmt.Errorf("invalid commit body")
+		}
+		commit, err := UnmarshalCommit(body.Data)
+		if err != nil {
+			return fmt.Errorf("unmarshaling commit: %w", err)
+		}
+		// Si hay UpdatePath, este flow necesita la HPKE private key del receptor.
+		if commit.Path != nil {
+			return fmt.Errorf("public commit with update path requires ProcessReceivedCommit")
+		}
+		ac := &framing.AuthenticatedContent{
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pm.Content,
+			Auth:         pm.Auth,
+			GroupContext: g.GroupContext.Marshal(),
+		}
+		return g.ProcessReceivedCommit(ac, treesync.LeafIndex(pm.Content.Sender.LeafIndex), nil)
+	case framing.ContentTypeApplication:
+		return fmt.Errorf("public application messages are not supported")
+	default:
+		return fmt.Errorf("unsupported public message content type: %d", pm.Content.ContentType())
+	}
+}
+
 // applyProposal applies a single proposal to the group state.
 func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
@@ -1305,9 +1357,10 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		rawKey := treesync.MarshalSignatureKey(leaf.LeafData.SignatureKey)
 		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
 		ac := &framing.AuthenticatedContent{
-			WireFormat: framing.WireFormatPublicMessage,
-			Content:    pm.Content,
-			Auth:       pm.Auth,
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pm.Content,
+			Auth:         pm.Auth,
+			GroupContext: g.GroupContext.Marshal(),
 		}
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), pm.Auth.Signature); err != nil {
 			return fmt.Errorf("public message signature verification failed: %w", err)
@@ -1316,14 +1369,51 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		if g.EpochSecrets == nil || g.EpochSecrets.MembershipKey == nil {
 			return fmt.Errorf("membership_key not available")
 		}
-		return pm.VerifyMembershipTag(g.CipherSuite, g.EpochSecrets.MembershipKey)
+		return pm.VerifyMembershipTagWithContext(g.CipherSuite, g.EpochSecrets.MembershipKey, g.GroupContext.Marshal())
 	case framing.SenderTypeExternal:
-		return fmt.Errorf("external public message verification not implemented")
+		// RFC §12.1.8.1: external senders sign with their own key, listed in the
+		// ExternalSenders extension (0x0005) of the GroupContext.
+		sigKey, err := g.getExternalSenderSigningKey(pm.Content.Sender.SenderIndex)
+		if err != nil {
+			return fmt.Errorf("external sender: %w", err)
+		}
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(sigKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		ac := &framing.AuthenticatedContent{
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pm.Content,
+			Auth:         pm.Auth,
+			GroupContext: g.GroupContext.Marshal(),
+		}
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), pm.Auth.Signature); err != nil {
+			return fmt.Errorf("external public message signature verification failed: %w", err)
+		}
+		return nil
 	case framing.SenderTypeNewMemberProposal, framing.SenderTypeNewMemberCommit:
 		return nil
 	default:
 		return nil
 	}
+}
+
+// getExternalSenderSigningKey returns the signature public key for the external
+// sender at senderIndex, as listed in the ExternalSenders extension (0x0005) of
+// the GroupContext (RFC 9420 §12.1.8.1).
+func (g *Group) getExternalSenderSigningKey(senderIndex uint32) ([]byte, error) {
+	const extTypeExternalSenders = 0x0005
+	for _, ext := range g.GroupContext.Extensions {
+		if ext.Type != extTypeExternalSenders {
+			continue
+		}
+		senders, err := parseExternalSenders(ext.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing ExternalSenders extension: %w", err)
+		}
+		if int(senderIndex) >= len(senders) {
+			return nil, fmt.Errorf("sender index %d out of range (have %d external senders)", senderIndex, len(senders))
+		}
+		return senders[senderIndex].SignatureKey, nil
+	}
+	return nil, fmt.Errorf("ExternalSenders extension not found in GroupContext")
 }
 
 func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
