@@ -255,7 +255,13 @@ func ExternalCommit(
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transcript hash input: %w", err)
 	}
-	interimHashForNewMember := make([]byte, cs.HashLength())
+	var interimHashForNewMember []byte
+	if len(groupInfo.ConfirmationTag) > 0 {
+		interimHashForNewMember = schedule.ComputeInterimTranscriptHash(
+			groupContext.ConfirmedTranscriptHash,
+			groupInfo.ConfirmationTag,
+		)
+	}
 	confirmedHash, err := cthi.Compute(cs, interimHashForNewMember)
 	if err != nil {
 		return nil, nil, fmt.Errorf("computing confirmed transcript hash: %w", err)
