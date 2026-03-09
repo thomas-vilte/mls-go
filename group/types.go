@@ -110,21 +110,35 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 
 	switch proposal.Type {
 	case ProposalTypeAdd:
+		pos := r.Position()
 		kpData, err := r.ReadVLBytes()
-		if err != nil {
-			return nil, err
+		if err == nil {
+			kp, parseErr := keypackages.UnmarshalKeyPackage(kpData)
+			if parseErr == nil {
+				proposal.Add = &AddProposal{KeyPackage: kp}
+				break
+			}
 		}
-		kp, err := keypackages.UnmarshalKeyPackage(kpData)
+
+		r.SetPosition(pos)
+		kp, err := keypackages.UnmarshalKeyPackage(r.BytesAfterPosition())
 		if err != nil {
 			return nil, err
 		}
 		proposal.Add = &AddProposal{KeyPackage: kp}
 	case ProposalTypeUpdate:
+		pos := r.Position()
 		lnData, err := r.ReadVLBytes()
-		if err != nil {
-			return nil, err
+		if err == nil {
+			ln, parseErr := keypackages.UnmarshalLeafNode(lnData)
+			if parseErr == nil {
+				proposal.Update = &UpdateProposal{LeafNode: ln}
+				break
+			}
 		}
-		ln, err := keypackages.UnmarshalLeafNode(lnData)
+
+		r.SetPosition(pos)
+		ln, err := keypackages.UnmarshalLeafNode(r.BytesAfterPosition())
 		if err != nil {
 			return nil, err
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/bits"
 	"os"
 	"testing"
 
@@ -46,13 +47,13 @@ func TestTreeOperationsVectors(t *testing.T) {
 
 	runnable := make([]int, 0, len(vectors))
 	for i := range vectors {
-		if ciphersuite.CipherSuite(vectors[i].CipherSuite).IsSupported() {
+		cs := ciphersuite.CipherSuite(vectors[i].CipherSuite)
+		if cs == 1 || cs.IsSupported() {
 			runnable = append(runnable, i)
 		}
 	}
 	if len(runnable) == 0 {
-		t.Log("no runnable vectors found in tree-operations.json")
-		return
+		t.Fatalf("no runnable vectors found in tree-operations.json")
 	}
 
 	for _, idx := range runnable {
@@ -189,8 +190,21 @@ func unmarshalInteropTree(data []byte, cs ciphersuite.CipherSuite) (*treesync.Ra
 		return nil, fmt.Errorf("empty tree")
 	}
 
+	numLeaves := uint32((len(nodes) + 1) / 2)
+	if numLeaves > 1 && (numLeaves&(numLeaves-1)) != 0 {
+		next := uint32(1) << bits.Len32(numLeaves-1)
+		targetNodes := int(next*2 - 1)
+		expanded := make([]treesync.Node, targetNodes)
+		copy(expanded, nodes)
+		for i := len(nodes); i < len(expanded); i++ {
+			expanded[i] = treesync.Node{State: treesync.NodeStateEmpty}
+		}
+		nodes = expanded
+		numLeaves = next
+	}
+
 	return &treesync.RatchetTree{
 		Nodes:     nodes,
-		NumLeaves: uint32((len(nodes) + 1) / 2),
+		NumLeaves: numLeaves,
 	}, nil
 }

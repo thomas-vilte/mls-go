@@ -17,6 +17,7 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/framing"
+	"github.com/openmls/go/internal/tls"
 	keypackages "github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
 	"github.com/openmls/go/secrettree"
@@ -563,16 +564,21 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		leafData := *keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
-		leafData.EncryptionKey = proposal.Add.KeyPackage.InitKey
 		tree.AddLeaf(leafData)
 	case ProposalTypeRemove:
-		nodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(proposal.Remove.Removed))
-		tree.BlankNode(nodeIdx)
+		removedLeaf := treesync.LeafIndex(proposal.Remove.Removed)
+		for _, nodeIdx := range tree.DirectPath(removedLeaf) {
+			tree.BlankNode(nodeIdx)
+		}
 		tree.TruncateTrailingBlanks()
 	case ProposalTypeUpdate:
 		leafIdx := treesync.LeafIndex(senderIdx)
 		leafData := *keyPackageLeafToTreeSync(proposal.Update.LeafNode)
 		tree.SetLeaf(leafIdx, leafData)
+		path := tree.DirectPath(leafIdx)
+		for i := 1; i < len(path); i++ {
+			tree.BlankNode(path[i])
+		}
 	case ProposalTypeGroupContextExtensions:
 		if proposal.GroupContextExtensions != nil {
 			g.GroupContext.Extensions = proposal.GroupContextExtensions.Extensions
@@ -1415,7 +1421,10 @@ func keyPackageExtensionsToTreeSync(exts []keypackages.Extension) [][]byte {
 	}
 	out := make([][]byte, len(exts))
 	for i, ext := range exts {
-		out[i] = append([]byte(nil), ext.Data...)
+		w := tls.NewWriter()
+		w.WriteUint16(ext.Type)
+		w.WriteVLBytes(ext.Data)
+		out[i] = w.Bytes()
 	}
 	return out
 }
@@ -1456,15 +1465,16 @@ func keyPackageLeafToTreeSync(leaf *keypackages.LeafNode) *treesync.LeafNodeData
 		return nil
 	}
 	leafData := &treesync.LeafNodeData{
-		EncryptionKey:  leaf.EncryptionKey,
-		SignatureKey:   leaf.SignatureKey,
-		Credential:     leaf.Credential,
-		Capabilities:   toTreeSyncCapabilities(leaf.Capabilities),
-		Lifetime:       keyPackageToTreeSyncLifetime(leaf.Lifetime),
-		Extensions:     keyPackageExtensionsToTreeSync(leaf.Extensions),
-		LeafNodeSource: leaf.LeafNodeSource,
-		ParentHash:     append([]byte(nil), leaf.ParentHash...),
-		Signature:      append([]byte(nil), leaf.Signature...),
+		EncryptionKey:   leaf.EncryptionKey,
+		SignatureKey:    leaf.SignatureKey,
+		SignatureKeyRaw: append([]byte(nil), leaf.SignatureKeyBytes...),
+		Credential:      leaf.Credential,
+		Capabilities:    toTreeSyncCapabilities(leaf.Capabilities),
+		Lifetime:        keyPackageToTreeSyncLifetime(leaf.Lifetime),
+		Extensions:      keyPackageExtensionsToTreeSync(leaf.Extensions),
+		LeafNodeSource:  leaf.LeafNodeSource,
+		ParentHash:      append([]byte(nil), leaf.ParentHash...),
+		Signature:       append([]byte(nil), leaf.Signature...),
 	}
 	if leafData.Capabilities == nil {
 		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
