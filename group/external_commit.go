@@ -239,18 +239,7 @@ func ExternalCommit(
 	}
 	ac.Auth.Signature = acSig
 
-	// 7. Advance key schedule with init_secret = sharedSecret.
-	initSecret := ciphersuite.NewSecret(sharedSecret)
-	newKS := schedule.NewKeySchedule(cs, initSecret)
-	commitSecret := pathSecrets[len(pathSecrets)-1]
-	newKS.SetCommitSecret(commitSecret)
-	if _, err = newKS.ComputeJoinerSecret(); err != nil {
-		return nil, nil, fmt.Errorf("computing joiner secret: %w", err)
-	}
-	if _, err = newKS.ComputePskSecret(nil); err != nil {
-		return nil, nil, fmt.Errorf("computing psk secret: %w", err)
-	}
-
+	// 7. Compute confirmed transcript hash and new GroupContext before key schedule.
 	cthi, err := framing.NewConfirmedTranscriptHashInput(ac)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transcript hash input: %w", err)
@@ -277,11 +266,21 @@ func ExternalCommit(
 		ConfirmedTranscriptHash: confirmedHash,
 		Extensions:              groupContext.Extensions,
 	}
+	newGCBytes := newGC.Marshal()
 
-	if _, err = newKS.ComputeIntermediateSecret(newGC.Marshal()); err != nil {
-		return nil, nil, fmt.Errorf("computing intermediate secret: %w", err)
+	// Advance key schedule with init_secret = sharedSecret.
+	initSecret := ciphersuite.NewSecret(sharedSecret)
+	newKS := schedule.NewKeySchedule(cs, initSecret)
+	commitSecret := pathSecrets[len(pathSecrets)-1]
+	newKS.SetCommitSecret(commitSecret)
+	if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
+		return nil, nil, fmt.Errorf("computing joiner secret: %w", err)
 	}
-	if _, err = newKS.ComputeEpochSecret(); err != nil {
+	if _, err = newKS.ComputePskSecret(nil); err != nil {
+		return nil, nil, fmt.Errorf("computing psk secret: %w", err)
+	}
+
+	if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
 		return nil, nil, fmt.Errorf("computing epoch secret: %w", err)
 	}
 	epochSecrets, err := newKS.DeriveEpochSecrets()
@@ -311,6 +310,7 @@ func ExternalCommit(
 		InterimTranscriptHash: newInterimHash,
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
+		CachedPsks:            make(map[string][]byte),
 	}
 
 	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves)

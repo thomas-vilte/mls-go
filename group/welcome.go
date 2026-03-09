@@ -66,8 +66,14 @@ func (gs *GroupSecrets) Marshal() []byte {
 		w.WriteUint8(0)
 	}
 
-	// Psks (simplified - empty for now)
-	w.WriteVLBytes([]byte{})
+	pskBuf := tls.NewWriter()
+	for _, psk := range gs.Psks {
+		if psk == nil {
+			continue
+		}
+		pskBuf.WriteVLBytes(psk.AsSlice())
+	}
+	w.WriteVLBytes(pskBuf.Bytes())
 
 	return w.Bytes()
 }
@@ -96,16 +102,25 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 		}
 	}
 
-	// Skip Psks
-	_, err = r.ReadVLBytes()
+	pskData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+
+	pskReader := tls.NewReader(pskData)
+	var psks []*ciphersuite.HashReference
+	for pskReader.Remaining() > 0 {
+		pskID, readErr := pskReader.ReadVLBytes()
+		if readErr != nil {
+			return nil, readErr
+		}
+		psks = append(psks, ciphersuite.NewHashReference(pskID))
 	}
 
 	return &GroupSecrets{
 		JoinerSecret: joinerSecret,
 		PathSecret:   pathSecret,
-		Psks:         nil,
+		Psks:         psks,
 	}, nil
 }
 
@@ -393,6 +408,7 @@ func JoinFromWelcome(
 	welcome *Welcome,
 	myKeyPackage *keypackages.KeyPackage,
 	myPrivateKeys *keypackages.KeyPackagePrivateKeys,
+	externalPsks map[string][]byte,
 ) (*Group, error) {
 	// 1. Calcular mi key_package_ref
 	myRef := keyPackageRef(myKeyPackage)
@@ -426,6 +442,22 @@ func JoinFromWelcome(
 	groupSecrets, err := UnmarshalGroupSecrets(secretsData)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling group secrets: %w", err)
+	}
+
+	var psks []schedule.Psk
+	for _, pskRef := range groupSecrets.Psks {
+		if pskRef == nil {
+			continue
+		}
+		if externalPsks != nil {
+			if pskBytes, ok := externalPsks[string(pskRef.Value)]; ok {
+				psks = append(psks, schedule.Psk{
+					PskType: schedule.PskTypeExternal,
+					PskId:   pskRef.Value,
+					Psk:     pskBytes,
+				})
+			}
+		}
 	}
 
 	// 4. Derivar welcome_secret desde joiner_secret
@@ -504,18 +536,13 @@ func JoinFromWelcome(
 	)
 	keySchedule.SetJoinerSecret(groupSecrets.JoinerSecret)
 
-	_, err = keySchedule.ComputePskSecret(nil)
+	_, err = keySchedule.ComputePskSecret(psks)
 	if err != nil {
 		return nil, fmt.Errorf("computing psk secret: %w", err)
 	}
 
 	groupContextBytes := groupContext.Marshal()
-	_, err = keySchedule.ComputeIntermediateSecret(groupContextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("computing intermediate secret: %w", err)
-	}
-
-	_, err = keySchedule.ComputeEpochSecret()
+	_, err = keySchedule.ComputeEpochSecret(groupContextBytes)
 	if err != nil {
 		return nil, fmt.Errorf("computing epoch secret: %w", err)
 	}
@@ -554,6 +581,7 @@ func JoinFromWelcome(
 		state:       StateOperational,
 		KeySchedule: keySchedule,
 		Proposals:   NewProposalStore(),
+		CachedPsks:  make(map[string][]byte),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/openmls/go/ciphersuite"
+	"github.com/openmls/go/internal/tls"
 )
 
 // PskType identifies the type of Pre-Shared Key.
@@ -22,29 +23,54 @@ type Psk struct {
 	Psk     []byte
 }
 
-// ComputePskInput computes the PSK input for the key schedule.
+// ComputePskInput computes psk_secret according to RFC 9420 §8.4.
 func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	if len(psks) == 0 {
 		return nil, fmt.Errorf("no PSKs provided")
 	}
-
 	out := make([]byte, cs.HashLength())
-	for _, psk := range psks {
+	count := uint16(len(psks))
+	for i, psk := range psks {
 		if len(psk.Psk) == 0 {
-			return nil, fmt.Errorf("empty PSK")
+			return nil, fmt.Errorf("empty PSK at index %d", i)
 		}
-
-		secret := ciphersuite.NewSecret(psk.Psk)
-		derived, err := secret.HKDFExpand([]byte("derived psk"), cs.HashLength())
+		zeroSalt := ciphersuite.ZeroSecret(cs.HashLength())
+		pskSecret := ciphersuite.NewSecret(psk.Psk)
+		extracted, err := zeroSalt.HKDFExtract(pskSecret)
 		if err != nil {
-			return nil, fmt.Errorf("deriving psk input: %w", err)
+			return nil, fmt.Errorf("extracting PSK %d: %w", i, err)
 		}
-
-		derivedBytes := derived.AsSlice()
-		for i := range out {
-			out[i] ^= derivedBytes[i]
+		label := PSKLabel{
+			PskType: psk.PskType,
+			PskID:   psk.PskId,
+			Index:   uint16(i),
+			Count:   count,
+		}
+		pskLabel, err := extracted.KdfExpandLabel("derived psk", label.Marshal(), cs.HashLength())
+		if err != nil {
+			return nil, fmt.Errorf("expanding PSK label %d: %w", i, err)
+		}
+		labelBytes := pskLabel.AsSlice()
+		for j := range out {
+			out[j] ^= labelBytes[j]
 		}
 	}
-
 	return out, nil
+}
+
+// PSKLabel according to RFC 9420 §8.4
+type PSKLabel struct {
+	PskType PskType
+	PskID   []byte
+	Index   uint16
+	Count   uint16
+}
+
+func (l PSKLabel) Marshal() []byte {
+	w := tls.NewWriter()
+	w.WriteUint8(uint8(l.PskType))
+	w.WriteVLBytes(l.PskID)
+	w.WriteUint16(l.Index)
+	w.WriteUint16(l.Count)
+	return w.Bytes()
 }
