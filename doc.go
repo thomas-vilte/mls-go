@@ -58,6 +58,3 @@
 //   - RFC 9420: https://datatracker.ietf.org/doc/html/rfc9420
 //   - OpenMLS (Rust): https://github.com/openmls/openmls
 package openmls
-
-// Version of the library
-const Version = "0.1.0-dev"
