@@ -13,8 +13,8 @@ import (
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/framing"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
-	secrettree "github.com/openmls/go/secrettree"
+	"github.com/openmls/go/keypackages"
+	"github.com/openmls/go/secrettree"
 )
 
 type messageProtectionVector struct {

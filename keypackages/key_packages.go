@@ -47,6 +47,7 @@ type KeyPackage struct {
 	LeafNode        *LeafNode
 	Extensions      []Extension
 	Signature       []byte
+	Raw             []byte // Original wire bytes when unmarshaled
 }
 
 // LeafNode represents an MLS LeafNode (RFC 9420 §11.2.1).
@@ -409,6 +410,7 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 		LeafNode:        leafNode,
 		Extensions:      nil, // Simplified - extensions parsing is complex
 		Signature:       signature,
+		Raw:             append([]byte(nil), data...),
 	}, nil
 }
 
