@@ -187,7 +187,17 @@ func (t *RatchetTree) RightChild(parent NodeIndex) (NodeIndex, error) {
 	}
 
 	l := nodeLevel(uint32(parent))
-	return NodeIndex(uint32(parent) ^ (3 << (l - 1))), nil
+	child := NodeIndex(uint32(parent) ^ (3 << (l - 1)))
+	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
+	for child > maxIdx {
+		level := nodeLevel(uint32(child))
+		if level == 0 {
+			break
+		}
+		child = NodeIndex(uint32(child) ^ (1 << (level - 1)))
+	}
+
+	return child, nil
 }
 
 // DirectPath returns the path from a leaf to root.
@@ -245,7 +255,11 @@ func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
 
 	// Expand tree if needed
 	i := LeafIndex(t.NumLeaves)
-	t.NumLeaves++
+	newNumLeaves := t.NumLeaves + 1
+	if newNumLeaves > 1 && (newNumLeaves&(newNumLeaves-1)) != 0 {
+		newNumLeaves = 1 << bits.Len32(newNumLeaves-1)
+	}
+	t.NumLeaves = newNumLeaves
 	newNodes := make([]Node, t.NumLeaves*2-1)
 	copy(newNodes, t.Nodes)
 	t.Nodes = newNodes
