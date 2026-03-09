@@ -195,9 +195,10 @@ Cuando te pida crear notas para Obsidian o apuntes de estudio, seguí estas inst
 - **Primera persona siempre**: "yo", "me di cuenta", "aca lo entendi asi", "lo que veo en el código es..."
 - **Técnico pero conversacional**: Como explicarle a un compañero del laburo, no a un profesor
 - **Acento argentino natural** (sin forzar):
-  - Voseo: "tenés", "podés", "mirá", "fijate", "sabés", "querés"
+  - Voseo solo si hablás directamente al lector: "si querés ver...", "fijate que..." (usar poco)
+  - Primera persona: "tengo", "veo", "entiendo", "vi", "lei", "me cerró", "no me cierra"
   - Palabras cotidianas: "che", "bueno", "dale", "obvio", "re" (como intensificador: "re importante")
-  - Frases típicas: "me cerró", "no me cierra", "lo veo así", "basicamente", "la verdad", "tipo"
+  - Frases típicas: "lo veo así", "basicamente", "la verdad", "tipo"
 - **Frases naturales** (usar con moderación, no forzar):
   - "aca" para señalar partes específicas: "aca en el `schedule/`...", "aca no me cerraba..."
   - "q e eto?" cuando introducís algo nuevo o confuso
@@ -206,7 +207,7 @@ Cuando te pida crear notas para Obsidian o apuntes de estudio, seguí estas inst
 - **Keywords técnicas en inglés**: middleware, promise, async/await, cipher, key_schedule, epoch, ratchet, struct, opaque, etc. (no traducir)
 - **Sin emojis**: Texto limpio, solo Markdown y ASCII si ayuda
 - **Prohibido sonar a IA**: Nada de "es importante destacar", "cabe mencionar", "en conclusión", "como modelo de lenguaje"
-- **Falta de ortografía intencional**: Escribir como hablo, no como libro. Ejemplos:
+- **Falta de ortografía intencional**: Escribir como hablo, no como libro. Texto imperfecto, como nota real:
   - "q" en vez de "qué" (solo en "q e eto?", "lo q vi", "para q")
   - "aca" en vez de "acá"
   - "basicamente" sin tilde
@@ -216,6 +217,9 @@ Cuando te pida crear notas para Obsidian o apuntes de estudio, seguí estas inst
   - "solo" sin tilde
   - Verbos conjugados informales: "tengo", "veo", "entiendo", "vi", "lei"
   - Apócopes: "pa" en vez de "para" (opcional, usar poco)
+  - **Puntuación relajada**: comas y puntos opcionales, a veces no los pongo
+  - **Palabras incompletas**: "basico", "implement", "valid" (cuando estoy apurado)
+  - **Frases cortadas**: que parezca que escribo rápido, no que edito perfecto
 
 ---
 
@@ -530,7 +534,7 @@ v            v
 8. **Primero para vos, después para otros**: Escribí como si fueras tu propio lector futuro
 9. **Citas siempre**: Si mencionás algo del RFC o del código, linkeá la fuente
 10. **Traducí estructuras**: Cuando haya un struct del RFC, explicalo campo por campo en Go
-11. **Escribí como hablás**: Sin emojis, sin formalismos, con acento argentino natural (voseo: "tenés", "podés", "mirá"; palabras: "che", "bueno", "obvio"; y faltas de ortografía naturales: "aca", "basicamente", "entendi", "q e eto?")
+11. **Escribí como hablás**: Sin emojis, sin formalismos, con acento argentino natural. Primera persona ("tengo", "veo", "entiendo"), palabras cotidianas ("che", "bueno", "obvio"), y faltas de ortografía naturales ("aca", "basicamente", "entendi", "q e eto?"). Voseo solo si hablás directo al lector ("fijate", "si querés ver"), usar poco. Texto imperfecto: puntuación relajada, palabras incompletas ("basico", "implement"), frases cortadas.
 
 ---
 
@@ -544,6 +548,14 @@ v            v
 - **Para estructuras del RFC** (como `FramedContent`, `KeyPackage`, `Commit`), usá la plantilla de traducción RFC → Go
 - **Para flujos** (como key schedule, epoch transitions), usá diagramas ASCII
 - **Siempre citá el RFC** cuando menciones algo del protocolo MLS
+- **Bitácora de problemas**: Cuando encuentres un bug o problema complejo, creá una nota en `bitacora/YYYY-MM-DD-titulo.md` con:
+  - Descripción del problema
+  - Cómo lo descubriste
+  - Solución aplicada (si la hay)
+  - Fix pendiente (si corresponde)
+  - Lecciones aprendidas
+  - Archivos relacionados
+- **Actualizá el índice** de `bitacora/README.md` cuando agregues una nueva entrada
 
 ---
 
@@ -708,4 +720,4 @@ El output debería:
 - ✅ Citas a RFCs y archivos específicos
 - ✅ Traducción RFC → Go para estructuras
 - ✅ Diagrama ASCII si clarifica el flujo
-- ✅ Escribir como hablo: "aca", "basicamente", "entendi", "q e eto?", "lei", "tambien"
+- ✅ Acento argentino natural: primera persona ("tengo", "veo", "entiendo", "me cerró"), palabras cotidianas ("che", "bueno", "obvio"), y faltas de ortografía naturales ("aca", "basicamente", "entendi", "q e eto?", "lei", "tambien"). Voseo solo si hablás directo al lector ("fijate", "si querés ver"), usar poco. Texto imperfecto: puntuación relajada, palabras incompletas ("basico", "implement", "valid"), frases cortadas.
