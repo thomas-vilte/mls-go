@@ -354,6 +354,68 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 	}
 }
 
+// UnmarshalCredentialFromReader deserializes a Credential inline from a TLS reader (RFC 9420 §5.3).
+// Used when Credential is embedded directly in a struct without an outer VL wrapper.
+func UnmarshalCredentialFromReader(r *tls.Reader) (*Credential, error) {
+	credType, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("reading credential_type: %w", err)
+	}
+
+	ct := CredentialType(credType)
+
+	switch ct {
+	case 0: // nil placeholder (type=0 reserved): discard empty body, return nil
+		_, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading nil credential body: %w", err)
+		}
+		return nil, nil
+
+	case BasicCredential:
+		identity, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading identity: %w", err)
+		}
+		return &Credential{
+			CredentialType: ct,
+			Identity:       identity,
+		}, nil
+
+	case X509Credential:
+		certData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading cert_data: %w", err)
+		}
+		var certificates [][]byte
+		for len(certData) > 0 {
+			if len(certData) < 2 {
+				return nil, errors.New("invalid certificate chain encoding")
+			}
+			certLen := binary.BigEndian.Uint16(certData[:2])
+			certData = certData[2:]
+			if len(certData) < int(certLen) {
+				return nil, errors.New("certificate chain truncated")
+			}
+			cert := make([]byte, certLen)
+			copy(cert, certData[:certLen])
+			certificates = append(certificates, cert)
+			certData = certData[certLen:]
+		}
+		return &Credential{
+			CredentialType: ct,
+			Certificates:   certificates,
+		}, nil
+
+	default:
+		_, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading unknown credential data: %w", err)
+		}
+		return &Credential{CredentialType: ct}, nil
+	}
+}
+
 // IdentityString devuelve la identidad como string legible.
 //
 // Para IDs numéricas (8 bytes), devuelve la representación decimal.
