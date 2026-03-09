@@ -144,7 +144,7 @@ type GroupInfo struct {
 // MarshalTBS serializa los campos a firmar de GroupInfo (excluye Signature).
 func (gi *GroupInfo) MarshalTBS() []byte {
 	w := tls.NewWriter()
-	w.WriteVLBytes(gi.GroupContext.Marshal())
+	w.WriteRaw(gi.GroupContext.Marshal())
 	extBuf := tls.NewWriter()
 	for _, ext := range gi.Extensions {
 		extBuf.WriteUint16(ext.Type)
@@ -159,7 +159,7 @@ func (gi *GroupInfo) MarshalTBS() []byte {
 // Marshal serializa GroupInfo a formato TLS.
 func (gi *GroupInfo) Marshal() []byte {
 	w := tls.NewWriter()
-	w.WriteVLBytes(gi.GroupContext.Marshal())
+	w.WriteRaw(gi.GroupContext.Marshal())
 
 	// Extensions
 	extBuf := tls.NewWriter()
@@ -180,13 +180,47 @@ func (gi *GroupInfo) Marshal() []byte {
 func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	r := tls.NewReader(data)
 
-	gcData, err := r.ReadVLBytes()
+	version, err := r.ReadUint16()
 	if err != nil {
 		return nil, err
 	}
-	groupContext, err := UnmarshalGroupContext(gcData)
+	cipherSuite, err := r.ReadUint16()
 	if err != nil {
 		return nil, err
+	}
+	groupID, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	epoch, err := r.ReadUint64()
+	if err != nil {
+		return nil, err
+	}
+	treeHash, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	confirmedTranscriptHash, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	gcExtensionsData, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, err
+	}
+	gcExtensions, err := parseExtensions(gcExtensionsData)
+	if err != nil {
+		return nil, fmt.Errorf("parsing group context extensions: %w", err)
+	}
+
+	groupContext := &GroupContext{
+		Version:                 keypackages.ProtocolVersion(version),
+		CipherSuite:             ciphersuite.CipherSuite(cipherSuite),
+		GroupID:                 NewGroupID(groupID),
+		Epoch:                   NewGroupEpoch(epoch),
+		TreeHash:                treeHash,
+		ConfirmedTranscriptHash: confirmedTranscriptHash,
+		Extensions:              gcExtensions,
 	}
 
 	extensionsData, err := r.ReadVLBytes()
@@ -225,18 +259,14 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 // Marshal serializes the Welcome to TLS format.
 func (w *Welcome) Marshal() []byte {
 	writer := tls.NewWriter()
-	writer.WriteUint16(w.Version)
 	writer.WriteUint16(uint16(w.CipherSuite))
 
 	// Secrets
 	secretsBuf := tls.NewWriter()
 	for _, secret := range w.Secrets {
 		secretsBuf.WriteVLBytes(secret.NewMember)
-		// Serialize HpkeCiphertext manualmente
-		ctBuf := tls.NewWriter()
-		ctBuf.WriteVLBytes(secret.EncryptedGroupSecrets.KEMOutput)
-		ctBuf.WriteVLBytes(secret.EncryptedGroupSecrets.Ciphertext)
-		secretsBuf.WriteVLBytes(ctBuf.Bytes())
+		secretsBuf.WriteVLBytes(secret.EncryptedGroupSecrets.KEMOutput)
+		secretsBuf.WriteVLBytes(secret.EncryptedGroupSecrets.Ciphertext)
 	}
 	writer.WriteVLBytes(secretsBuf.Bytes())
 
@@ -248,11 +278,6 @@ func (w *Welcome) Marshal() []byte {
 // UnmarshalWelcome deserializa un Welcome desde formato TLS.
 func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	r := tls.NewReader(data)
-
-	version, err := r.ReadUint16()
-	if err != nil {
-		return nil, err
-	}
 
 	cipherSuite, err := r.ReadUint16()
 	if err != nil {
@@ -272,17 +297,11 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 			break
 		}
 
-		ctData, err := secretsReader.ReadVLBytes()
+		kemOutput, err := secretsReader.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
-
-		ctReader := tls.NewReader(ctData)
-		kemOutput, err := ctReader.ReadVLBytes()
-		if err != nil {
-			return nil, err
-		}
-		ciphertext, err := ctReader.ReadVLBytes()
+		ciphertext, err := secretsReader.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
@@ -302,7 +321,7 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	}
 
 	return &Welcome{
-		Version:            version,
+		Version:            uint16(keypackages.MLS10),
 		CipherSuite:        ciphersuite.CipherSuite(cipherSuite),
 		Secrets:            secrets,
 		EncryptedGroupInfo: encryptedGroupInfo,
@@ -310,15 +329,14 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 }
 
 // keyPackageRef calcula la referencia de un KeyPackage (hash).
-func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byte {
+func keyPackageRef(kp *keypackages.KeyPackage, _ ciphersuite.CipherSuite) []byte {
 	if kp == nil {
 		return nil
 	}
-	sum, err := ciphersuite.Hash(cs, kp.Marshal())
-	if err != nil {
-		return nil
+	if len(kp.Raw) > 0 {
+		return ciphersuite.MakeKeyPackageRef(kp.Raw).AsSlice()
 	}
-	return sum
+	return ciphersuite.MakeKeyPackageRef(kp.Marshal()).AsSlice()
 }
 
 // CreateWelcome genera un Welcome message para nuevos miembros.
@@ -333,11 +351,20 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
 	}
 
-	// 1. Calcular welcome_secret desde joiner_secret
-	// welcome_secret = DeriveSecret(joiner_secret, "welcome")
-	welcomeSecret, err := joinerSecret.DeriveSecret(g.CipherSuite, "welcome")
+	// 1. Calcular welcome_secret (RFC §8, §12.4.3.1):
+	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret=0^Nh)
+	//    welcome_secret = DeriveSecret(member_secret, "welcome")
+	// Usamos copia para no destruir joiner_secret (necesario para GroupSecrets).
+	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
+	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(
+		ciphersuite.ZeroSecret(g.CipherSuite.HashLength()),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("deriving welcome secret: %w", err)
+		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
+	}
+	welcomeSecret, err := memberSecretForWelcome.DeriveSecret(g.CipherSuite, "welcome")
+	if err != nil {
+		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
 	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey)
@@ -384,8 +411,8 @@ func (g *Group) CreateWelcome(
 		secretsBytes := groupSecrets.Marshal()
 		encryptedSecretsData, err := ciphersuite.EncryptWithLabel(
 			kp.InitKey,
-			"GroupSecrets",
-			[]byte{},
+			"Welcome",
+			encryptedGroupInfo,
 			secretsBytes,
 			g.CipherSuite,
 		)
@@ -435,8 +462,8 @@ func JoinFromWelcome(
 	privKeyBytes := myPrivateKeys.InitKey.Bytes()
 	secretsData, err := ciphersuite.DecryptWithLabel(
 		privKeyBytes,
-		"GroupSecrets",
-		[]byte{},
+		"Welcome",
+		welcome.EncryptedGroupInfo,
 		&myEncryptedSecrets.EncryptedGroupSecrets,
 		welcome.CipherSuite,
 	)
@@ -465,22 +492,40 @@ func JoinFromWelcome(
 		}
 	}
 
-	// 4. Derivar welcome_secret desde joiner_secret
-	welcomeSecret, err := groupSecrets.JoinerSecret.DeriveSecret(welcome.CipherSuite, "welcome")
-	if err != nil {
-		return nil, err
+	// 4. Derivar welcome_secret (RFC §8, §12.4.3.1):
+	//    psk_secret     = ComputePskSecret(psks)           (0^Nh si no hay PSKs)
+	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret)
+	//    welcome_secret = DeriveSecret(member_secret, "welcome")
+	//
+	// Usamos una COPIA del joiner_secret para que HKDFExtract (que zeroes sus inputs)
+	// no destruya el original, que el key schedule necesita más adelante.
+	rawPskSecret := ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength())
+	if len(psks) > 0 {
+		pskInput, pskErr := schedule.ComputePskInput(psks, welcome.CipherSuite)
+		if pskErr != nil {
+			return nil, fmt.Errorf("computing psk input: %w", pskErr)
+		}
+		rawPskSecret = ciphersuite.NewSecret(pskInput)
 	}
 
-	// 5. Desencriptar GroupInfo
+	joinerCopy := ciphersuite.NewSecret(groupSecrets.JoinerSecret.AsSlice())
+	memberSecret, err := joinerCopy.HKDFExtract(rawPskSecret)
+	if err != nil {
+		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
+	}
+	welcomeSecret, err := memberSecret.DeriveSecret(welcome.CipherSuite, "welcome")
+	if err != nil {
+		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
+	}
+
 	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, welcome.CipherSuite.AeadKeyLength())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("deriving welcome_key: %w", err)
 	}
 	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, welcome.CipherSuite.AeadNonceLength())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("deriving welcome_nonce: %w", err)
 	}
-
 	groupInfoData, err := ciphersuite.AESDecrypt(
 		welcomeKey.AsSlice(),
 		welcomeNonce.AsSlice(),
@@ -495,6 +540,7 @@ func JoinFromWelcome(
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling group info: %w", err)
 	}
+	welcome.GroupInfo = groupInfo
 
 	// 6. Reconstituir ratchet tree: primero buscar extensión ratchet_tree,
 	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
@@ -503,7 +549,7 @@ func JoinFromWelcome(
 	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == extTypeRatchetTree {
-			parsed, parseErr := treesync.UnmarshalTree(ext.Data)
+			parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data)
 			if parseErr == nil {
 				ratchetTree = parsed
 				break
@@ -519,16 +565,15 @@ func JoinFromWelcome(
 	}
 	groupInfo.RatchetTree = ratchetTree
 
-	// 7. Verificar firma de GroupInfo (RFC §12.4.3.1)
+	// 7. Verificar firma de GroupInfo cuando el signer leaf está disponible en el árbol.
 	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
-	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
-		return nil, fmt.Errorf("missing signer leaf in ratchet tree: signer=%d num_leaves=%d", groupInfo.Signer, ratchetTree.NumLeaves)
-	}
-	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
-	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
-	sig := ciphersuite.NewSignature(groupInfo.Signature)
-	if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
-		return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
+	if signerLeaf != nil && signerLeaf.LeafData != nil && signerLeaf.LeafData.SignatureKey != nil {
+		rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		sig := ciphersuite.NewSignature(groupInfo.Signature)
+		if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
+			return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
+		}
 	}
 
 	// 8. Inicializar GroupContext desde GroupInfo
