@@ -36,6 +36,7 @@ func ComputeParentHash(
 //	} LeafNodeHashInput;
 func ComputeLeafNodeHash(leafIndex LeafIndex, leafData *LeafNodeData) []byte {
 	buf := tls.NewWriter()
+	buf.WriteUint8(nodeTypeLeaf)
 
 	buf.WriteUint32(uint32(leafIndex))
 

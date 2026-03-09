@@ -149,6 +149,7 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	if err != nil {
 		return nil, err
 	}
+	l.SignatureKeyRaw = append([]byte(nil), sigKeyBytes...)
 	if len(sigKeyBytes) == 65 && sigKeyBytes[0] == 0x04 {
 		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
 		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
@@ -376,6 +377,9 @@ func MarshalSignatureKey(key *ecdsa.PublicKey) []byte {
 }
 
 func (l *LeafNodeData) marshalSignatureKey() []byte {
+	if len(l.SignatureKeyRaw) > 0 {
+		return append([]byte(nil), l.SignatureKeyRaw...)
+	}
 	return MarshalSignatureKey(l.SignatureKey)
 }
 
@@ -407,10 +411,11 @@ func (l *LeafNodeData) clone() *LeafNodeData {
 	}
 
 	result := &LeafNodeData{
-		EncryptionKey:  append([]byte(nil), l.EncryptionKey...),
-		ParentHash:     append([]byte(nil), l.ParentHash...),
-		Signature:      append([]byte(nil), l.Signature...),
-		LeafNodeSource: l.LeafNodeSource,
+		EncryptionKey:   append([]byte(nil), l.EncryptionKey...),
+		ParentHash:      append([]byte(nil), l.ParentHash...),
+		Signature:       append([]byte(nil), l.Signature...),
+		SignatureKeyRaw: append([]byte(nil), l.SignatureKeyRaw...),
+		LeafNodeSource:  l.LeafNodeSource,
 	}
 
 	if l.Credential != nil {
