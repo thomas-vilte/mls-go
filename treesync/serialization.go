@@ -143,3 +143,94 @@ func UnmarshalTree(data []byte) (*RatchetTree, error) {
 		NumLeaves: numLeaves,
 	}, nil
 }
+
+// UnmarshalTreeFromExtension parses the RFC 9420 ratchet_tree extension wire format.
+// Format: nodes<V>, each node encoded as presence(u8) [node_type(u8) fields...].
+func UnmarshalTreeFromExtension(data []byte) (*RatchetTree, error) {
+	r := tls.NewReader(data)
+	nodesData, err := r.ReadVLBytes()
+	if err != nil {
+		return UnmarshalTree(data)
+	}
+	if r.Remaining() != 0 {
+		return UnmarshalTree(data)
+	}
+
+	nodeReader := tls.NewReader(nodesData)
+	nodes := make([]Node, 0)
+	for nodeReader.Remaining() > 0 {
+		present, err := nodeReader.ReadUint8()
+		if err != nil {
+			return nil, fmt.Errorf("reading node presence: %w", err)
+		}
+		if present == 0 {
+			nodes = append(nodes, Node{State: NodeStateEmpty})
+			continue
+		}
+
+		nodeType, err := nodeReader.ReadUint8()
+		if err != nil {
+			return nil, fmt.Errorf("reading node type: %w", err)
+		}
+
+		switch nodeType {
+		case nodeTypeLeaf:
+			leaf, err := UnmarshalLeafNodeDataFromReader(nodeReader)
+			if err != nil {
+				return nil, fmt.Errorf("reading leaf node: %w", err)
+			}
+			nodes = append(nodes, Node{State: NodeStatePresent, LeafData: leaf})
+
+		case nodeTypeParent:
+			encKeyBytes, err := nodeReader.ReadVLBytes()
+			if err != nil {
+				return nil, fmt.Errorf("reading parent encryption key: %w", err)
+			}
+			parentHash, err := nodeReader.ReadVLBytes()
+			if err != nil {
+				return nil, fmt.Errorf("reading parent hash: %w", err)
+			}
+			unmergedData, err := nodeReader.ReadVLBytes()
+			if err != nil {
+				return nil, fmt.Errorf("reading unmerged leaves: %w", err)
+			}
+
+			var encKey *ecdh.PublicKey
+			if len(encKeyBytes) > 0 {
+				encKey, err = ecdh.P256().NewPublicKey(encKeyBytes)
+				if err != nil {
+					return nil, fmt.Errorf("parsing parent encryption key: %w", err)
+				}
+			}
+
+			unmergedReader := tls.NewReader(unmergedData)
+			var unmerged []LeafIndex
+			for unmergedReader.Remaining() > 0 {
+				leafIndex, err := unmergedReader.ReadUint32()
+				if err != nil {
+					return nil, fmt.Errorf("reading unmerged leaf index: %w", err)
+				}
+				unmerged = append(unmerged, LeafIndex(leafIndex))
+			}
+
+			nodes = append(nodes, Node{
+				State:          NodeStatePresent,
+				EncryptionKey:  encKey,
+				ParentHash:     parentHash,
+				UnmergedLeaves: unmerged,
+			})
+
+		default:
+			return nil, fmt.Errorf("unknown node type %d", nodeType)
+		}
+	}
+
+	if len(nodes) == 0 {
+		return UnmarshalTree(data)
+	}
+
+	return &RatchetTree{
+		Nodes:     nodes,
+		NumLeaves: uint32((len(nodes) + 1) / 2),
+	}, nil
+}

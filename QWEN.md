@@ -560,6 +560,22 @@ v            v
   - `2026-03-09-parser-updatepath-rfc.md` — Parser UpdatePath incompatible con RFC
   - `2026-03-09-groupcontext-hpke-vacio.md` — GroupContext vacío en HPKE
   - `2026-03-09-membership-tag-private-message.md` — Membership_tag falso-positivo (resuelto)
+  - `2026-03-09-welcome-outer-vl-bug.md` — Welcome: outer VL extra en HPKECiphertext (en progreso)
+
+---
+
+## 📁 Carpetas de Obsidian
+
+Tu bóveda tiene estas carpetas:
+
+| Carpeta | Para qué sirve | Ejemplo |
+|---------|---------------|---------|
+| `aprendizaje/` | Notas de conceptos que aprendés (teoría, estructuras, flujos) | `treekem-mls-go-estado.md`, `dave-requisitos-rfc9420.md` |
+| `problemas/` | Bugs reales que encontrás y cómo los resolvés | `2026-03-09-membership-tag-private-message.md` |
+| `MLS-Implementation/06-Implementacion/` | Notas técnicas de cómo implementaste cosas | `2026-03-09-framing-membership-tag-fix.md` |
+| `MLS-Implementation/07-Decisiones/` | Decisiones de diseño/arquitectura (ADRs) | `2026-03-09-framing-wire-formats.md` |
+| `MLS-Implementation/02-RFC-9420/` | Notas sobre el RFC 9420 (Commit, Welcome, etc.) | `Commit-UpdatePath.md` |
+| `MLS-Implementation/04-Paquetes/` | Documentación de paquetes específicos | `Ciphersuite.md` |
 
 ---
 
