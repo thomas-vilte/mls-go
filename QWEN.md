@@ -549,13 +549,17 @@ v            v
 - **Para flujos** (como key schedule, epoch transitions), usá diagramas ASCII
 - **Siempre citá el RFC** cuando menciones algo del protocolo MLS
 - **Bitácora de problemas**: Cuando encuentres un bug o problema complejo, creá una nota en `problemas/YYYY-MM-DD-titulo.md` con:
-  - Descripción del problema
-  - Cómo lo descubriste
-  - Solución aplicada (si la hay)
-  - Fix pendiente (si corresponde)
-  - Lecciones aprendidas
-  - Archivos relacionados
-- **Actualizá el índice** de `bitacora/README.md` cuando agregues una nueva entrada
+  - Descripción del problema (qué está mal, por qué es bug)
+  - Cómo lo descubriste (al leer código, correr tests, etc.)
+  - Solución aplicada (si la hay, aunque sea parche local)
+  - Fix pendiente (si hay que cambiar código de producción)
+  - Lecciones aprendidas (qué nos deja esto)
+  - Archivos relacionados (dónde está el código)
+- **Actualizá el índice** de `problemas/README.md` cuando agregues una nueva entrada
+- **Ejemplos de notas existentes**:
+  - `2026-03-09-parser-updatepath-rfc.md` — Parser UpdatePath incompatible con RFC
+  - `2026-03-09-groupcontext-hpke-vacio.md` — GroupContext vacío en HPKE
+  - `2026-03-09-membership-tag-private-message.md` — Membership_tag falso-positivo (resuelto)
 
 ---
 
