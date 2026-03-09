@@ -6,6 +6,7 @@ import (
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
+	"github.com/openmls/go/framing"
 	keypackages "github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
 	"github.com/openmls/go/secrettree"
@@ -253,5 +254,46 @@ func TestExternalCommitReceiver(t *testing.T) {
 
 	if aliceGroup.Epoch.AsUint64() != 1 {
 		t.Fatalf("alice epoch = %d, want 1", aliceGroup.Epoch.AsUint64())
+	}
+}
+
+func TestNewGroupFromReInit(t *testing.T) {
+	alice := newTestUser(t, "alice-reinit")
+	reinit := &ReInitProposal{
+		GroupID:     []byte("new-group-id"),
+		Version:     keypackages.MLS10,
+		CipherSuite: keypackages.MLS128DHKEMP256,
+		Extensions:  nil,
+	}
+	resumptionSecret, err := ciphersuite.NewSecretRandomCS(ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewSecretRandomCS: %v", err)
+	}
+	group, err := NewGroupFromReInit(reinit, resumptionSecret, alice.kp, alice.priv)
+	if err != nil {
+		t.Fatalf("NewGroupFromReInit: %v", err)
+	}
+	if group.Epoch.AsUint64() != 0 {
+		t.Fatalf("epoch = %d, want 0", group.Epoch.AsUint64())
+	}
+	if group.GroupContext == nil {
+		t.Fatal("group context is nil")
+	}
+	if string(group.GroupContext.GroupID.AsSlice()) != string(reinit.GroupID) {
+		t.Fatal("group id mismatch")
+	}
+	if group.KeySchedule == nil {
+		t.Fatal("key schedule is nil")
+	}
+	if _, ok := group.CachedPsks[string(reinit.GroupID)]; !ok {
+		t.Fatal("resumption PSK not cached")
+	}
+}
+
+func TestReceiveMessage_SenderOutOfBounds(t *testing.T) {
+	aliceGroup, _, _, _ := makeTwoMemberGroups(t)
+	_, err := aliceGroup.ReceiveMessage(&framing.PrivateMessage{}, 999)
+	if err == nil {
+		t.Fatal("expected out of bounds error")
 	}
 }
