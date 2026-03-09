@@ -4,8 +4,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
+	"math/big"
 
 	"github.com/openmls/go/internal/tls"
 )
@@ -156,11 +158,26 @@ func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 	// DeriveKeyPair uses kem_suite_id (RFC 9180 §4.1)
 	kemID := kemSuiteID(cs)
 	dkpPrk := hpkeLabeledExtract(nil, "dkp_prk", ikm, kemID)
-	skBytes, err := hpkeLabeledExpand(dkpPrk, "sk", nil, 32, kemID)
-	if err != nil {
-		return nil, err
+	order := elliptic.P256().Params().N
+
+	for ctr := 0; ctr < 256; ctr++ {
+		skBytes, err := hpkeLabeledExpand(dkpPrk, "candidate", []byte{byte(ctr)}, 32, kemID)
+		if err != nil {
+			return nil, err
+		}
+
+		skInt := new(big.Int).SetBytes(skBytes)
+		if skInt.Sign() == 0 || skInt.Cmp(order) >= 0 {
+			continue
+		}
+
+		priv, err := ecdh.P256().NewPrivateKey(skBytes)
+		if err == nil {
+			return priv, nil
+		}
 	}
-	return ecdh.P256().NewPrivateKey(skBytes)
+
+	return nil, fmt.Errorf("derive key pair: no valid private key candidate")
 }
 
 // dhkemEncap performs DHKEM(P-256, HKDF-SHA256) encapsulation (RFC 9180 §4.1).
