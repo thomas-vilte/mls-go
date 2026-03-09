@@ -44,12 +44,21 @@ func TestTreeOperationsVectors(t *testing.T) {
 		t.Fatalf("parse tree-operations.json: %v", err)
 	}
 
-	for i, v := range vectors {
-		t.Run(fmt.Sprintf("vector-%d", i), func(t *testing.T) {
+	runnable := make([]int, 0, len(vectors))
+	for i := range vectors {
+		if ciphersuite.CipherSuite(vectors[i].CipherSuite).IsSupported() {
+			runnable = append(runnable, i)
+		}
+	}
+	if len(runnable) == 0 {
+		t.Log("no runnable vectors found in tree-operations.json")
+		return
+	}
+
+	for _, idx := range runnable {
+		v := vectors[idx]
+		t.Run(fmt.Sprintf("vector-%d", idx), func(t *testing.T) {
 			cs := ciphersuite.CipherSuite(v.CipherSuite)
-			if !cs.IsSupported() {
-				t.Skipf("cipher suite %d not supported", v.CipherSuite)
-			}
 
 			treeBeforeBytes := mustDecodeHexBytes(t, v.TreeBefore)
 			treeAfterBytes := mustDecodeHexBytes(t, v.TreeAfter)
@@ -138,8 +147,14 @@ func unmarshalInteropTree(data []byte, cs ciphersuite.CipherSuite) (*treesync.Ra
 			if len(encKeyBytes) > 0 {
 				var curve ecdh.Curve
 				switch cs {
+				case 1, 3:
+					curve = ecdh.X25519()
 				case ciphersuite.MLS128DHKEMP256:
 					curve = ecdh.P256()
+				case 4:
+					curve = ecdh.P521()
+				case 6:
+					curve = ecdh.P384()
 				default:
 					return nil, fmt.Errorf("unsupported cipher suite %d for HPKE key parsing", cs)
 				}
