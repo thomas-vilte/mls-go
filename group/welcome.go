@@ -320,40 +320,10 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("deriving welcome secret: %w", err)
 	}
 
-	// 2. Construir GroupInfo
-	groupInfo := &GroupInfo{
-		GroupContext:    g.GroupContext,
-		Extensions:      g.GroupContext.Extensions,
-		ConfirmationTag: g.ConfirmationTag,
-		Signer:          g.OwnLeafIndex,
-		RatchetTree:     g.RatchetTree,
-	}
-
-	// Serializar ratchet tree como extensión (RFC §12.4.3.3)
-	const extTypeRatchetTree = 0x0002
-	treeData := g.RatchetTree.MarshalTree()
-	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: extTypeRatchetTree,
-		Data: treeData,
-	})
-
-	const extTypeExternalPub = uint16(0x0001)
-	externalPriv, err := ciphersuite.DeriveKeyPair(g.CipherSuite, g.EpochSecrets.ExternalSecret.AsSlice())
+	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey)
 	if err != nil {
-		return nil, fmt.Errorf("deriving external key pair: %w", err)
+		return nil, err
 	}
-	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: extTypeExternalPub,
-		Data: externalPriv.PublicKey().Bytes(),
-	})
-
-	// Firmar GroupInfo sobre los campos TBS (excluye Signature)
-	groupInfoTBS := groupInfo.MarshalTBS()
-	signature, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", groupInfoTBS)
-	if err != nil {
-		return nil, fmt.Errorf("signing group info: %w", err)
-	}
-	groupInfo.Signature = signature.AsSlice()
 
 	// 3. Encriptar GroupInfo completo (con firma) con welcome_secret (RFC §11.2.2)
 	groupInfoBytes := groupInfo.Marshal()
@@ -493,16 +463,21 @@ func JoinFromWelcome(
 	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
 	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
+	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == extTypeRatchetTree {
 			parsed, parseErr := treesync.UnmarshalTree(ext.Data)
 			if parseErr == nil {
 				ratchetTree = parsed
+				break
 			}
-			break
+			ratchetTreeParseErr = parseErr
 		}
 	}
 	if ratchetTree == nil {
+		if ratchetTreeParseErr != nil {
+			return nil, fmt.Errorf("parsing ratchet_tree extension: %w", ratchetTreeParseErr)
+		}
 		ratchetTree = treesync.NewRatchetTree(1)
 	}
 	groupInfo.RatchetTree = ratchetTree
@@ -510,7 +485,7 @@ func JoinFromWelcome(
 	// 7. Verificar firma de GroupInfo (RFC §12.4.3.1)
 	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
 	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
-		return nil, fmt.Errorf("missing signer leaf in ratchet tree")
+		return nil, fmt.Errorf("missing signer leaf in ratchet tree: signer=%d num_leaves=%d", groupInfo.Signer, ratchetTree.NumLeaves)
 	}
 	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
 	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
@@ -522,23 +497,12 @@ func JoinFromWelcome(
 	// 8. Inicializar GroupContext desde GroupInfo
 	groupContext := groupInfo.GroupContext
 
-	// 9. Avanzar key schedule desde joiner_secret
-	keySchedule := schedule.NewKeySchedule(welcome.CipherSuite, groupSecrets.JoinerSecret)
-
-	if groupSecrets.PathSecret != nil {
-		// Derivar commit_secret desde path_secret
-		pathSecret := ciphersuite.NewSecret(groupSecrets.PathSecret)
-		keySchedule.SetCommitSecret(pathSecret)
-	} else {
-		// Sin UpdatePath, usar zero secret
-		keySchedule.SetCommitSecret(ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()))
-	}
-
-	// Continuar con derivaciones del key schedule
-	_, err = keySchedule.ComputeJoinerSecret()
-	if err != nil {
-		return nil, fmt.Errorf("computing joiner secret: %w", err)
-	}
+	// 9. Avanzar key schedule desde joiner_secret provisto por Welcome.
+	keySchedule := schedule.NewKeySchedule(
+		welcome.CipherSuite,
+		ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()),
+	)
+	keySchedule.SetJoinerSecret(groupSecrets.JoinerSecret)
 
 	_, err = keySchedule.ComputePskSecret(nil)
 	if err != nil {

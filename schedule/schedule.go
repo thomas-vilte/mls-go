@@ -74,6 +74,12 @@ func (ks *KeySchedule) SetCommitSecret(commitSecret *ciphersuite.Secret) {
 	ks.commitSecret = commitSecret
 }
 
+// SetJoinerSecret sets joiner_secret directly.
+// This is used by Welcome recipients that already possess joiner_secret.
+func (ks *KeySchedule) SetJoinerSecret(joinerSecret *ciphersuite.Secret) {
+	ks.joinerSecret = joinerSecret
+}
+
 // ComputeJoinerSecret computes joiner_secret = HKDF.Extract(init_secret, commit_secret).
 func (ks *KeySchedule) ComputeJoinerSecret() (*ciphersuite.Secret, error) {
 	if ks.initSecret == nil {
