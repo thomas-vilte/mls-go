@@ -1025,77 +1025,77 @@ func (g *Group) MemberCount() int {
 	return count
 }
 
-// EncryptApplicationMessage cifre un mensaje de aplicación.
-func (g *Group) EncryptApplicationMessage(plaintext []byte) (*framing.MLSMessage, error) {
-	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not operational")
-	}
-
-	// 1. Preparar FramedContent
-	content := framing.FramedContent{
-		GroupID: g.GroupID.AsSlice(),
-		Epoch:   g.Epoch.AsUint64(),
-		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.OwnLeafIndex)},
-		Body:    framing.ApplicationData{Data: plaintext},
-	}
-
-	// 2. Encriptar usando framing
-	// Necesitamos los secrets del SecretTree
-	_, err := g.SecretTree.LeafForIndex(uint32(g.OwnLeafIndex))
-	if err != nil {
-		return nil, err
-	}
-
-	params := framing.EncryptParams{
-		Content:          content,
-		SenderLeafIndex:  uint32(g.OwnLeafIndex),
-		CipherSuite:      g.CipherSuite,
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
-		SigKey:           nil, // TODO: Necesitamos clave de firma real
-		GroupContext:     g.GroupContext.Marshal(),
-	}
-
-	// Por ahora delegamos a framing.Encrypt (esto retornará un PrivateMessage)
-	privMsg, err := framing.Encrypt(params)
-	if err != nil {
-		return nil, err
-	}
-
-	return framing.NewMLSMessagePrivate(privMsg), nil
-}
-
-// DecryptApplicationMessage descifra un mensaje de aplicación.
-func (g *Group) DecryptApplicationMessage(msg *framing.MLSMessage) ([]byte, error) {
-	// 1. Validar tipo de mensaje
-	privMsg, ok := msg.AsPrivate()
-	if !ok {
-		return nil, fmt.Errorf("not a private message")
-	}
-
-	// 2. Desencriptar usando framing
-	params := framing.DecryptParams{
-		CipherSuite:      g.CipherSuite,
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
-		GroupContext:     g.GroupContext.Marshal(),
-	}
-
-	ac, err := framing.Decrypt(privMsg, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Extraer plaintext
-	appData, ok := ac.Content.Body.(framing.ApplicationData)
-	if !ok {
-		return nil, fmt.Errorf("not application data")
-	}
-
-	return appData.Data, nil
-}
-
 // State returns the current state of the group.
 func (g *Group) State() GroupState {
 	return g.state
+}
+
+// GetGroupInfo returns a signed GroupInfo for the current epoch (RFC 9420 §12.4.3.2).
+func (g *Group) GetGroupInfo(
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+) (*GroupInfo, error) {
+	if g.state != StateOperational {
+		return nil, fmt.Errorf("group not operational")
+	}
+	return g.buildSignedGroupInfo(signerPrivKey)
+}
+
+func (g *Group) buildSignedGroupInfo(
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+) (*GroupInfo, error) {
+	if signerPrivKey == nil {
+		return nil, fmt.Errorf("signer private key is nil")
+	}
+
+	extensions := make([]Extension, len(g.GroupContext.Extensions))
+	copy(extensions, g.GroupContext.Extensions)
+
+	groupInfo := &GroupInfo{
+		GroupContext:    g.GroupContext,
+		Extensions:      extensions,
+		ConfirmationTag: g.ConfirmationTag,
+		Signer:          g.OwnLeafIndex,
+		RatchetTree:     g.RatchetTree,
+	}
+
+	// ratchet_tree 0x0002
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: 0x0002,
+		Data: g.RatchetTree.MarshalTree(),
+	})
+
+	// external_pub 0x0001
+	externalPriv, err := ciphersuite.DeriveKeyPair(
+		g.CipherSuite,
+		g.EpochSecrets.ExternalSecret.AsSlice(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("deriving external key pair: %w", err)
+	}
+	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+		Type: 0x0001,
+		Data: externalPriv.PublicKey().Bytes(),
+	})
+
+	tbs := groupInfo.MarshalTBS()
+	sig, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", tbs)
+	if err != nil {
+		return nil, fmt.Errorf("signing group info: %w", err)
+	}
+	groupInfo.Signature = sig.AsSlice()
+
+	return groupInfo, nil
+}
+
+func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
+	if pm == nil {
+		return fmt.Errorf("public message is nil")
+	}
+	if pm.Content.Sender.Type != framing.SenderTypeMember {
+		return nil
+	}
+	if g.EpochSecrets == nil || g.EpochSecrets.MembershipKey == nil {
+		return fmt.Errorf("membership_key not available")
+	}
+	return pm.VerifyMembershipTag(g.EpochSecrets.MembershipKey)
 }

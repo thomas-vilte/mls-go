@@ -31,7 +31,7 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 
 	// Credential
 	if l.Credential != nil {
-		buf.WriteRaw(l.Credential.Marshal())
+		buf.WriteVLBytes(l.Credential.Marshal())
 	} else {
 		buf.WriteVLBytes([]byte{})
 	}
@@ -124,9 +124,11 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	if err != nil {
 		return nil, err
 	}
-	l.Credential, err = credentials.UnmarshalCredential(credData)
-	if err != nil {
-		return nil, err
+	if len(credData) > 0 {
+		l.Credential, err = credentials.UnmarshalCredential(credData)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// EncryptionKey
