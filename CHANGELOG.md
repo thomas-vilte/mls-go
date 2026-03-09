@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [v0.2.0] - 2026-03-09
+
+[v0.2.0]: https://github.com/thomas-vilte/mls-go/compare/v0.1.0...v0.2.0
+
+En esta versión, nos enfocamos en alcanzar la plena conformidad con el estándar RFC 9420 (Messaging Layer Security). Implementamos operaciones críticas de árbol, mejoramos la interoperabilidad con vectores de prueba oficiales y refinamos la gestión de claves para garantizar una seguridad robusta en las comunicaciones grupales.
+
+### 🔐 Protocolo y Estándares RFC 9420
+
+- Alineamos los componentes DHKEM, KeySchedule y PSK con los estándares RFC 9180 y RFC 9420 para asegurar una compatibilidad total.
+- Integramos funciones hash dinámicas que dependen del ciphersuite seleccionado para una mayor flexibilidad criptográfica.
+- Implementamos el etiquetado de firmas y el filtrado de propuestas siguiendo estrictamente las especificaciones del protocolo.
+
+### 🌳 Operaciones de Árbol y Seguridad
+
+- Añadimos soporte completo para operaciones de árbol, incluyendo hashing de nodos y gestión eficiente de miembros.
+- Implementamos ratchets de árbol de secretos para fortalecer la derivación de claves dentro del grupo.
+- Mejoramos la sincronización del árbol y la validación de datos para mantener la integridad de la estructura jerárquica.
+
+### 📦 Mensajería y Serialización
+
+- Habilitamos el procesamiento y la verificación de mensajes públicos, garantizando la autenticidad de la comunicación.
+- Refactorizamos el sistema de unmarshaling para extensiones y credenciales, optimizando la lectura de datos desde diversos orígenes.
+- Unificamos el manejo de etiquetas de membresía en el framing para simplificar la estructura de los mensajes.
+
+### 🔄 Gestión de Grupos
+
+- Agregamos la capacidad de re-inicializar grupos a partir de una ReInitProposal, facilitando la actualización de parámetros del grupo.
+- Mejoramos la gestión de LeafNode y KeyPackage para alinearlos con el orden de campos requerido por el estándar.
+
+### 🧪 Interoperabilidad y Estabilidad
+
+- Incorporamos una suite extensa de tests de interoperabilidad y vectores de prueba para validar la compatibilidad con implementaciones como OpenMLS.
+- Corregimos errores críticos en la derivación de claves privadas y en la serialización de datos.
+- Aseguramos la generación de claves privadas válidas durante los procesos de derivación.
+
 ## [v0.1.0] - 2026-03-09
 
 [v0.1.0]: https://github.com/thomas-vilte/mls-go/compare/v0.0.0...v0.1.0
