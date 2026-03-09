@@ -7,10 +7,12 @@ package keypackages
 import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/openmls/go/credentials"
@@ -382,14 +384,10 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 		return nil, fmt.Errorf("reading init_key: %w", err)
 	}
 
-	// Parse LeafNode
-	leafNode, err := UnmarshalLeafNode(buf.BytesAfterPosition())
+	leafNode, err := unmarshalLeafNodeFromReader(buf)
 	if err != nil {
 		return nil, fmt.Errorf("parsing LeafNode: %w", err)
 	}
-
-	// Skip LeafNode bytes (simplified - would need proper length calculation)
-	buf.Skip(len(leafNode.Marshal()))
 
 	// Extensions<V>
 	extBytes, err := buf.ReadVLBytes()
@@ -417,51 +415,80 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 // UnmarshalLeafNode parses a LeafNode from TLS format.
 func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
 	buf := tls.NewReader(data)
+	return unmarshalLeafNodeFromReader(buf)
+}
 
+func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 	leafNode := &LeafNode{}
 
-	// encryption_key<V>
 	encKey, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading encryption_key: %w", err)
 	}
 	leafNode.EncryptionKey = encKey
 
-	// signature_key (ECDSA uncompressed point - 65 bytes)
-	sigKeyBytes, err := buf.ReadBytes(65)
+	sigKeyBytes, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading signature_key: %w", err)
 	}
-	// Store as bytes for now (full ECDSA parsing would go here)
-	leafNode.SignatureKeyBytes = sigKeyBytes
+	leafNode.SignatureKeyBytes = append([]byte(nil), sigKeyBytes...)
+	if len(sigKeyBytes) == 65 && sigKeyBytes[0] == 0x04 {
+		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
+		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
+		leafNode.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+	}
 
-	// credential
-	credBytes, err := buf.ReadVLBytes()
+	cred, err := credentials.UnmarshalCredentialFromReader(buf)
 	if err != nil {
 		return nil, fmt.Errorf("reading credential: %w", err)
 	}
-	leafNode.CredentialBytes = credBytes
+	leafNode.Credential = cred
+	if cred != nil {
+		leafNode.CredentialBytes = cred.Marshal()
+	}
 
-	// capabilities
 	caps, err := UnmarshalCapabilities(buf)
 	if err != nil {
 		return nil, fmt.Errorf("reading capabilities: %w", err)
 	}
 	leafNode.Capabilities = caps
 
-	// lifetime
-	lifetime := &LeafNodeLifetime{}
-	lifetime.NotBefore, err = buf.ReadUint64()
+	source, err := buf.ReadUint8()
 	if err != nil {
-		return nil, fmt.Errorf("reading not_before: %w", err)
+		return nil, fmt.Errorf("reading leaf_node_source: %w", err)
 	}
-	lifetime.NotAfter, err = buf.ReadUint64()
-	if err != nil {
-		return nil, fmt.Errorf("reading not_after: %w", err)
-	}
-	leafNode.Lifetime = lifetime
+	leafNode.LeafNodeSource = source
 
-	// extensions<V>
+	switch leafNode.LeafNodeSource {
+	case 1:
+		notBefore, err := buf.ReadUint64()
+		if err != nil {
+			return nil, fmt.Errorf("reading not_before: %w", err)
+		}
+		notAfter, err := buf.ReadUint64()
+		if err != nil {
+			return nil, fmt.Errorf("reading not_after: %w", err)
+		}
+		leafNode.Lifetime = &LeafNodeLifetime{NotBefore: notBefore, NotAfter: notAfter}
+	case 2:
+	case 3:
+		parentHash, err := buf.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading parent_hash: %w", err)
+		}
+		leafNode.ParentHash = parentHash
+	default:
+		notBefore, err := buf.ReadUint64()
+		if err != nil {
+			return nil, fmt.Errorf("reading not_before: %w", err)
+		}
+		notAfter, err := buf.ReadUint64()
+		if err != nil {
+			return nil, fmt.Errorf("reading not_after: %w", err)
+		}
+		leafNode.Lifetime = &LeafNodeLifetime{NotBefore: notBefore, NotAfter: notAfter}
+	}
+
 	extBytes, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
@@ -484,21 +511,6 @@ func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
 		}
 	}
 
-	// leaf_node_source
-	source, err := buf.ReadUint8()
-	if err != nil {
-		return nil, fmt.Errorf("reading leaf_node_source: %w", err)
-	}
-	leafNode.LeafNodeSource = source
-
-	// parent_hash<V>
-	parentHash, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, fmt.Errorf("reading parent_hash: %w", err)
-	}
-	leafNode.ParentHash = parentHash
-
-	// signature<V>
 	signature, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading signature: %w", err)

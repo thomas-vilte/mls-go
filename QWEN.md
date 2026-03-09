@@ -194,14 +194,28 @@ Cuando te pida crear notas para Obsidian o apuntes de estudio, seguí estas inst
 
 - **Primera persona siempre**: "yo", "me di cuenta", "aca lo entendi asi", "lo que veo en el código es..."
 - **Técnico pero conversacional**: Como explicarle a un compañero del laburo, no a un profesor
+- **Acento argentino natural** (sin forzar):
+  - Voseo: "tenés", "podés", "mirá", "fijate", "sabés", "querés"
+  - Palabras cotidianas: "che", "bueno", "dale", "obvio", "re" (como intensificador: "re importante")
+  - Frases típicas: "me cerró", "no me cierra", "lo veo así", "basicamente", "la verdad", "tipo"
 - **Frases naturales** (usar con moderación, no forzar):
-    - "aca" para señalar partes específicas: "aca en el `schedule/`...", "aca no me cerraba..."
-    - "q e eto?" cuando introducís algo nuevo o confuso
-    - "basicamente" para cerrar explicaciones densas
-    - "aca no entendi un choto" solo cuando algo realmente confunde
+  - "aca" para señalar partes específicas: "aca en el `schedule/`...", "aca no me cerraba..."
+  - "q e eto?" cuando introducís algo nuevo o confuso
+  - "basicamente" para cerrar explicaciones densas
+  - "aca no entendi un choto" solo cuando algo realmente confunde
 - **Keywords técnicas en inglés**: middleware, promise, async/await, cipher, key_schedule, epoch, ratchet, struct, opaque, etc. (no traducir)
 - **Sin emojis**: Texto limpio, solo Markdown y ASCII si ayuda
 - **Prohibido sonar a IA**: Nada de "es importante destacar", "cabe mencionar", "en conclusión", "como modelo de lenguaje"
+- **Falta de ortografía intencional**: Escribir como hablo, no como libro. Ejemplos:
+  - "q" en vez de "qué" (solo en "q e eto?", "lo q vi", "para q")
+  - "aca" en vez de "acá"
+  - "basicamente" sin tilde
+  - "entendi" sin tilde
+  - "tambien" sin tilde
+  - "mas" sin tilde (cuando es cantidad)
+  - "solo" sin tilde
+  - Verbos conjugados informales: "tengo", "veo", "entiendo", "vi", "lei"
+  - Apócopes: "pa" en vez de "para" (opcional, usar poco)
 
 ---
 
@@ -516,6 +530,7 @@ v            v
 8. **Primero para vos, después para otros**: Escribí como si fueras tu propio lector futuro
 9. **Citas siempre**: Si mencionás algo del RFC o del código, linkeá la fuente
 10. **Traducí estructuras**: Cuando haya un struct del RFC, explicalo campo por campo en Go
+11. **Escribí como hablás**: Sin emojis, sin formalismos, con acento argentino natural (voseo: "tenés", "podés", "mirá"; palabras: "che", "bueno", "obvio"; y faltas de ortografía naturales: "aca", "basicamente", "entendi", "q e eto?")
 
 ---
 
@@ -693,3 +708,4 @@ El output debería:
 - ✅ Citas a RFCs y archivos específicos
 - ✅ Traducción RFC → Go para estructuras
 - ✅ Diagrama ASCII si clarifica el flujo
+- ✅ Escribir como hablo: "aca", "basicamente", "entendi", "q e eto?", "lei", "tambien"
