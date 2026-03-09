@@ -38,10 +38,11 @@ type PreSharedKeyProposal struct {
 	PskID   PskID
 }
 
-// PskID represents a pre-shared key identifier
+// PskID represents a pre-shared key identifier (RFC 9420 §8.4 PreSharedKeyID)
 type PskID struct {
 	PskType uint8
 	ID      []byte
+	Nonce   []byte
 }
 
 // ReInitProposal - RFC 9420 §12.1.5
