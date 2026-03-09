@@ -5,7 +5,9 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
@@ -308,6 +310,16 @@ func (l *LeafNodeData) Validate() error {
 
 	if l.Capabilities == nil {
 		return errors.New("capabilities is nil")
+	}
+
+	if l.Lifetime != nil && (l.Lifetime.NotBefore != 0 || l.Lifetime.NotAfter != 0) {
+		now := uint64(time.Now().Unix())
+		if now < l.Lifetime.NotBefore {
+			return fmt.Errorf("leaf node not yet valid (not_before=%d, now=%d)", l.Lifetime.NotBefore, now)
+		}
+		if l.Lifetime.NotAfter != 0 && now > l.Lifetime.NotAfter {
+			return fmt.Errorf("leaf node expired (not_after=%d, now=%d)", l.Lifetime.NotAfter, now)
+		}
 	}
 
 	if len(l.Signature) == 0 {

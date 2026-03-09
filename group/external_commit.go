@@ -236,7 +236,7 @@ func ExternalCommit(
 		GroupContext: groupContext.Marshal(),
 	}
 
-	acSig, err := sigPrivKey.Sign(ac.MarshalTBS())
+	acSig, err := ciphersuite.SignWithLabel(sigPrivKey, "FramedContentTBS", ac.MarshalTBS())
 	if err != nil {
 		return nil, nil, fmt.Errorf("signing external commit: %w", err)
 	}
