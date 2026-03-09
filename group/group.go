@@ -915,12 +915,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 					return fmt.Errorf("deriving external key pair: %w", deriveErr)
 				}
 
-				kemPub, parseErr := ecdh.P256().NewPublicKey(proposal.ExternalInit.KemOutput)
-				if parseErr != nil {
-					return fmt.Errorf("parsing kem_output: %w", parseErr)
-				}
-
-				sharedSecretBytes, decapErr := externalPriv.ECDH(kemPub)
+				sharedSecretBytes, decapErr := ciphersuite.DecapToBytes(
+					proposal.ExternalInit.KemOutput,
+					externalPriv.Bytes(),
+					g.CipherSuite,
+				)
 				if decapErr != nil {
 					return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
 				}
