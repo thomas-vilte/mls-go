@@ -548,7 +548,7 @@ v            v
 - **Para estructuras del RFC** (como `FramedContent`, `KeyPackage`, `Commit`), usá la plantilla de traducción RFC → Go
 - **Para flujos** (como key schedule, epoch transitions), usá diagramas ASCII
 - **Siempre citá el RFC** cuando menciones algo del protocolo MLS
-- **Bitácora de problemas**: Cuando encuentres un bug o problema complejo, creá una nota en `bitacora/YYYY-MM-DD-titulo.md` con:
+- **Bitácora de problemas**: Cuando encuentres un bug o problema complejo, creá una nota en `problemas/YYYY-MM-DD-titulo.md` con:
   - Descripción del problema
   - Cómo lo descubriste
   - Solución aplicada (si la hay)
