@@ -13,7 +13,7 @@ func TestSecretTreeCreation(t *testing.T) {
 		t.Fatalf("NewSecretRandom failed: %v", err)
 	}
 
-	tree, err := NewTree(encSecret, 4)
+	tree, err := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("NewTree failed: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestSecretTreeCreation(t *testing.T) {
 
 func TestLeafForIndex(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	// Valid leaf index
 	leaf, err := tree.LeafForIndex(0)
@@ -51,7 +51,7 @@ func TestLeafForIndex(t *testing.T) {
 
 func TestEncryptionKeyAndNonce(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	leaf, _ := tree.LeafForIndex(0)
 
@@ -85,7 +85,7 @@ func TestEncryptionKeyAndNonce(t *testing.T) {
 
 func TestEncryptDecrypt(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	leaf, _ := tree.LeafForIndex(0)
 
@@ -110,7 +110,7 @@ func TestEncryptDecrypt(t *testing.T) {
 
 func TestGenerationIncrement(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	if tree.Generation() != 0 {
 		t.Errorf("Initial generation should be 0")
@@ -130,7 +130,7 @@ func TestGenerationIncrement(t *testing.T) {
 
 func TestDeleteLeaf(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	leaf, _ := tree.LeafForIndex(0)
 
@@ -152,7 +152,7 @@ func TestDeleteLeaf(t *testing.T) {
 
 func TestSequenceNumber(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 
 	leaf, _ := tree.LeafForIndex(0)
 
@@ -179,12 +179,12 @@ func TestSequenceNumber(t *testing.T) {
 
 func TestMarshalUnmarshal(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 4)
+	tree, _ := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
 	tree.IncrementGeneration()
 
 	data := tree.Marshal()
 
-	tree2, err := Unmarshal(data)
+	tree2, err := Unmarshal(data, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestMarshalUnmarshal(t *testing.T) {
 
 func TestMultipleLeaves(t *testing.T) {
 	encSecret, _ := ciphersuite.NewSecretRandom(32)
-	tree, _ := NewTree(encSecret, 8)
+	tree, _ := NewTree(encSecret, 8, ciphersuite.MLS128DHKEMP256)
 
 	// Create leaves and verify they have different secrets
 	leaf0, _ := tree.LeafForIndex(0)

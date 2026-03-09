@@ -318,7 +318,7 @@ func ExternalCommit(
 		CachedPsks:            make(map[string][]byte),
 	}
 
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves)
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initializing secret tree: %w", err)
 	}

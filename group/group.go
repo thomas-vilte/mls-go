@@ -164,7 +164,7 @@ func NewGroup(
 	}
 
 	// Initialize secret tree
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, 1)
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, 1, group.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
@@ -969,7 +969,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	g.KeySchedule = schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
 
 	// Update secret tree for new epoch
-	g.SecretTree, err = secrettree.NewTree(g.EpochSecrets.EncryptionSecret, g.RatchetTree.NumLeaves)
+	g.SecretTree, err = secrettree.NewTree(g.EpochSecrets.EncryptionSecret, g.RatchetTree.NumLeaves, g.CipherSuite)
 	if err != nil {
 		return fmt.Errorf("updating secret tree: %w", err)
 	}
@@ -1271,7 +1271,7 @@ func NewGroupFromReInit(
 		CachedPsks:            make(map[string][]byte),
 	}
 	group.CachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves)
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, cs)
 	if err != nil {
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}

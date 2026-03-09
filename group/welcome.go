@@ -608,7 +608,7 @@ func JoinFromWelcome(
 		}
 	}
 
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves)
+	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, welcome.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
