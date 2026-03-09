@@ -72,6 +72,42 @@ func (ac *AuthenticatedContent) MarshalTBS() []byte {
 	return w.Bytes()
 }
 
+// UnmarshalAuthenticatedContent parsea un AuthenticatedContent desde su representación wire:
+// WireFormat (uint16) + FramedContent + FramedContentAuthData (signature [+ confirmation_tag for commit]).
+// Este formato es el usado en transcript-hashes test vectors.
+func UnmarshalAuthenticatedContent(data []byte) (*AuthenticatedContent, error) {
+	r := tls.NewReader(data)
+
+	wf, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("framing: reading wire_format: %w", err)
+	}
+
+	content, err := unmarshalFramedContentFromReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("framing: reading framed_content: %w", err)
+	}
+
+	sigBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("framing: reading signature: %w", err)
+	}
+	auth := FramedContentAuthData{Signature: ciphersuite.NewSignature(sigBytes)}
+
+	if content.ContentType() == ContentTypeCommit && r.Remaining() > 0 {
+		tag, err := r.ReadVLBytes()
+		if err == nil && len(tag) > 0 {
+			auth.ConfirmationTag = tag
+		}
+	}
+
+	return &AuthenticatedContent{
+		WireFormat: WireFormat(wf),
+		Content:    *content,
+		Auth:       auth,
+	}, nil
+}
+
 // PrivateMessageContent es el plaintext que se encripta con AEAD en un PrivateMessage (RFC 9420 §6.3).
 //
 //	struct {
