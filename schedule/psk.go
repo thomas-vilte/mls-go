@@ -19,9 +19,13 @@ const (
 // Psk represents a Pre-Shared Key.
 type Psk struct {
 	PskType  PskType
-	PskId    []byte
+	PskId    []byte // external PSK: psk_id
 	PskNonce []byte
 	Psk      []byte
+	// Resumption PSK fields (PskType == PskTypeResumption)
+	Usage      uint8
+	PskGroupID []byte
+	PskEpoch   uint64
 }
 
 // ComputePskInput computes psk_secret according to RFC 9420 §8.4 / OpenMLS draft-19:
@@ -47,11 +51,14 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 			return nil, fmt.Errorf("extracting PSK %d: %w", i, err)
 		}
 		label := PSKLabel{
-			PskType:  psk.PskType,
-			PskID:    psk.PskId,
-			PskNonce: psk.PskNonce,
-			Index:    uint16(i),
-			Count:    count,
+			PskType:    psk.PskType,
+			PskID:      psk.PskId,
+			PskNonce:   psk.PskNonce,
+			Index:      uint16(i),
+			Count:      count,
+			Usage:      psk.Usage,
+			PskGroupID: psk.PskGroupID,
+			PskEpoch:   psk.PskEpoch,
 		}
 		pskInput, err := extracted.KdfExpandLabel("derived psk", label.Marshal(), cs.HashLength())
 		if err != nil {
@@ -67,19 +74,35 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 }
 
 // PSKLabel according to RFC 9420 §8.4
+//
+//	struct {
+//	    PreSharedKeyID id;
+//	    uint16 index;
+//	    uint16 count;
+//	} PSKLabel;
 type PSKLabel struct {
 	PskType  PskType
-	PskID    []byte
+	PskID    []byte // external: psk_id
 	PskNonce []byte
 	Index    uint16
 	Count    uint16
+	// Resumption fields (PskType == PskTypeResumption)
+	Usage      uint8
+	PskGroupID []byte
+	PskEpoch   uint64
 }
 
 func (l PSKLabel) Marshal() []byte {
 	w := tls.NewWriter()
-	// PreSharedKeyID inline: type + id + nonce
+	// PreSharedKeyID inline encoding per RFC 9420 §8.4
 	w.WriteUint8(uint8(l.PskType))
-	w.WriteVLBytes(l.PskID)
+	if l.PskType == PskTypeResumption {
+		w.WriteUint8(l.Usage)
+		w.WriteVLBytes(l.PskGroupID)
+		w.WriteUint64(l.PskEpoch)
+	} else {
+		w.WriteVLBytes(l.PskID)
+	}
 	w.WriteVLBytes(l.PskNonce)
 	// PSKLabel outer fields
 	w.WriteUint16(l.Index)

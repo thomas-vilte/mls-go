@@ -3,7 +3,7 @@ package group
 import (
 	"errors"
 
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/openmls/go/keypackages"
 )
 
 // All proposal types according to RFC 9420 §12.1
@@ -38,11 +38,30 @@ type PreSharedKeyProposal struct {
 	PskID   PskID
 }
 
-// PskID represents a pre-shared key identifier (RFC 9420 §8.4 PreSharedKeyID)
+// PskID represents a pre-shared key identifier (RFC 9420 §8.4 PreSharedKeyID).
+//
+//	struct {
+//	    PSKType psktype;
+//	    select (PreSharedKeyID.psktype) {
+//	        case external:
+//	            opaque psk_id<V>;
+//	        case resumption:
+//	            ResumptionPSKUsage usage;
+//	            opaque psk_group_id<V>;
+//	            uint64 psk_epoch;
+//	    };
+//	    opaque psk_nonce<V>;
+//	} PreSharedKeyID;
 type PskID struct {
 	PskType uint8
-	ID      []byte
-	Nonce   []byte
+	// External PSK fields (PskType == 1)
+	ID []byte
+	// Resumption PSK fields (PskType == 2)
+	Usage      uint8
+	PskGroupID []byte
+	PskEpoch   uint64
+	// Common
+	Nonce []byte
 }
 
 // ReInitProposal - RFC 9420 §12.1.5
