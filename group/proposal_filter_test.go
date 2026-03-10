@@ -326,6 +326,16 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	group.applyAddProposal(&AddProposal{KeyPackage: newKp})
 	group.Members[1] = &Member{LeafIndex: 1, Active: true}
 
+	// Generar un tercer key package con claves únicas para el Add proposal.
+	thirdCred, _, err := credentials.GenerateCredentialWithKey([]byte("third"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey (third) failed: %v", err)
+	}
+	thirdKp, _, err := keypackages.Generate(thirdCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage (third) failed: %v", err)
+	}
+
 	pf := NewProposalFilter(
 		group.GroupContext,
 		group.OwnLeafIndex,
@@ -334,12 +344,13 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 		group.RatchetTree,
 	)
 
-	// Proposals válidos
+	// Proposals válidos: Add con key package nuevo (claves únicas), Remove + Update de miembro existente.
 	proposals := []FilteredProposal{
-		{Proposal: NewAddProposal(kp), Sender: 0},
+		{Proposal: NewAddProposal(thirdKp), Sender: 0},
 		{Proposal: NewRemoveProposal(1), Sender: 0},
 		{Proposal: NewUpdateProposal(kp.LeafNode), Sender: 1},
 	}
+	_ = kp
 
 	// Crear capabilities que soporten todos los tipos de proposals
 	allCapabilities := &keypackages.Capabilities{
@@ -367,4 +378,123 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 				i, expected, filtered[i].Proposal.Type)
 		}
 	}
+}
+
+func TestProposalFilter_KeyUniqueness(t *testing.T) {
+	group, existingKp := createTestGroup(t)
+	_ = existingKp
+
+	mkPF := func() *ProposalFilter {
+		return NewProposalFilter(
+			group.GroupContext,
+			group.OwnLeafIndex,
+			group.Members,
+			group.CipherSuite,
+			group.RatchetTree,
+		)
+	}
+	caps := &keypackages.Capabilities{
+		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
+		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
+		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7},
+	}
+
+	genKP := func(name string) *keypackages.KeyPackage {
+		cred, _, err := credentials.GenerateCredentialWithKey([]byte(name))
+		if err != nil {
+			t.Fatalf("GenerateCredentialWithKey(%q): %v", name, err)
+		}
+		kp, _, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+		if err != nil {
+			t.Fatalf("Generate(%q): %v", name, err)
+		}
+		return kp
+	}
+
+	t.Run("duplicate_encryption_key_between_adds", func(t *testing.T) {
+		kp1 := genKP("a")
+		kp2 := genKP("b")
+		// Forzar mismo encryption key
+		kp2.LeafNode.EncryptionKey = kp1.LeafNode.EncryptionKey
+		proposals := []FilteredProposal{
+			{Proposal: NewAddProposal(kp1), Sender: 0},
+			{Proposal: NewAddProposal(kp2), Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err == nil {
+			t.Fatal("expected error for duplicate encryption key, got nil")
+		}
+	})
+
+	t.Run("encryption_key_already_in_tree", func(t *testing.T) {
+		// existingKp tiene la encryption key que ya está en el árbol (leaf 0).
+		proposals := []FilteredProposal{
+			{Proposal: NewAddProposal(existingKp), Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err == nil {
+			t.Fatal("expected error for encryption key already in tree, got nil")
+		}
+	})
+
+	t.Run("duplicate_init_key_between_adds", func(t *testing.T) {
+		kp1 := genKP("c")
+		kp2 := genKP("d")
+		// Forzar mismo init key
+		kp2.InitKey = kp1.InitKey
+		proposals := []FilteredProposal{
+			{Proposal: NewAddProposal(kp1), Sender: 0},
+			{Proposal: NewAddProposal(kp2), Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err == nil {
+			t.Fatal("expected error for duplicate init key, got nil")
+		}
+	})
+
+	t.Run("duplicate_signature_key_between_adds", func(t *testing.T) {
+		kp1 := genKP("e")
+		kp2 := genKP("f")
+		// Forzar mismo signature key
+		kp2.LeafNode.SignatureKey = kp1.LeafNode.SignatureKey
+		kp2.LeafNode.SignatureKeyBytes = kp1.LeafNode.SignatureKeyBytes
+		proposals := []FilteredProposal{
+			{Proposal: NewAddProposal(kp1), Sender: 0},
+			{Proposal: NewAddProposal(kp2), Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err == nil {
+			t.Fatal("expected error for duplicate signature key, got nil")
+		}
+	})
+
+	t.Run("duplicate_psk_id", func(t *testing.T) {
+		psk := &Proposal{
+			Type: ProposalTypePreSharedKey,
+			PreSharedKey: &PreSharedKeyProposal{
+				PskID: PskID{ID: []byte("my-psk"), PskType: 1},
+			},
+		}
+		proposals := []FilteredProposal{
+			{Proposal: psk, Sender: 0},
+			{Proposal: psk, Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err == nil {
+			t.Fatal("expected error for duplicate PSK ID, got nil")
+		}
+	})
+
+	t.Run("unique_keys_valid", func(t *testing.T) {
+		kp1 := genKP("g")
+		kp2 := genKP("h")
+		proposals := []FilteredProposal{
+			{Proposal: NewAddProposal(kp1), Sender: 0},
+			{Proposal: NewAddProposal(kp2), Sender: 0},
+		}
+		_, err := mkPF().FilterAndValidateProposals(proposals, caps)
+		if err != nil {
+			t.Fatalf("expected success for unique keys, got: %v", err)
+		}
+	})
 }
