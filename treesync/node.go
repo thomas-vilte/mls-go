@@ -344,15 +344,30 @@ func (l *LeafNodeData) Validate() error {
 	return nil
 }
 
+// MarshalTBSWithContext serializes the LeafNodeTBS including group context.
+// RFC §7.2: for source=update and source=commit, the TBS appends group_id<V> + leaf_index(u32).
+func (l *LeafNodeData) MarshalTBSWithContext(groupID []byte, leafIndex uint32) []byte {
+	buf := tls.NewWriter()
+	buf.WriteRaw(l.MarshalTBS())
+	if l.LeafNodeSource == 2 || l.LeafNodeSource == 3 { // update or commit
+		buf.WriteVLBytes(groupID)
+		buf.WriteUint32(leafIndex)
+	}
+	return buf.Bytes()
+}
+
 // Verify verifies the LeafNode signature (RFC 9420 §7.3).
+// For source=key_package only (no group context needed).
 func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
-	tbs := l.MarshalTBS()
+	return l.VerifyWithContext(cs, nil, 0)
+}
 
-	// Convert *ecdsa.PublicKey to OpenMlsSignaturePublicKey
-	// We need the raw bytes. For P-256, it's 0x04 || X || Y
+// VerifyWithContext verifies the LeafNode signature including group context.
+// RFC §7.2: for source=update and source=commit, the TBS appends group_id<V> + leaf_index(u32).
+func (l *LeafNodeData) VerifyWithContext(cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
+	tbs := l.MarshalTBSWithContext(groupID, leafIndex)
 	pubKeyBytes := l.marshalSignatureKey()
-	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, ciphersuite.SignatureScheme(0)) // scheme not strictly needed for raw verify
-
+	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, ciphersuite.SignatureScheme(0))
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 

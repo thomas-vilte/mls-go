@@ -168,7 +168,8 @@ func ExternalCommit(
 	}
 
 	ownLeafData.ParentHash = treeDiff.Nodes[directPath[0]].ParentHash
-	tbs := ownLeafData.MarshalTBS()
+	// source=commit; TBS incluye group_id + leaf_index per RFC §7.2.
+	tbs := ownLeafData.MarshalTBSWithContext(groupInfo.GroupContext.GroupID.AsSlice(), uint32(ownLeafIdx))
 	sig2, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("re-signing leaf node with parent hash: %w", err)
