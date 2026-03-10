@@ -1,10 +1,86 @@
 package group
 
 import (
+	"fmt"
+
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/internal/tls"
 	keypackages "github.com/openmls/go/keypackages"
 )
+
+// readProposalInlineBody reads one proposal body from r based on the given type.
+// Add and Update first try VL-wrapped (our format), then fall back to inline RFC format.
+// Returns nil on success with r advanced past all proposal bytes.
+func readProposalInlineBody(r *tls.Reader, propType ProposalType) error {
+	switch propType {
+	case ProposalTypeAdd:
+		pos := r.Position()
+		if kpData, err := r.ReadVLBytes(); err == nil {
+			if _, kpErr := keypackages.UnmarshalKeyPackage(kpData); kpErr == nil {
+				return nil
+			}
+		}
+		r.SetPosition(pos)
+		if _, err := keypackages.UnmarshalKeyPackageFromReader(r); err != nil {
+			return err
+		}
+		return nil
+	case ProposalTypeUpdate:
+		pos := r.Position()
+		if lnData, err := r.ReadVLBytes(); err == nil {
+			if _, lnErr := keypackages.UnmarshalLeafNode(lnData); lnErr == nil {
+				return nil
+			}
+		}
+		r.SetPosition(pos)
+		if _, err := keypackages.UnmarshalLeafNodeFromReader(r); err != nil {
+			return err
+		}
+		return nil
+	case ProposalTypeRemove:
+		_, err := r.ReadUint32()
+		return err
+	case ProposalTypePreSharedKey:
+		pskType, err := r.ReadUint8()
+		if err != nil {
+			return err
+		}
+		if pskType == 2 { // resumption
+			if _, err := r.ReadUint8(); err != nil { // usage
+				return err
+			}
+			if _, err := r.ReadVLBytes(); err != nil { // psk_group_id
+				return err
+			}
+			if _, err := r.ReadUint64(); err != nil { // psk_epoch
+				return err
+			}
+		} else { // external (1) or branch (3)
+			if _, err := r.ReadVLBytes(); err != nil { // psk_id
+				return err
+			}
+		}
+		_, err = r.ReadVLBytes() // psk_nonce
+		return err
+	case ProposalTypeReInit:
+		if _, err := r.ReadVLBytes(); err != nil {
+			return err
+		}
+		if _, err := r.ReadUint16(); err != nil {
+			return err
+		}
+		if _, err := r.ReadUint16(); err != nil {
+			return err
+		}
+		_, err := r.ReadVLBytes()
+		return err
+	case ProposalTypeExternalInit, ProposalTypeGroupContextExtensions:
+		_, err := r.ReadVLBytes()
+		return err
+	default:
+		return fmt.Errorf("unknown proposal type: %d", propType)
+	}
+}
 
 // ProposalType identifies the type of proposal.
 type ProposalType uint16
@@ -62,7 +138,13 @@ func ProposalMarshal(p *Proposal) []byte {
 	case ProposalTypePreSharedKey:
 		if p.PreSharedKey != nil {
 			w.WriteUint8(p.PreSharedKey.PskType)
-			w.WriteVLBytes(p.PreSharedKey.PskID.ID)
+			if p.PreSharedKey.PskType == 2 { // resumption
+				w.WriteUint8(p.PreSharedKey.PskID.Usage)
+				w.WriteVLBytes(p.PreSharedKey.PskID.PskGroupID)
+				w.WriteUint64(p.PreSharedKey.PskID.PskEpoch)
+			} else { // external (1) or branch (3)
+				w.WriteVLBytes(p.PreSharedKey.PskID.ID)
+			}
 			w.WriteVLBytes(p.PreSharedKey.PskID.Nonce)
 		}
 	case ProposalTypeReInit:
@@ -154,17 +236,38 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		if err != nil {
 			return nil, err
 		}
-		pskID, err := r.ReadVLBytes()
-		if err != nil {
-			return nil, err
+		pskID := PskID{PskType: pskType}
+		if pskType == 2 { // resumption
+			usage, err := r.ReadUint8()
+			if err != nil {
+				return nil, err
+			}
+			pskGroupID, err := r.ReadVLBytes()
+			if err != nil {
+				return nil, err
+			}
+			pskEpoch, err := r.ReadUint64()
+			if err != nil {
+				return nil, err
+			}
+			pskID.Usage = usage
+			pskID.PskGroupID = pskGroupID
+			pskID.PskEpoch = pskEpoch
+		} else { // external (1) or branch (3)
+			id, err := r.ReadVLBytes()
+			if err != nil {
+				return nil, err
+			}
+			pskID.ID = id
 		}
 		pskNonce, err := r.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
+		pskID.Nonce = pskNonce
 		proposal.PreSharedKey = &PreSharedKeyProposal{
 			PskType: pskType,
-			PskID:   PskID{PskType: pskType, ID: pskID, Nonce: pskNonce},
+			PskID:   pskID,
 		}
 	case ProposalTypeReInit:
 		groupID, err := r.ReadVLBytes()
@@ -206,6 +309,17 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 	}
 
 	return proposal, nil
+}
+
+// unmarshalProposalFromReader reads exactly one proposal from r, advancing r's
+// position past all proposal bytes. Returns an error if the proposal is malformed.
+// Used by decodeProposalBodyLength (body scanner) and parseProposalOrRefsCanonical.
+func unmarshalProposalFromReader(r *tls.Reader) error {
+	propType, err := r.ReadUint16()
+	if err != nil {
+		return err
+	}
+	return readProposalInlineBody(r, ProposalType(propType))
 }
 
 // GroupState represents the operational state of a group.

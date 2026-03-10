@@ -38,6 +38,16 @@ type AuthenticatedContent struct {
 	GroupContext []byte // serialized GroupContext; required for PublicMessage TBS; nil for PrivateMessage
 }
 
+// Marshal serializes AuthenticatedContent for ProposalRef computation (RFC 9420 §12.4).
+// wire_format || FramedContent || FramedContentAuthData
+func (ac *AuthenticatedContent) Marshal() []byte {
+	w := tls.NewWriter()
+	w.WriteUint16(uint16(ac.WireFormat))
+	w.WriteRaw(ac.Content.Marshal())
+	w.WriteRaw(ac.Auth.Marshal(ac.Content.ContentType()))
+	return w.Bytes()
+}
+
 // MarshalForSigning serializa wire_format + content (utilizado en membership tag TBM).
 func (ac *AuthenticatedContent) MarshalForSigning() []byte {
 	w := tls.NewWriter()
