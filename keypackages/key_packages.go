@@ -241,59 +241,24 @@ func (kp *KeyPackage) Marshal() []byte {
 	return buf.Bytes()
 }
 
-// Marshal serializes the LeafNode to TLS format.
+// Marshal serializes the LeafNode to TLS format (RFC 9420 §7.2): TBS fields + signature.
 func (ln *LeafNode) Marshal() []byte {
 	buf := tls.NewWriter()
-
-	buf.WriteVLBytes(ln.EncryptionKey)
-
-	// Serialize ECDSA public key as uncompressed point (0x04 || X || Y)
-	pubKeyBytes := append([]byte{0x04}, ln.SignatureKey.X.Bytes()...)
-	pubKeyBytes = append(pubKeyBytes, ln.SignatureKey.Y.Bytes()...)
-	buf.WriteRaw(pubKeyBytes)
-
-	buf.WriteRaw(ln.Credential.Marshal())
-
-	// Capabilities
-	if ln.Capabilities != nil {
-		ln.Capabilities.Marshal(buf)
-	} else {
-		buf.WriteUint8(0) // Empty capabilities
-	}
-
-	// Lifetime
-	if ln.Lifetime != nil {
-		buf.WriteUint64(ln.Lifetime.NotBefore)
-		buf.WriteUint64(ln.Lifetime.NotAfter)
-	} else {
-		buf.WriteUint64(0)
-		buf.WriteUint64(0)
-	}
-
-	// Extensions<V>
-	extBuf := tls.NewWriter()
-	for _, ext := range ln.Extensions {
-		extBuf.WriteUint16(ext.Type)
-		extBuf.WriteVLBytes(ext.Data)
-	}
-	buf.WriteVLBytes(extBuf.Bytes())
-
-	buf.WriteUint8(ln.LeafNodeSource)
-	buf.WriteVLBytes(ln.ParentHash)
-
+	buf.WriteRaw(ln.marshalTBS())
+	buf.WriteVLBytes(ln.Signature)
 	return buf.Bytes()
 }
 
-// marshalTBS serializes the LeafNode TBS.
+// marshalTBS serializes the LeafNode TBS (RFC 9420 §7.2).
+// Field order: encryption_key, signature_key, credential, capabilities,
+// leaf_node_source, conditional(lifetime|parent_hash), extensions.
 func (ln *LeafNode) marshalTBS() []byte {
 	buf := tls.NewWriter()
 
 	buf.WriteVLBytes(ln.EncryptionKey)
 
-	// Serialize ECDSA public key as uncompressed point (0x04 || X || Y)
-	pubKeyBytes := append([]byte{0x04}, ln.SignatureKey.X.Bytes()...)
-	pubKeyBytes = append(pubKeyBytes, ln.SignatureKey.Y.Bytes()...)
-	buf.WriteRaw(pubKeyBytes)
+	// Serialize ECDSA public key as uncompressed point (0x04 || X || Y), VL-prefixed (RFC 9420 §7.2).
+	buf.WriteVLBytes(marshalP256PublicKey(ln.SignatureKey))
 
 	buf.WriteRaw(ln.Credential.Marshal())
 
@@ -303,23 +268,38 @@ func (ln *LeafNode) marshalTBS() []byte {
 		buf.WriteUint8(0)
 	}
 
-	if ln.Lifetime != nil {
-		buf.WriteUint64(ln.Lifetime.NotBefore)
-		buf.WriteUint64(ln.Lifetime.NotAfter)
-	} else {
-		buf.WriteUint64(0)
-		buf.WriteUint64(0)
+	// RFC 9420 §7.2: leaf_node_source comes BEFORE the conditional data and extensions.
+	buf.WriteUint8(ln.LeafNodeSource)
+
+	switch ln.LeafNodeSource {
+	case 1: // key_package: Lifetime { not_before, not_after }
+		if ln.Lifetime != nil {
+			buf.WriteUint64(ln.Lifetime.NotBefore)
+			buf.WriteUint64(ln.Lifetime.NotAfter)
+		} else {
+			buf.WriteUint64(0)
+			buf.WriteUint64(0)
+		}
+	case 2: // update: nothing
+	case 3: // commit: parent_hash<V>
+		buf.WriteVLBytes(ln.ParentHash)
+	default: // treat as key_package
+		if ln.Lifetime != nil {
+			buf.WriteUint64(ln.Lifetime.NotBefore)
+			buf.WriteUint64(ln.Lifetime.NotAfter)
+		} else {
+			buf.WriteUint64(0)
+			buf.WriteUint64(0)
+		}
 	}
 
+	// Extensions come AFTER the conditional source data.
 	extBuf := tls.NewWriter()
 	for _, ext := range ln.Extensions {
 		extBuf.WriteUint16(ext.Type)
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
-
-	buf.WriteUint8(ln.LeafNodeSource)
-	buf.WriteVLBytes(ln.ParentHash)
 
 	return buf.Bytes()
 }
@@ -736,4 +716,23 @@ func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
 	}
 
 	return nil
+}
+
+// marshalP256PublicKey serializes a P-256 public key as an uncompressed point
+// (0x04 || X || Y) with X and Y padded to 32 bytes each (RFC 9420 §7.2).
+func marshalP256PublicKey(key *ecdsa.PublicKey) []byte {
+	if key == nil {
+		return nil
+	}
+	xBytes := key.X.Bytes()
+	yBytes := key.Y.Bytes()
+	paddedX := make([]byte, 32)
+	paddedY := make([]byte, 32)
+	copy(paddedX[32-len(xBytes):], xBytes)
+	copy(paddedY[32-len(yBytes):], yBytes)
+	out := make([]byte, 65)
+	out[0] = 0x04
+	copy(out[1:33], paddedX)
+	copy(out[33:65], paddedY)
+	return out
 }

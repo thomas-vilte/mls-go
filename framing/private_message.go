@@ -99,6 +99,7 @@ func (sd *MLSSenderData) Marshal() []byte {
 
 // EncryptParams contiene los parámetros requeridos para cifrar un PrivateMessage.
 type EncryptParams struct {
+	AuthContent      *AuthenticatedContent // Si se provee, ignora Content, SigKey, GroupContext y ConfirmationTag
 	Content          FramedContent
 	SenderLeafIndex  uint32
 	CipherSuite      ciphersuite.CipherSuite // para derivar ciphertext_sample y tamaños
@@ -107,6 +108,9 @@ type EncryptParams struct {
 	SecretTree       *secret_tree.Tree       // deriva content key/nonce
 	SigKey           *ciphersuite.SignaturePrivateKey
 	GroupContext     []byte // serialized GroupContext; incluido en FramedContentTBS
+	// ConfirmationTag es obligatorio para commits (ContentTypeCommit).
+	// RFC §6.1: el tag se incluye en PrivateMessageContent cifrado.
+	ConfirmationTag []byte
 }
 
 // Encrypt implementa RFC 9420 §6.3.1.
@@ -122,22 +126,28 @@ type EncryptParams struct {
 //  8. Derivar sender_data key/nonce con KdfExpandLabel(sender_data_secret, "key"/"nonce", ciphertext_sample)
 //  9. Encriptar MLSSenderData con SenderDataAAD
 func Encrypt(p EncryptParams) (*PrivateMessage, error) {
-	// 1. Validar sender type (RFC §6.3: PrivateMessage sender MUST be member)
-	if p.Content.Sender.Type != SenderTypeMember {
-		return nil, fmt.Errorf("%w: PrivateMessage sender must be member", ErrInvalidMessage)
-	}
+	var ac *AuthenticatedContent
+	if p.AuthContent != nil {
+		ac = p.AuthContent
+		if ac.Content.Sender.Type != SenderTypeMember {
+			return nil, fmt.Errorf("%w: PrivateMessage sender must be member", ErrInvalidMessage)
+		}
+	} else {
+		if p.Content.Sender.Type != SenderTypeMember {
+			return nil, fmt.Errorf("%w: PrivateMessage sender must be member", ErrInvalidMessage)
+		}
 
-	// 2. Firmar FramedContent
-	ac := &AuthenticatedContent{
-		WireFormat:   WireFormatPrivateMessage,
-		Content:      p.Content,
-		GroupContext: p.GroupContext,
+		ac = &AuthenticatedContent{
+			WireFormat:   WireFormatPrivateMessage,
+			Content:      p.Content,
+			GroupContext: p.GroupContext,
+		}
+		sig, err := ciphersuite.SignWithLabel(p.SigKey, "FramedContentTBS", ac.MarshalTBS())
+		if err != nil {
+			return nil, fmt.Errorf("framing: signing content: %w", err)
+		}
+		ac.Auth = FramedContentAuthData{Signature: sig, ConfirmationTag: p.ConfirmationTag}
 	}
-	sig, err := ciphersuite.SignWithLabel(p.SigKey, "FramedContentTBS", ac.MarshalTBS())
-	if err != nil {
-		return nil, fmt.Errorf("framing: signing content: %w", err)
-	}
-	ac.Auth = FramedContentAuthData{Signature: sig}
 
 	// 3. Generar ReuseGuard aleatorio
 	rg, err := ciphersuite.NewReuseGuardRandom()
@@ -154,7 +164,7 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 
 	var contentKey []byte
 	var contentNonce []byte
-	if p.Content.ContentType() == ContentTypeApplication {
+	if ac.Content.ContentType() == ContentTypeApplication {
 		contentKey, err = leaf.ApplicationKey(uint32(seqNum))
 		if err != nil {
 			return nil, fmt.Errorf("framing: deriving application content key: %w", err)
@@ -182,12 +192,12 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 
 	// 6. Encriptar PrivateMessageContent PRIMERO (necesitamos el ciphertext para step 7)
 	aad := buildPrivateContentAAD(
-		p.Content.GroupID,
-		p.Content.Epoch,
-		p.Content.ContentType(),
-		p.Content.AuthenticatedData,
+		ac.Content.GroupID,
+		ac.Content.Epoch,
+		ac.Content.ContentType(),
+		ac.Content.AuthenticatedData,
 	)
-	plaintext := marshalPrivateMessageContent(p.Content.Body, ac.Auth, p.PaddingSize)
+	plaintext := marshalPrivateMessageContent(ac.Content.Body, ac.Auth, p.PaddingSize)
 	ciphertext, err := ciphersuite.AESEncrypt(contentKey, contentNonce, plaintext, aad)
 	if err != nil {
 		return nil, fmt.Errorf("framing: encrypting content: %w", err)
@@ -220,7 +230,7 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	}
 	copy(senderData.ReuseGuard[:], guard)
 
-	sdAAD := buildSenderDataAAD(p.Content.GroupID, p.Content.Epoch, p.Content.ContentType())
+	sdAAD := buildSenderDataAAD(ac.Content.GroupID, ac.Content.Epoch, ac.Content.ContentType())
 	encryptedSD, err := ciphersuite.AESEncrypt(
 		sdKey.AsSlice(), sdNonce.AsSlice(),
 		senderData.Marshal(), sdAAD,
@@ -230,10 +240,10 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	}
 
 	return &PrivateMessage{
-		GroupID:             p.Content.GroupID,
-		Epoch:               p.Content.Epoch,
-		ContentType:         p.Content.ContentType(),
-		AuthenticatedData:   p.Content.AuthenticatedData,
+		GroupID:             ac.Content.GroupID,
+		Epoch:               ac.Content.Epoch,
+		ContentType:         ac.Content.ContentType(),
+		AuthenticatedData:   ac.Content.AuthenticatedData,
 		EncryptedSenderData: encryptedSD,
 		Ciphertext:          ciphertext,
 	}, nil
