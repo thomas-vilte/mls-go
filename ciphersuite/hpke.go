@@ -198,6 +198,7 @@ func dhkemEncap(pkR []byte, cs CipherSuite) (sharedSecret, enc []byte, err error
 	enc = skE.PublicKey().Bytes()
 	kemCtx := append(enc, pkR...)
 	sharedSecret, err = dhkemExtractAndExpand(dh, kemCtx, cs)
+	if err == nil { fmt.Printf("[DEBUG encap] sharedSecret first4=%x kemCtx first4=%x\n", sharedSecret[:4], kemCtx[:4]) }
 	return sharedSecret, enc, err
 }
 
@@ -217,7 +218,9 @@ func dhkemDecap(enc, skR []byte, cs CipherSuite) ([]byte, error) {
 	}
 	pkR := privKey.PublicKey().Bytes()
 	kemCtx := append(enc, pkR...)
-	return dhkemExtractAndExpand(dh, kemCtx, cs)
+	ss, err := dhkemExtractAndExpand(dh, kemCtx, cs)
+	if err == nil { fmt.Printf("[DEBUG decap] sharedSecret first4=%x kemCtx first4=%x pkR first4=%x\n", ss[:4], kemCtx[:4], pkR[:4]) }
+	return ss, err
 }
 
 // dhkemExtractAndExpand implements ExtractAndExpand for DHKEM(P-256).

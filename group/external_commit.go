@@ -85,8 +85,17 @@ func ExternalCommit(
 		return nil, nil, fmt.Errorf("generating leaf secret: %w", err)
 	}
 
+	// Derive leaf HPKE key pair from node_secret = DeriveSecret(leafSecret, "node") (RFC §12.4.2).
+	leafNodeSecret, err := leafSecret.DeriveSecret(cs, "node")
+	if err != nil {
+		return nil, nil, fmt.Errorf("deriving leaf node secret: %w", err)
+	}
+	leafPrivKey, err := ciphersuite.DeriveKeyPair(cs, leafNodeSecret.AsSlice())
+	if err != nil {
+		return nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
+	}
 	ownLeafData := &treesync.LeafNodeData{
-		EncryptionKey:  leafSecret.AsSlice(),
+		EncryptionKey:  leafPrivKey.PublicKey().Bytes(),
 		SignatureKey:   sigPubKeyECDSA,
 		Capabilities:   &treesync.LeafNodeCapabilities{},
 		Lifetime:       &treesync.LeafNodeLifetime{},
@@ -124,6 +133,12 @@ func ExternalCommit(
 	_, copath, levels := filteredDirectPathLevels(treeDiff, treesync.LeafIndex(ownLeafIdx))
 	F := len(levels)
 
+	// RFC 9420 §12.4.2 step 6: Blank ALL intermediate nodes on the committer's
+	// direct path before applying the UpdatePath encryption keys.
+	for i := 1; i < len(directPath); i++ {
+		treeDiff.BlankNode(directPath[i])
+	}
+
 	// Apply encryption keys to filtered parent nodes.
 	pubKeys := make([][]byte, F)
 	for m, level := range levels {
@@ -159,11 +174,16 @@ func ExternalCommit(
 		parent := &treeDiff.Nodes[parentIdx]
 		siblingIdx := treeDiff.GetSibling(nodeIdx)
 		siblingHash := treeDiff.HashNode(siblingIdx)
-		var parentKey []byte
-		if parent.EncryptionKey != nil {
-			parentKey = parent.EncryptionKey.Bytes()
+		var ph []byte
+		if parent.State == treesync.NodeStatePresent {
+			var parentKey []byte
+			if parent.EncryptionKey != nil {
+				parentKey = parent.EncryptionKey.Bytes()
+			}
+			ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+		} else {
+			ph = parent.ParentHash
 		}
-		ph := treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
 		treeDiff.Nodes[nodeIdx].ParentHash = ph
 	}
 
@@ -326,6 +346,7 @@ func ExternalCommit(
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		CachedPsks:            make(map[string][]byte),
+		MyLeafEncryptionKey:   leafPrivKey.Bytes(),
 	}
 
 	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)

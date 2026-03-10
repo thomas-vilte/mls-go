@@ -348,3 +348,306 @@ func TestProcessPublicMessage_RejectsCommitWithPath(t *testing.T) {
 		t.Fatal("expected error for commit with path")
 	}
 }
+
+// TestProcessPrivateMessage_Proposal tests processing a proposal sent as PrivateMessage.
+func TestProcessPrivateMessage_Proposal(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	// Create Remove proposal (simpler than Add for testing)
+	removeProposal := NewRemoveProposal(group.OwnLeafIndex)
+
+	// Encrypt proposal as PrivateMessage
+	sigPrivKey := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+	content := framing.FramedContent{
+		GroupID:           group.GroupID.AsSlice(),
+		Epoch:             group.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(removeProposal)},
+	}
+
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  uint32(group.OwnLeafIndex),
+		CipherSuite:      group.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: group.EpochSecrets.SenderDataSecret,
+		SecretTree:       group.SecretTree,
+		SigKey:           sigPrivKey,
+		GroupContext:     group.GroupContext.Marshal(),
+	})
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+
+	// Process the PrivateMessage
+	if err := group.ProcessPrivateMessage(pm); err != nil {
+		t.Fatalf("ProcessPrivateMessage failed: %v", err)
+	}
+
+	// Verify proposal was stored
+	if len(group.Proposals.Proposals) == 0 {
+		t.Error("proposal was not stored")
+	}
+}
+
+// TestProcessPrivateMessage_AddProposal tests processing an Add proposal sent as PrivateMessage.
+// This test verifies that ProcessPrivateMessage can handle complex proposals like Add.
+func TestProcessPrivateMessage_AddProposal(t *testing.T) {
+	// Skip this test for now - there's a known issue with Add proposal parsing in PrivateMessage
+	// The issue is in the proposal body decoder for Add proposals which fails to correctly
+	// determine the body boundaries when the KeyPackage is large.
+	// t.Skip()
+
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	// Create a new member to add
+	newCred, _, err := credentials.GenerateCredentialWithKey([]byte("NewMember"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+	newKp, _, err := keypackages.Generate(newCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	// Create Add proposal
+	addProposal := NewAddProposal(newKp)
+
+	// Encrypt proposal as PrivateMessage
+	sigPrivKey := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+	content := framing.FramedContent{
+		GroupID:           group.GroupID.AsSlice(),
+		Epoch:             group.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(addProposal)},
+	}
+
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  uint32(group.OwnLeafIndex),
+		CipherSuite:      group.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: group.EpochSecrets.SenderDataSecret,
+		SecretTree:       group.SecretTree,
+		SigKey:           sigPrivKey,
+		GroupContext:     group.GroupContext.Marshal(),
+	})
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+
+	// Process the PrivateMessage
+	if err := group.ProcessPrivateMessage(pm); err != nil {
+		t.Fatalf("ProcessPrivateMessage failed: %v", err)
+	}
+
+	// Verify proposal was stored
+	if len(group.Proposals.Proposals) == 0 {
+		t.Error("proposal was not stored")
+	}
+}
+
+// TestProcessPrivateMessage_Commit verifica que un commit enviado como PrivateMessage
+// es procesado correctamente: el receptor descifra, verifica la firma, aplica el commit
+// y avanza al siguiente epoch.
+func TestProcessPrivateMessage_Commit(t *testing.T) {
+	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
+
+	// Alice agrega a charlie para que haya un UpdatePath no trivial.
+	charlie := newTestUser(t, "charlie-pm-commit")
+	if _, err := aliceGroup.AddMember(charlie.kp); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+
+	// Alice crea el commit en epoch 1.
+	sc, err := aliceGroup.CommitWithFormat(alice.sigPriv, alice.sigPub, nil, framing.WireFormatPrivateMessage)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Cifrar el commit como PrivateMessage usando los secrets de epoch 1 de alice.
+	// Tanto alice como bob comparten los mismos EpochSecrets y SecretTree (ver makeTwoMemberGroups).
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		AuthContent:      sc.AuthenticatedContent,
+		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
+		CipherSuite:      aliceGroup.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret,
+		SecretTree:       aliceGroup.SecretTree,
+	})
+	if err != nil {
+		t.Fatalf("Encrypt commit as PrivateMessage: %v", err)
+	}
+
+	// Alice mergea su propio commit → epoch 2.
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit(alice): %v", err)
+	}
+	if aliceGroup.Epoch.AsUint64() != 2 {
+		t.Fatalf("alice epoch = %d, want 2", aliceGroup.Epoch.AsUint64())
+	}
+
+	// Bob procesa el commit via PrivateMessage → también debe avanzar a epoch 2.
+	if err := bobGroup.ProcessPrivateMessage(pm); err != nil {
+		t.Fatalf("ProcessPrivateMessage(bob): %v", err)
+	}
+	if bobGroup.Epoch.AsUint64() != 2 {
+		t.Fatalf("bob epoch = %d, want 2", bobGroup.Epoch.AsUint64())
+	}
+}
+
+// TestProcessPrivateMessage_WrongEpoch verifica que mensajes de otra época son rechazados.
+func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
+	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
+
+	// Crear un mensaje válido en epoch 1, pero luego falsificar la época en el wire.
+	content := framing.FramedContent{
+		GroupID:           aliceGroup.GroupID.AsSlice(),
+		Epoch:             aliceGroup.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.OwnLeafIndex))},
+	}
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
+		CipherSuite:      aliceGroup.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret,
+		SecretTree:       aliceGroup.SecretTree,
+		SigKey:           alice.sigPriv,
+		GroupContext:     aliceGroup.GroupContext.Marshal(),
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	// Alterar la época en los campos en claro del PrivateMessage.
+	pm.Epoch = 99
+
+	if err := aliceGroup.ProcessPrivateMessage(pm); err == nil {
+		t.Fatal("expected error for wrong epoch, got nil")
+	}
+}
+
+// TestProcessPrivateMessage_InvalidSignature verifica que mensajes con firma inválida
+// son rechazados. El contenido se cifra con una clave de firma diferente a la del sender
+// en el árbol, por lo que la verificación de FramedContentTBS falla.
+func TestProcessPrivateMessage_InvalidSignature(t *testing.T) {
+	aliceGroup, bobGroup, _, _ := makeTwoMemberGroups(t)
+
+	// Crear una clave de firma impostora (no corresponde a ningún miembro del árbol).
+	impostor := newTestUser(t, "impostor")
+
+	// Crear un proposal desde el punto de vista de alice (leaf 0), pero firmado
+	// con la clave del impostor. El árbol de bob tiene la clave pública de alice
+	// en leaf 0, por lo que la verificación fallará.
+	content := framing.FramedContent{
+		GroupID:           bobGroup.GroupID.AsSlice(),
+		Epoch:             bobGroup.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.OwnLeafIndex))},
+	}
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
+		CipherSuite:      bobGroup.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: bobGroup.EpochSecrets.SenderDataSecret,
+		SecretTree:       bobGroup.SecretTree,
+		SigKey:           impostor.sigPriv, // firma inválida
+		GroupContext:     bobGroup.GroupContext.Marshal(),
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	if err := bobGroup.ProcessPrivateMessage(pm); err == nil {
+		t.Fatal("expected signature verification failure, got nil")
+	}
+}
+
+// TestProcessPrivateMessage_NilMessage tests that nil message returns error.
+func TestProcessPrivateMessage_NilMessage(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	if err := group.ProcessPrivateMessage(nil); err == nil {
+		t.Error("expected error for nil message")
+	}
+}
+
+// TestProcessPrivateMessage_NoSecrets tests error when secrets not available.
+func TestProcessPrivateMessage_NoSecrets(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	group, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	// Clear secrets
+	group.EpochSecrets.SenderDataSecret = nil
+
+	pm := &framing.PrivateMessage{
+		GroupID: group.GroupID.AsSlice(),
+		Epoch:   group.Epoch.AsUint64(),
+	}
+
+	if err := group.ProcessPrivateMessage(pm); err == nil {
+		t.Error("expected error when secrets not available")
+	}
+}
