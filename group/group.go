@@ -715,7 +715,7 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 	if g.ProposalByRef == nil {
 		g.ProposalByRef = make(map[string]*Proposal)
 	}
-	ref := ComputeProposalRef(acBytes)
+	ref := ComputeProposalRef(acBytes, g.CipherSuite)
 	g.ProposalByRef[string(ref)] = p
 	g.Proposals.AddProposal(p, sender)
 	return ref

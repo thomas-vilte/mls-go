@@ -87,7 +87,7 @@ func TestCryptoBasicsVectors(t *testing.T) {
 			testDeriveSecret(t, cs, v)
 			testDeriveTreeSecret(t, cs, v)
 			testExpandWithLabel(t, cs, v)
-			testRefHash(t, v)
+			testRefHash(t, cs, v)
 			testSignWithLabel(t, v)
 			testEncryptWithLabel(t, cs, v)
 		})
@@ -142,13 +142,13 @@ func testExpandWithLabel(t *testing.T, _ CipherSuite, v cryptoBasicsVector) {
 	}
 }
 
-func testRefHash(t *testing.T, v cryptoBasicsVector) {
+func testRefHash(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	t.Helper()
 	// RefHash(label, value) = Hash(VL(label) || VL(value))
 	// The test vector passes the raw label without "MLS 1.0 " prefix.
 	value := mustDecodeHex(t, v.RefHash.Value)
 	label := []byte(v.RefHash.Label)
-	hr := makeHashReference(value, label)
+	hr := makeHashReference(value, label, cs.HashFunction())
 	want := mustDecodeHex(t, v.RefHash.Out)
 	if !EqualCT(hr.AsSlice(), want) {
 		t.Errorf("RefHash(%q):\n  got  %x\n  want %x", v.RefHash.Label, hr.AsSlice(), want)

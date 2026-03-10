@@ -1,8 +1,8 @@
 package ciphersuite
 
 import (
-	"crypto/sha256"
 	"fmt"
+	"hash"
 
 	"github.com/openmls/go/internal/tls"
 )
@@ -42,8 +42,8 @@ type KeyPackageRef HashReference
 
 // MakeKeyPackageRef computes a KeyPackage reference.
 // MakeKeyPackageRef(value) = RefHash("MLS 1.0 KeyPackage Reference", value)
-func MakeKeyPackageRef(value []byte) *KeyPackageRef {
-	ref := makeHashReference(value, KeyPackageRefLabel)
+func MakeKeyPackageRef(value []byte, hashFn func() hash.Hash) *KeyPackageRef {
+	ref := makeHashReference(value, KeyPackageRefLabel, hashFn)
 	return (*KeyPackageRef)(ref)
 }
 
@@ -57,8 +57,8 @@ type ProposalRef HashReference
 
 // MakeProposalRef computes a Proposal reference.
 // MakeProposalRef(value) = RefHash("MLS 1.0 Proposal Reference", value)
-func MakeProposalRef(value []byte) *ProposalRef {
-	ref := makeHashReference(value, ProposalRefLabel)
+func MakeProposalRef(value []byte, hashFn func() hash.Hash) *ProposalRef {
+	ref := makeHashReference(value, ProposalRefLabel, hashFn)
 	return (*ProposalRef)(ref)
 }
 
@@ -89,12 +89,13 @@ func (hri *hashReferenceInput) Marshal() []byte {
 //	    opaque label<V> = label;
 //	    opaque value<V> = value;
 //	} RefHashInput;
-func makeHashReference(value, label []byte) *HashReference {
+func makeHashReference(value, label []byte, hashFn func() hash.Hash) *HashReference {
 	input := &hashReferenceInput{
 		Label: label,
 		Value: value,
 	}
 	payload := input.Marshal()
-	hash := sha256.Sum256(payload)
-	return NewHashReference(hash[:])
+	h := hashFn()
+	h.Write(payload)
+	return NewHashReference(h.Sum(nil))
 }

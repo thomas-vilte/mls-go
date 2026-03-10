@@ -89,8 +89,8 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 
 // ComputeProposalRef computes ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent))
 // per RFC 9420 §12.4. acBytes must be the serialized AuthenticatedContent of the proposal message.
-func ComputeProposalRef(acBytes []byte) []byte {
-	return ciphersuite.MakeProposalRef(acBytes).AsSlice()
+func ComputeProposalRef(acBytes []byte, cs ciphersuite.CipherSuite) []byte {
+	return ciphersuite.MakeProposalRef(acBytes, cs.HashFunction()).AsSlice()
 }
 
 // UpdatePathNode represents a node in the update path.

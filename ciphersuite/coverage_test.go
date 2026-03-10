@@ -32,7 +32,7 @@ func TestHashReference(t *testing.T) {
 func TestMakeKeyPackageRef(t *testing.T) {
 	data := []byte("key package data")
 
-	keyPackageRef := MakeKeyPackageRef(data)
+	keyPackageRef := MakeKeyPackageRef(data, MLS128DHKEMP256.HashFunction())
 	if keyPackageRef == nil {
 		t.Fatal("MakeKeyPackageRef() returned nil")
 	}
@@ -48,7 +48,7 @@ func TestMakeKeyPackageRef(t *testing.T) {
 func TestMakeProposalRef(t *testing.T) {
 	data := []byte("proposal data")
 
-	proposalRef := MakeProposalRef(data)
+	proposalRef := MakeProposalRef(data, MLS128DHKEMP256.HashFunction())
 	if proposalRef == nil {
 		t.Fatal("MakeProposalRef() returned nil")
 	}
@@ -87,7 +87,7 @@ func TestMakeHashReference(t *testing.T) {
 	data := []byte("test data for internal hash")
 	label := []byte("test label")
 
-	hash := makeHashReference(data, label)
+	hash := makeHashReference(data, label, MLS128DHKEMP256.HashFunction())
 	if hash == nil {
 		t.Fatal("makeHashReference() returned nil")
 	}
