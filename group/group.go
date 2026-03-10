@@ -227,10 +227,10 @@ func (g *Group) UpdateMember(
 		return nil, fmt.Errorf("signature key is nil")
 	}
 
-	// source = 2 (update) y firmar el TBS con el label del RFC
+	// source = 2 (update); TBS incluye group_id + leaf_index per RFC §7.2.
 	newLeafNode.LeafNodeSource = 2
 	sigKey := ciphersuite.NewSignaturePrivateKey(privateKeys.SignatureKey)
-	tbs := newLeafNode.MarshalTBS()
+	tbs := newLeafNode.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(g.OwnLeafIndex))
 	sig, err := ciphersuite.SignWithLabel(sigKey, "LeafNodeTBS", tbs)
 	if err != nil {
 		return nil, fmt.Errorf("signing leaf node: %w", err)
@@ -536,7 +536,8 @@ func (g *Group) createUpdatePath(
 		LeafNodeSource: 3,
 		ParentHash:     tree.Nodes[directPath[0]].ParentHash,
 	}
-	tbs := leafNodeData.MarshalTBS()
+	// source=commit; TBS incluye group_id + leaf_index per RFC §7.2.
+	tbs := leafNodeData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx))
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signing leaf node TBS: %w", err)
@@ -802,7 +803,9 @@ func (g *Group) ProcessReceivedCommit(
 			addedIdx, _ := treeAfterProposals.AddLeaf(leafData)
 			excluded[addedIdx] = true
 		} else {
-			_ = g.applyProposalToTree(p, treeAfterProposals, proposalSenders[i])
+			if err := g.applyProposalToTree(p, treeAfterProposals, proposalSenders[i]); err != nil {
+				return fmt.Errorf("applying proposal %d to provisional tree: %w", i, err)
+			}
 		}
 	}
 
@@ -968,7 +971,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		senderLeafIdx := treesync.LeafIndex(senderIdx)
 		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
-		// TODO: Verificar firma del leaf node del emisor (RFC §12.4.2) — disabled for interop investigation
+		// RFC §12.4.2: verificar firma del nuevo leaf node del committer (source=commit,
+		// TBS incluye group_id y leaf_index per RFC §7.2).
+		if err := leafNodeData.VerifyWithContext(g.CipherSuite, g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx)); err != nil {
+			return fmt.Errorf("UpdatePath leaf node signature invalid: %w", err)
+		}
 
 		// Actualizar la hoja del emisor
 		g.RatchetTree.SetLeaf(senderLeafIdx, *leafNodeData)
@@ -1198,6 +1205,39 @@ func (g *Group) ProcessPublicMessage(pm *framing.PublicMessage) error {
 		if pm.Content.Sender.Type == framing.SenderTypeExternal {
 			sender = LeafNodeIndex(g.RatchetTree.NumLeaves + pm.Content.Sender.SenderIndex)
 		}
+
+		// RFC 9420 §12.2: Validate proposal immediately upon receipt
+		// Validate lifetime and capabilities for Add and Update proposals
+		switch proposal.Type {
+		case ProposalTypeAdd:
+			if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
+				leafData := keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
+				if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
+					return fmt.Errorf("invalid add proposal lifetime: %w", err)
+				}
+				// RFC §11.2.1: Validate capabilities compatibility
+				if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
+					return fmt.Errorf("invalid add proposal capabilities: %w", err)
+				}
+			}
+		case ProposalTypeUpdate:
+			// RFC §12.2: Verify sender is an active member (not blank)
+			senderLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(sender))
+			if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent {
+				return fmt.Errorf("update proposal sender %d is not an active member", sender)
+			}
+			if proposal.Update != nil && proposal.Update.LeafNode != nil {
+				leafData := keyPackageLeafToTreeSync(proposal.Update.LeafNode)
+				if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
+					return fmt.Errorf("invalid update proposal lifetime: %w", err)
+				}
+				// RFC §11.2.1: Validate capabilities compatibility
+				if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
+					return fmt.Errorf("invalid update proposal capabilities: %w", err)
+				}
+			}
+		}
+
 		// RFC 9420 §12.4: ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent))
 		acForRef := &framing.AuthenticatedContent{
 			WireFormat: framing.WireFormatPublicMessage,
