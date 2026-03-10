@@ -112,6 +112,10 @@ func (pf *ProposalFilter) validateSingleProposal(
 			); err != nil {
 				return err
 			}
+			// RFC 9420 §12.2: Verificar firma del KeyPackage en Add proposals
+			if err := proposal.Add.KeyPackage.Verify(pf.cipherSuite); err != nil {
+				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
+			}
 		}
 	case ProposalTypeUpdate:
 		if fp.Sender == pf.committer {
@@ -127,6 +131,16 @@ func (pf *ProposalFilter) validateSingleProposal(
 				toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities),
 			); err != nil {
 				return err
+			}
+			// RFC 9420 §12.2, §7.3: Verificar firma del LeafNode en Update proposals
+			// Usar VerifyWithContext para incluir group_id y leaf_index
+			ln := keyPackageLeafToTreeSync(proposal.Update.LeafNode)
+			if err := ln.VerifyWithContext(
+				pf.cipherSuite,
+				pf.groupContext.GroupID.AsSlice(),
+				uint32(fp.Sender),
+			); err != nil {
+				return fmt.Errorf("update leaf node signature invalid: %w", err)
 			}
 		}
 	case ProposalTypeRemove:

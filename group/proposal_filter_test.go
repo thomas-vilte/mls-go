@@ -1,6 +1,7 @@
 package group
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openmls/go/ciphersuite"
@@ -28,6 +29,41 @@ func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {
 		t.Fatalf("NewGroup failed: %v", err)
 	}
 	return group, kp
+}
+
+// createValidUpdateProposal crea un Update proposal válido con firma correcta.
+func createValidUpdateProposal(t *testing.T, g *Group, sender LeafNodeIndex) *Proposal {
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("updater"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	// Crear un nuevo LeafNode para el Update
+	leafNode := &keypackages.LeafNode{
+		EncryptionKey:     []byte("new-encryption-key-32bytes-long"),
+		SignatureKey:      cred.SignatureKey,
+		Credential:        cred.Credential,
+		Capabilities:      keypackages.DefaultCapabilities(),
+		Lifetime:          nil, // No lifetime para Update
+		Extensions:        []keypackages.Extension{},
+		LeafNodeSource:    2, // update
+		ParentHash:        []byte("parent-hash"),
+		SignatureKeyBytes: nil,
+	}
+
+	// Convertir a treesync.LeafNodeData para firmar
+	lnData := keyPackageLeafToTreeSync(leafNode)
+
+	// Firmar con el contexto del grupo
+	tbs := lnData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(sender))
+	sigPrivKey := ciphersuite.NewSignaturePrivateKey(cred.PrivateKey)
+	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
+	if err != nil {
+		t.Fatalf("SignWithLabel failed: %v", err)
+	}
+	leafNode.Signature = sig.AsSlice()
+
+	return NewUpdateProposal(leafNode)
 }
 
 func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
@@ -81,7 +117,7 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 		{
 			name: "valid update from other member",
 			proposal: FilteredProposal{
-				Proposal: NewUpdateProposal(kp.LeafNode),
+				Proposal: createValidUpdateProposal(t, group, 1),
 				Sender:   1,
 			},
 			wantError: false,
@@ -348,7 +384,7 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	proposals := []FilteredProposal{
 		{Proposal: NewAddProposal(thirdKp), Sender: 0},
 		{Proposal: NewRemoveProposal(1), Sender: 0},
-		{Proposal: NewUpdateProposal(kp.LeafNode), Sender: 1},
+		{Proposal: createValidUpdateProposal(t, group, 1), Sender: 1},
 	}
 	_ = kp
 
@@ -377,6 +413,104 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 			t.Errorf("position %d: expected %v, got %v",
 				i, expected, filtered[i].Proposal.Type)
 		}
+	}
+}
+
+func TestProposalFilter_AddInvalidSignature(t *testing.T) {
+	group, kp := createTestGroup(t)
+	_ = kp
+
+	// Crear un KeyPackage válido
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("newmember"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+	newKp, _, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	// Corromper la firma
+	newKp.Signature[0] ^= 0xFF
+
+	pf := NewProposalFilter(
+		group.GroupContext,
+		group.OwnLeafIndex,
+		group.Members,
+		group.CipherSuite,
+		group.RatchetTree,
+	)
+
+	caps := &keypackages.Capabilities{
+		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
+		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
+		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7},
+	}
+
+	proposals := []FilteredProposal{
+		{Proposal: NewAddProposal(newKp), Sender: 0},
+	}
+
+	_, err = pf.FilterAndValidateProposals(proposals, caps)
+	if err == nil {
+		t.Fatal("expected error for invalid KeyPackage signature, got nil")
+	}
+
+	// Verificar que el error menciona firma inválida
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("expected error to mention signature, got: %v", err)
+	}
+}
+
+func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
+	group, kp := createTestGroup(t)
+
+	// Agregar un miembro existente
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("existing"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+	existingKp, _, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	// Añadir el miembro al árbol
+	group.Members[1] = &Member{LeafIndex: 1, Active: true}
+	leafData := keyPackageLeafToTreeSync(existingKp.LeafNode)
+	_, _ = group.RatchetTree.AddLeaf(*leafData)
+
+	// Crear un Update proposal con LeafNode de firma inválida
+	updateLeafNode := kp.LeafNode
+	// Corromper la firma del LeafNode
+	updateLeafNode.Signature[0] ^= 0xFF
+
+	pf := NewProposalFilter(
+		group.GroupContext,
+		group.OwnLeafIndex,
+		group.Members,
+		group.CipherSuite,
+		group.RatchetTree,
+	)
+
+	caps := &keypackages.Capabilities{
+		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
+		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
+		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7},
+	}
+
+	proposals := []FilteredProposal{
+		{Proposal: NewUpdateProposal(updateLeafNode), Sender: 1},
+	}
+
+	_, err = pf.FilterAndValidateProposals(proposals, caps)
+	if err == nil {
+		t.Fatal("expected error for invalid Update LeafNode signature, got nil")
+	}
+
+	// Verificar que el error menciona firma inválida
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("expected error to mention signature, got: %v", err)
 	}
 }
 

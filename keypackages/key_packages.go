@@ -15,8 +15,10 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/credentials"
 	"github.com/openmls/go/internal/tls"
+	"github.com/openmls/go/treesync"
 )
 
 // CipherSuite represents an MLS cipher suite.
@@ -139,15 +141,7 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 		LeafNodeSource: 1, // key_package
 	}
 
-	// Sign LeafNode
-	leafNodeTBS := leafNode.marshalTBS()
-	leafNodeSig, err := signData(credWithKey.PrivateKey, leafNodeTBS)
-	if err != nil {
-		return nil, nil, fmt.Errorf("signing LeafNode: %w", err)
-	}
-	leafNode.Signature = leafNodeSig
-
-	// Create KeyPackage
+	// Create KeyPackage first so we can sign it
 	keyPackage := &KeyPackage{
 		ProtocolVersion: MLS10,
 		CipherSuite:     cipherSuite,
@@ -156,13 +150,24 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 		Extensions:      []Extension{},
 	}
 
-	// Sign KeyPackage
+	// Create signature private key wrapper
+	sigPrivKey := ciphersuite.NewSignaturePrivateKey(credWithKey.PrivateKey)
+
+	// Sign LeafNode using SignWithLabel (RFC 9420 §7.2)
+	leafNodeTBS := leafNode.marshalTBS()
+	leafNodeSig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", leafNodeTBS)
+	if err != nil {
+		return nil, nil, fmt.Errorf("signing LeafNode: %w", err)
+	}
+	leafNode.Signature = leafNodeSig.AsSlice()
+
+	// Sign KeyPackage using SignWithLabel (RFC 9420 §10.1)
 	keyPackageTBS := keyPackage.marshalTBS()
-	signature, err := signData(credWithKey.PrivateKey, keyPackageTBS)
+	signature, err := ciphersuite.SignWithLabel(sigPrivKey, "KeyPackageTBS", keyPackageTBS)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signing KeyPackage: %w", err)
 	}
-	keyPackage.Signature = signature
+	keyPackage.Signature = signature.AsSlice()
 
 	// Create private keys
 	privKeys := &KeyPackagePrivateKeys{
@@ -691,6 +696,43 @@ func (ln *LeafNode) Validate() error {
 
 	if err := ln.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
+	}
+
+	return nil
+}
+
+// MarshalTBS serializa el KeyPackage TBS (To Be Signed) - versión pública.
+// RFC 9420 §10.1: KeyPackageTBS = (version, cipher_suite, init_key, leaf_node, extensions)
+func (kp *KeyPackage) MarshalTBS() []byte {
+	return kp.marshalTBS()
+}
+
+// Verify verifica la firma del KeyPackage.
+// RFC 9420 §10.1, §12.2: VerifyWithLabel(LeafNode.SignatureKey, "KeyPackageTBS", tbs, signature)
+func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
+	if kp.LeafNode == nil || kp.LeafNode.SignatureKey == nil {
+		return errors.New("keypackage: missing leaf node or signature key")
+	}
+
+	// serializar TBS
+	tbs := kp.marshalTBS()
+
+	// obtener bytes de la clave publica de firma
+	var pubKeyBytes []byte
+	if len(kp.LeafNode.SignatureKeyBytes) > 0 {
+		pubKeyBytes = kp.LeafNode.SignatureKeyBytes
+	} else {
+		// Usar treesync.MarshalSignatureKey para garantizar padding correcto a 32 bytes por coordenada.
+		pubKeyBytes = treesync.MarshalSignatureKey(kp.LeafNode.SignatureKey)
+	}
+
+	// crear clave publica MLS
+	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
+
+	// verificar firma
+	sig := ciphersuite.NewSignature(kp.Signature)
+	if err := ciphersuite.VerifyWithLabel(pk, "KeyPackageTBS", tbs, sig); err != nil {
+		return fmt.Errorf("keypackage: signature verification failed: %w", err)
 	}
 
 	return nil
