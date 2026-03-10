@@ -363,14 +363,14 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 }
 
 // keyPackageRef calcula la referencia de un KeyPackage (hash).
-func keyPackageRef(kp *keypackages.KeyPackage, _ ciphersuite.CipherSuite) []byte {
+func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byte {
 	if kp == nil {
 		return nil
 	}
 	if len(kp.Raw) > 0 {
-		return ciphersuite.MakeKeyPackageRef(kp.Raw).AsSlice()
+		return ciphersuite.MakeKeyPackageRef(kp.Raw, cs.HashFunction()).AsSlice()
 	}
-	return ciphersuite.MakeKeyPackageRef(kp.Marshal()).AsSlice()
+	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
 }
 
 // CreateWelcome genera un Welcome message para nuevos miembros.
