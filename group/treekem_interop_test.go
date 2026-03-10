@@ -54,21 +54,6 @@ type interopUpdatePath struct {
 	Nodes    []interopUpdatePathNode
 }
 
-// filteredDirectPathLevels returns directPath, copath, and the subset of copath
-// indices where the resolution is non-empty (RFC §12.4.1: UpdatePath.Nodes only
-// covers parents whose sibling's resolution is non-empty).
-func filteredDirectPathLevels(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex) ([]treesync.NodeIndex, []treesync.NodeIndex, []int) {
-	directPath := tree.DirectPath(senderLeafIdx)
-	copath := tree.Copath(senderLeafIdx)
-	levels := make([]int, 0, len(copath))
-	for i, copathNode := range copath {
-		if len(tree.Resolution(copathNode)) > 0 {
-			levels = append(levels, i)
-		}
-	}
-	return directPath, copath, levels
-}
-
 // unmarshalInteropUpdatePath parses an UpdatePath in RFC 9420 §7.6 wire format:
 //   - leaf_node: inline LeafNode (not VL-prefixed)
 //   - nodes<V>: VL-prefixed; elements packed sequentially (not individually VL-wrapped)

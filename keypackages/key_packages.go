@@ -420,6 +420,57 @@ func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
 	return unmarshalLeafNodeFromReader(buf)
 }
 
+// UnmarshalLeafNodeFromReader parses a LeafNode inline from r, advancing r's position.
+func UnmarshalLeafNodeFromReader(r *tls.Reader) (*LeafNode, error) {
+	return unmarshalLeafNodeFromReader(r)
+}
+
+// UnmarshalKeyPackageFromReader parses a KeyPackage inline from r, advancing r's position.
+func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
+	startPos := r.Position()
+
+	protocolVersion, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("reading protocol_version: %w", err)
+	}
+	cipherSuite, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("reading cipher_suite: %w", err)
+	}
+	initKey, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading init_key: %w", err)
+	}
+	leafNode, err := unmarshalLeafNodeFromReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("parsing LeafNode: %w", err)
+	}
+	extBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading extensions: %w", err)
+	}
+	_ = extBytes
+	signature, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading signature: %w", err)
+	}
+
+	endPos := r.Position()
+	// Re-read the parsed bytes to store as Raw.
+	r.SetPosition(startPos)
+	rawBytes, _ := r.ReadBytes(endPos - startPos)
+
+	return &KeyPackage{
+		ProtocolVersion: ProtocolVersion(protocolVersion),
+		CipherSuite:     CipherSuite(cipherSuite),
+		InitKey:         initKey,
+		LeafNode:        leafNode,
+		Extensions:      nil,
+		Signature:       signature,
+		Raw:             rawBytes,
+	}, nil
+}
+
 func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 	leafNode := &LeafNode{}
 

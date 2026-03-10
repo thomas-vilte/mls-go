@@ -1,9 +1,6 @@
 package group
 
 import (
-	"bytes"
-	"fmt"
-
 	"github.com/openmls/go/framing"
 	"github.com/openmls/go/internal/tls"
 )
@@ -13,44 +10,21 @@ func init() {
 }
 
 func decodeProposalBodyLength(data []byte) (int, error) {
-	return decodeRawBodyLength(data, unmarshalProposalRoundTrip)
+	r := tls.NewReader(data)
+	if err := unmarshalProposalFromReader(r); err != nil {
+		return 0, err
+	}
+	return r.Position(), nil
 }
 
+// decodeCommitBodyLength returns the exact number of bytes in data that form
+// a valid Commit body (proposals<V> + optional inline UpdatePath).
+// This is O(body_length) deterministic — no byte-by-byte scanning needed.
 func decodeCommitBodyLength(data []byte) (int, error) {
-	return decodeRawBodyLength(data, unmarshalCommitRoundTrip)
-}
-
-func decodeRawBodyLength(data []byte, validate func([]byte) error) (int, error) {
-	for i := 1; i <= len(data); i++ {
-		candidate := data[:i]
-		if err := validate(candidate); err == nil {
-			r := tls.NewReader(data[i:])
-			if _, err := r.ReadVLBytes(); err == nil {
-				return i, nil
-			}
-		}
-	}
-	return 0, fmt.Errorf("unable to locate raw handshake body")
-}
-
-func unmarshalProposalRoundTrip(data []byte) error {
-	p, err := UnmarshalProposal(data)
+	r := tls.NewReader(data)
+	_, err := unmarshalCommitFromReader(r)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if !bytes.Equal(ProposalMarshal(p), data) {
-		return fmt.Errorf("proposal roundtrip mismatch")
-	}
-	return nil
-}
-
-func unmarshalCommitRoundTrip(data []byte) error {
-	c, err := UnmarshalCommit(data)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(c.Marshal(), data) {
-		return fmt.Errorf("commit roundtrip mismatch")
-	}
-	return nil
+	return r.Position(), nil
 }

@@ -241,15 +241,20 @@ func (t *RatchetTree) Copath(leafIdx LeafIndex) []NodeIndex {
 
 // AddLeaf adds a leaf to the tree.
 func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
-	// Find first empty leaf
+	// Find first empty or blank leaf (RFC 9420 §7.8: blank leaves can be reused)
 	for i := LeafIndex(0); i < LeafIndex(t.NumLeaves); i++ {
 		nodeIdx := LeafIndexToNodeIndex(i)
-		if int(nodeIdx) < len(t.Nodes) && t.Nodes[nodeIdx].State == NodeStateEmpty {
-			t.Nodes[nodeIdx] = Node{
-				State:    NodeStatePresent,
-				LeafData: &leaf,
+		if int(nodeIdx) < len(t.Nodes) {
+			state := t.Nodes[nodeIdx].State
+			if state == NodeStateEmpty || state == NodeStateBlank {
+				t.Nodes[nodeIdx] = Node{
+					State:    NodeStatePresent,
+					LeafData: &leaf,
+				}
+				// RFC 9420 §7.8: Add the new leaf to unmerged_leaves of all direct path nodes
+				t.addToUnmergedLeaves(i)
+				return i, nodeIdx
 			}
-			return i, nodeIdx
 		}
 	}
 
@@ -269,7 +274,19 @@ func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
 		State:    NodeStatePresent,
 		LeafData: &leaf,
 	}
+	// RFC 9420 §7.8: Add the new leaf to unmerged_leaves of all direct path nodes
+	t.addToUnmergedLeaves(i)
 	return i, nodeIdx
+}
+
+// addToUnmergedLeaves adds a leaf index to the unmerged_leaves list of all nodes in its direct path.
+// This is required by RFC 9420 §7.8 when a new member is added to the group.
+func (t *RatchetTree) addToUnmergedLeaves(leafIdx LeafIndex) {
+	for _, parentIdx := range t.DirectPath(leafIdx) {
+		if !IsLeaf(parentIdx) {
+			t.Nodes[parentIdx].UnmergedLeaves = append(t.Nodes[parentIdx].UnmergedLeaves, leafIdx)
+		}
+	}
 }
 
 // GetLeaf returns a leaf node.
@@ -414,6 +431,13 @@ func (t *RatchetTree) GetSibling(node NodeIndex) NodeIndex {
 // The resolution of a node is an ordered list of non-blank nodes that collectively
 // cover all non-blank descendants of the node.
 func (t *RatchetTree) Resolution(idx NodeIndex) []NodeIndex {
+	return t.ResolutionWithExclusions(idx, nil)
+}
+
+// ResolutionWithExclusions computes the resolution of a node, excluding
+// leaves in the exclusion set. Per RFC 9420 §12.4.2, newly added leaves
+// are excluded from the resolution when encrypting/decrypting UpdatePath.
+func (t *RatchetTree) ResolutionWithExclusions(idx NodeIndex, excluded map[LeafIndex]bool) []NodeIndex {
 	if int(idx) >= len(t.Nodes) {
 		return nil
 	}
@@ -423,8 +447,18 @@ func (t *RatchetTree) Resolution(idx NodeIndex) []NodeIndex {
 	// 1. If the node is not blank, the resolution is the node itself,
 	// followed by its list of unmerged leaves.
 	if node.State == NodeStatePresent {
+		// Check if this is an excluded leaf
+		if IsLeaf(idx) && excluded != nil {
+			leafIdx := LeafIndex(idx / 2)
+			if excluded[leafIdx] {
+				return []NodeIndex{}
+			}
+		}
 		res := []NodeIndex{idx}
 		for _, leaf := range node.UnmergedLeaves {
+			if excluded != nil && excluded[leaf] {
+				continue
+			}
 			res = append(res, LeafIndexToNodeIndex(leaf))
 		}
 		return res
@@ -440,8 +474,8 @@ func (t *RatchetTree) Resolution(idx NodeIndex) []NodeIndex {
 	left, _ := t.LeftChild(idx)
 	right, _ := t.RightChild(idx)
 
-	res := t.Resolution(left)
-	res = append(res, t.Resolution(right)...)
+	res := t.ResolutionWithExclusions(left, excluded)
+	res = append(res, t.ResolutionWithExclusions(right, excluded)...)
 
 	return res
 }

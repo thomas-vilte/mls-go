@@ -103,79 +103,48 @@ func ExternalCommit(
 	ownLeafIdx, _ := treeDiff.AddLeaf(*ownLeafData)
 	ownLeafIndex := LeafNodeIndex(ownLeafIdx)
 
-	// 5. Build UpdatePath.
+	// 5. Build UpdatePath (RFC §12.4.1, filtered direct path).
 	directPath := treeDiff.DirectPath(treesync.LeafIndex(ownLeafIdx))
 	if len(directPath) == 0 {
 		return nil, nil, fmt.Errorf("invalid direct path for external commit")
 	}
+	N := len(directPath) - 1
 
-	pathSecrets := make([]*ciphersuite.Secret, len(directPath))
+	// Derive path secrets for all N non-leaf levels.
+	pathSecrets := make([]*ciphersuite.Secret, N+1)
 	pathSecrets[0] = leafSecret
-	for i := 1; i < len(directPath); i++ {
+	for i := 1; i <= N; i++ {
 		pathSecrets[i], err = pathSecrets[i-1].DeriveSecret(cs, "path")
 		if err != nil {
 			return nil, nil, fmt.Errorf("deriving path secret: %w", err)
 		}
 	}
 
-	nodes := make([]UpdatePathNode, len(directPath)-1)
-	copath := treeDiff.Copath(treesync.LeafIndex(ownLeafIdx))
+	// Compute filtered levels BEFORE modifying the tree.
+	_, copath, levels := filteredDirectPathLevels(treeDiff, treesync.LeafIndex(ownLeafIdx))
+	F := len(levels)
 
-	for i := 1; i < len(directPath); i++ {
-		pathSecret := pathSecrets[i]
-		nodeSecret, err := pathSecret.DeriveSecret(cs, "node")
+	// Apply encryption keys to filtered parent nodes.
+	pubKeys := make([][]byte, F)
+	for m, level := range levels {
+		ps := pathSecrets[N-F+m]
+		nodeSecret, err := ps.DeriveSecret(cs, "node")
 		if err != nil {
 			return nil, nil, fmt.Errorf("deriving node secret: %w", err)
 		}
-
 		privKey, err := ciphersuite.DeriveKeyPair(cs, nodeSecret.AsSlice())
 		if err != nil {
 			return nil, nil, fmt.Errorf("deriving path key pair: %w", err)
 		}
-		pubKey := privKey.PublicKey().Bytes()
+		pubKeys[m] = privKey.PublicKey().Bytes()
 
-		res := treeDiff.Resolution(copath[i-1])
-		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
-		for j, resIdx := range res {
-			resNode := &treeDiff.Nodes[resIdx]
-
-			var encKeyBytes []byte
-			if treesync.IsLeaf(resIdx) {
-				if resNode.LeafData != nil {
-					encKeyBytes = resNode.LeafData.EncryptionKey
-				}
-			} else if resNode.EncryptionKey != nil {
-				encKeyBytes = resNode.EncryptionKey.Bytes()
-			}
-
-			if len(encKeyBytes) == 0 {
-				continue
-			}
-
-			ct, err := ciphersuite.EncryptWithLabel(
-				encKeyBytes,
-				"UpdatePathNode",
-				[]byte{},
-				pathSecret.AsSlice(),
-				cs,
-			)
-			if err != nil {
-				return nil, nil, fmt.Errorf("encrypting path secret: %w", err)
-			}
-			encryptedSecrets[j] = *ct
-		}
-
-		nodes[i-1] = UpdatePathNode{
-			EncryptionKey:        pubKey,
-			EncryptedPathSecrets: encryptedSecrets,
-		}
-
-		node := &treeDiff.Nodes[directPath[i]]
-		node.EncryptionKey, err = ecdh.P256().NewPublicKey(pubKey)
+		nodeIdx := directPath[level+1]
+		treeDiff.Nodes[nodeIdx].EncryptionKey, err = ecdh.P256().NewPublicKey(pubKeys[m])
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing update path public key: %w", err)
 		}
-		node.State = treesync.NodeStatePresent
+		treeDiff.Nodes[nodeIdx].State = treesync.NodeStatePresent
+		treeDiff.Nodes[nodeIdx].UnmergedLeaves = nil
 	}
 
 	// Compute parent hashes.
@@ -187,16 +156,13 @@ func ExternalCommit(
 		if err != nil {
 			return nil, nil, fmt.Errorf("getting parent for node %d: %w", nodeIdx, err)
 		}
-
 		parent := &treeDiff.Nodes[parentIdx]
 		siblingIdx := treeDiff.GetSibling(nodeIdx)
 		siblingHash := treeDiff.HashNode(siblingIdx)
-
 		var parentKey []byte
 		if parent.EncryptionKey != nil {
 			parentKey = parent.EncryptionKey.Bytes()
 		}
-
 		ph := treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
 		treeDiff.Nodes[nodeIdx].ParentHash = ph
 	}
@@ -210,6 +176,49 @@ func ExternalCommit(
 	ownLeafData.Signature = sig2.AsSlice()
 	if err := treeDiff.SetLeaf(treesync.LeafIndex(ownLeafIdx), *ownLeafData); err != nil {
 		return nil, nil, fmt.Errorf("setting own leaf in tree: %w", err)
+	}
+
+	// Compute provisional GroupContext (current epoch, tree_hash_after).
+	// RFC 9420 §12.4.1: provisional GroupContext uses the NEXT epoch (current + 1).
+	provGCBytes := (&GroupContext{
+		Version:                 groupInfo.GroupContext.Version,
+		CipherSuite:             cs,
+		GroupID:                 groupInfo.GroupContext.GroupID,
+		Epoch:                   NewGroupEpoch(groupInfo.GroupContext.Epoch.AsUint64() + 1),
+		TreeHash:                treeDiff.TreeHash(),
+		ConfirmedTranscriptHash: groupInfo.GroupContext.ConfirmedTranscriptHash,
+		Extensions:              groupInfo.GroupContext.Extensions,
+	}).Marshal()
+
+	// Encrypt path secrets for filtered levels using provisional GC as context.
+	nodes := make([]UpdatePathNode, F)
+	for m, level := range levels {
+		ps := pathSecrets[N-F+m]
+		res := treeDiff.Resolution(copath[level])
+		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
+		for j, resIdx := range res {
+			resNode := &treeDiff.Nodes[resIdx]
+			var encKeyBytes []byte
+			if treesync.IsLeaf(resIdx) {
+				if resNode.LeafData != nil {
+					encKeyBytes = resNode.LeafData.EncryptionKey
+				}
+			} else if resNode.EncryptionKey != nil {
+				encKeyBytes = resNode.EncryptionKey.Bytes()
+			}
+			if len(encKeyBytes) == 0 {
+				continue
+			}
+			ct, err := ciphersuite.EncryptWithLabel(encKeyBytes, "UpdatePathNode", provGCBytes, ps.AsSlice(), cs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("encrypting path secret: %w", err)
+			}
+			encryptedSecrets[j] = *ct
+		}
+		nodes[m] = UpdatePathNode{
+			EncryptionKey:        pubKeys[m],
+			EncryptedPathSecrets: encryptedSecrets,
+		}
 	}
 
 	updatePath := &UpdatePath{

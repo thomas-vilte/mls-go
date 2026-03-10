@@ -68,7 +68,13 @@ func (gs *GroupSecrets) Marshal() []byte {
 	pskBuf := tls.NewWriter()
 	for _, psk := range gs.Psks {
 		pskBuf.WriteUint8(psk.PskType)
-		pskBuf.WriteVLBytes(psk.ID)
+		if psk.PskType == 2 { // resumption
+			pskBuf.WriteUint8(psk.Usage)
+			pskBuf.WriteVLBytes(psk.PskGroupID)
+			pskBuf.WriteUint64(psk.PskEpoch)
+		} else { // external (1) or branch (3)
+			pskBuf.WriteVLBytes(psk.ID)
+		}
 		pskBuf.WriteVLBytes(psk.Nonce)
 	}
 	w.WriteVLBytes(pskBuf.Bytes())
@@ -112,15 +118,36 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 		if readErr != nil {
 			return nil, readErr
 		}
-		pskID, readErr := pskReader.ReadVLBytes()
-		if readErr != nil {
-			return nil, readErr
+		pskID := PskID{PskType: pskType}
+		if pskType == 2 { // resumption
+			usage, readErr := pskReader.ReadUint8()
+			if readErr != nil {
+				return nil, readErr
+			}
+			pskGroupID, readErr := pskReader.ReadVLBytes()
+			if readErr != nil {
+				return nil, readErr
+			}
+			pskEpoch, readErr := pskReader.ReadUint64()
+			if readErr != nil {
+				return nil, readErr
+			}
+			pskID.Usage = usage
+			pskID.PskGroupID = pskGroupID
+			pskID.PskEpoch = pskEpoch
+		} else { // external (1) or branch (3)
+			id, readErr := pskReader.ReadVLBytes()
+			if readErr != nil {
+				return nil, readErr
+			}
+			pskID.ID = id
 		}
 		pskNonce, readErr := pskReader.ReadVLBytes()
 		if readErr != nil {
 			return nil, readErr
 		}
-		psks = append(psks, PskID{PskType: pskType, ID: pskID, Nonce: pskNonce})
+		pskID.Nonce = pskNonce
+		psks = append(psks, pskID)
 	}
 
 	return &GroupSecrets{
@@ -607,12 +634,18 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
-	// 9b. Determinar OwnLeafIndex buscando nuestra InitKey en el árbol
+	// 9b. Determinar OwnLeafIndex buscando nuestra clave en el árbol.
+	// Se busca por LeafNode.EncryptionKey (clave TreeKEM del leaf), que puede diferir
+	// del InitKey del KeyPackage (clave HPKE para el Welcome).
 	var ownLeafIndex LeafNodeIndex
+	leafEncKey := myKeyPackage.LeafNode.EncryptionKey
+	if len(leafEncKey) == 0 {
+		leafEncKey = myKeyPackage.InitKey
+	}
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil {
-			if bytes.Equal(leaf.LeafData.EncryptionKey, myKeyPackage.InitKey) {
+			if bytes.Equal(leaf.LeafData.EncryptionKey, leafEncKey) {
 				ownLeafIndex = LeafNodeIndex(i)
 				break
 			}
@@ -639,10 +672,23 @@ func JoinFromWelcome(
 		CachedPsks:  make(map[string][]byte),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
+	// Guardar la clave HPKE privada del leaf para descifrar path secrets en commits.
+	if myPrivateKeys.EncryptionKey != nil {
+		group.MyLeafEncryptionKey = myPrivateKeys.EncryptionKey.Bytes()
+	} else if myPrivateKeys.InitKey != nil {
+		group.MyLeafEncryptionKey = myPrivateKeys.InitKey.Bytes()
+	}
 	if externalPsks != nil {
 		for id, pskBytes := range externalPsks {
 			group.CachedPsks[id] = append([]byte(nil), pskBytes...)
 		}
+	}
+
+	// Cache the resumption secret for this initial epoch so that future
+	// resumption PSK proposals referencing this epoch can resolve it.
+	if epochSecrets.ResumptionSecret != nil {
+		rKey := resumptionPskCacheKey(groupContext.GroupID.AsSlice(), groupContext.Epoch.AsUint64())
+		group.CachedPsks[rKey] = append([]byte(nil), epochSecrets.ResumptionSecret.AsSlice()...)
 	}
 
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {

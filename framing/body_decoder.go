@@ -62,6 +62,23 @@ func readRawBody(
 		return bodyData, nil
 	}
 
+	// Try deterministic decoder on the full remaining bytes first.
+	// The byte-by-byte scanner below passes truncated slices to the decoder,
+	// which can fail for complex bodies (e.g., commits with UpdatePath) that
+	// need to see the full data to parse correctly.
+	if decoder != nil {
+		consumed, err := decoder(remaining)
+		if err == nil && consumed > 0 && consumed <= len(remaining) {
+			if validAuthTail(remaining[consumed:], ct, hasMembershipTag) {
+				bodyData := make([]byte, consumed)
+				copy(bodyData, remaining[:consumed])
+				r.Skip(consumed)
+				return bodyData, nil
+			}
+		}
+	}
+
+	// Fall back to byte-by-byte scanner for cases without a deterministic decoder.
 	for i := 1; i <= len(remaining); i++ {
 		candidate := remaining[:i]
 		if decoder != nil {
@@ -84,19 +101,53 @@ func readRawBody(
 }
 
 func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
-	r := tls.NewReader(tail)
-	if _, err := r.ReadVLBytes(); err != nil {
+	base := tls.NewReader(tail)
+	if _, err := base.ReadVLBytes(); err != nil {
 		return false
 	}
-	if ct == ContentTypeCommit && r.Remaining() > 0 {
+
+	if ct != ContentTypeCommit {
+		if hasMembershipTag {
+			if _, err := base.ReadVLBytes(); err != nil {
+				return false
+			}
+		}
+		return base.Remaining() == 0
+	}
+
+	// Commit auth tail can be either:
+	//   signature || confirmation_tag || [membership_tag]
+	// or
+	//   signature || [membership_tag]
+	// Try both layouts.
+	tryWithConfirmation := func() bool {
+		r := tls.NewReader(tail)
 		if _, err := r.ReadVLBytes(); err != nil {
 			return false
 		}
-	}
-	if hasMembershipTag {
 		if _, err := r.ReadVLBytes(); err != nil {
 			return false
 		}
+		if hasMembershipTag {
+			if _, err := r.ReadVLBytes(); err != nil {
+				return false
+			}
+		}
+		return r.Remaining() == 0
 	}
-	return r.Remaining() == 0
+
+	tryWithoutConfirmation := func() bool {
+		r := tls.NewReader(tail)
+		if _, err := r.ReadVLBytes(); err != nil {
+			return false
+		}
+		if hasMembershipTag {
+			if _, err := r.ReadVLBytes(); err != nil {
+				return false
+			}
+		}
+		return r.Remaining() == 0
+	}
+
+	return tryWithConfirmation() || tryWithoutConfirmation()
 }
