@@ -177,8 +177,10 @@ func (pf *ProposalFilter) checkDuplicates(proposals []FilteredProposal) error {
 	updatesBySender := make(map[LeafNodeIndex]bool)
 	// Track removes por índice
 	removesByIndex := make(map[LeafNodeIndex]bool)
-	// Track adds por key package hash (simplificado)
+	// Track adds por key package hash
 	addsByKeyPackage := make(map[string]bool)
+	// Track PSK IDs externos (RFC §12.2: no pueden repetirse)
+	pskIDs := make(map[string]bool)
 
 	for _, fp := range proposals {
 		switch fp.Proposal.Type {
@@ -200,13 +202,113 @@ func (pf *ProposalFilter) checkDuplicates(proposals []FilteredProposal) error {
 
 		case ProposalTypeAdd:
 			if fp.Proposal.Add != nil && fp.Proposal.Add.KeyPackage != nil {
-				// Usar hash del key package como identificador único
 				kpHash := hashKeyPackage(fp.Proposal.Add.KeyPackage)
 				if addsByKeyPackage[kpHash] {
 					return fmt.Errorf("duplicate add for key package: %w", ErrInvalidProposal)
 				}
 				addsByKeyPackage[kpHash] = true
 			}
+
+		case ProposalTypePreSharedKey:
+			// RFC §12.2: PSK IDs must not repeat within a commit.
+			if fp.Proposal.PreSharedKey != nil {
+				pid := fp.Proposal.PreSharedKey.PskID
+				key := string(pid.ID) + fmt.Sprintf(":%d:%x:%d", pid.PskType, pid.PskGroupID, pid.PskEpoch)
+				if pskIDs[key] {
+					return fmt.Errorf("duplicate PSK ID in proposals: %w", ErrInvalidProposal)
+				}
+				pskIDs[key] = true
+			}
+		}
+	}
+
+	// RFC §12.2 ValSem101–103: claves únicas en Add proposals.
+	if err := pf.checkAddKeyUniqueness(proposals); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkAddKeyUniqueness verifica que las claves de los Add proposals sean únicas
+// respecto a otros Add proposals y a los miembros existentes del árbol (RFC §12.2).
+//
+// ValSem101: signature keys únicas en Adds y vs árbol existente.
+// ValSem102: init keys únicas entre Adds.
+// ValSem103: encryption keys únicas en Adds y vs árbol existente.
+func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) error {
+	// Recolectar claves existentes del árbol (leaf nodes presentes).
+	existingEncKeys := make(map[string]bool)
+	existingSigKeys := make(map[string]bool)
+
+	for i := range pf.tree.Nodes {
+		node := &pf.tree.Nodes[i]
+		if node.State != treesync.NodeStatePresent || node.LeafData == nil {
+			continue
+		}
+		if len(node.LeafData.EncryptionKey) > 0 {
+			existingEncKeys[string(node.LeafData.EncryptionKey)] = true
+		}
+		// SignatureKeyRaw contiene los bytes crudos de la clave de firma.
+		if len(node.LeafData.SignatureKeyRaw) > 0 {
+			existingSigKeys[string(node.LeafData.SignatureKeyRaw)] = true
+		}
+	}
+
+	addEncKeys := make(map[string]bool)
+	addInitKeys := make(map[string]bool)
+	addSigKeys := make(map[string]bool)
+
+	for _, fp := range proposals {
+		if fp.Proposal.Type != ProposalTypeAdd || fp.Proposal.Add == nil {
+			continue
+		}
+		kp := fp.Proposal.Add.KeyPackage
+		if kp == nil {
+			continue
+		}
+
+		// ValSem102: init key único entre Adds.
+		if len(kp.InitKey) > 0 {
+			k := string(kp.InitKey)
+			if addInitKeys[k] {
+				return fmt.Errorf("duplicate init key in Add proposals: %w", ErrInvalidProposal)
+			}
+			addInitKeys[k] = true
+		}
+
+		ln := kp.LeafNode
+		if ln == nil {
+			continue
+		}
+
+		// ValSem103: encryption key único en Adds y vs árbol.
+		if len(ln.EncryptionKey) > 0 {
+			k := string(ln.EncryptionKey)
+			if addEncKeys[k] {
+				return fmt.Errorf("duplicate encryption key in Add proposals: %w", ErrInvalidProposal)
+			}
+			if existingEncKeys[k] {
+				return fmt.Errorf("encryption key in Add proposal already in use by tree member: %w", ErrInvalidProposal)
+			}
+			addEncKeys[k] = true
+		}
+
+		// ValSem101: signature key único en Adds y vs árbol.
+		// Usamos SignatureKeyBytes (raw bytes parseados del wire) si está disponible.
+		sigBytes := ln.SignatureKeyBytes
+		if len(sigBytes) == 0 && ln.SignatureKey != nil {
+			sigBytes = treesync.MarshalSignatureKey(ln.SignatureKey)
+		}
+		if len(sigBytes) > 0 {
+			k := string(sigBytes)
+			if addSigKeys[k] {
+				return fmt.Errorf("duplicate signature key in Add proposals: %w", ErrInvalidProposal)
+			}
+			if existingSigKeys[k] {
+				return fmt.Errorf("signature key in Add proposal already in use by tree member: %w", ErrInvalidProposal)
+			}
+			addSigKeys[k] = true
 		}
 	}
 
