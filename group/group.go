@@ -11,6 +11,7 @@
 package group
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/framing"
 	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/openmls/go/keypackages"
 	"github.com/openmls/go/schedule"
 	"github.com/openmls/go/secrettree"
 	"github.com/openmls/go/treesync"
@@ -788,6 +789,16 @@ func (g *Group) ProcessReceivedCommit(
 	senderLeafIdx treesync.LeafIndex,
 	myHpkePrivKeyBytes []byte,
 ) error {
+	// RFC §12.4.1: validar GroupID y epoch antes de cualquier trabajo costoso.
+	if !bytes.Equal(ac.Content.GroupID, g.GroupContext.GroupID.AsSlice()) {
+		return fmt.Errorf("group_id mismatch: message has %x, group is %x",
+			ac.Content.GroupID, g.GroupContext.GroupID.AsSlice())
+	}
+	if ac.Content.Epoch != g.GroupContext.Epoch.AsUint64() {
+		return fmt.Errorf("epoch mismatch: commit has %d, group is at %d",
+			ac.Content.Epoch, g.GroupContext.Epoch.AsUint64())
+	}
+
 	commitBody, ok := ac.Content.Body.(framing.CommitBody)
 	if !ok {
 		return fmt.Errorf("not a commit message")
@@ -806,7 +817,7 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("missing sender signature key")
 		}
 		rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("commit signature verification failed: %w", err)
 		}
@@ -816,7 +827,7 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("external commit missing leaf node signature key")
 		}
 		rawKey := treesync.MarshalSignatureKey(commit.Path.LeafNode.SignatureKey)
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("external commit signature verification failed: %w", err)
 		}
@@ -961,6 +972,45 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit && g.state != StateOperational {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
 	}
+
+	// FASE 1.2: Validación de epoch (RFC 9420 §12.4.1)
+	// FASE 1.3: Validación de GroupID (RFC 9420 §12.4.1)
+	if stagedCommit.AuthenticatedContent != nil {
+		// Validar GroupID
+		if !bytes.Equal(stagedCommit.AuthenticatedContent.Content.GroupID, g.GroupContext.GroupID.AsSlice()) {
+			return fmt.Errorf("group_id mismatch: message has %x, group is %x",
+				stagedCommit.AuthenticatedContent.Content.GroupID, g.GroupContext.GroupID.AsSlice())
+		}
+
+		// Validar epoch
+		if stagedCommit.AuthenticatedContent.Content.Epoch != g.GroupContext.Epoch.AsUint64() {
+			return fmt.Errorf("epoch mismatch: commit has %d, group is at %d",
+				stagedCommit.AuthenticatedContent.Content.Epoch, g.GroupContext.Epoch.AsUint64())
+		}
+
+		// FASE 1.1: Verificación de firma para commits de miembros
+		// (los external commits ya se verifican al procesar el UpdatePath)
+		senderType := stagedCommit.AuthenticatedContent.Content.Sender.Type
+		if senderType == framing.SenderTypeMember {
+			senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
+			senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
+			if senderLeaf == nil || senderLeaf.LeafData == nil || senderLeaf.LeafData.SignatureKey == nil {
+				return fmt.Errorf("missing sender signature key for commit verification")
+			}
+			rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
+			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
+			ac := &framing.AuthenticatedContent{
+				WireFormat:   stagedCommit.AuthenticatedContent.WireFormat,
+				Content:      stagedCommit.AuthenticatedContent.Content,
+				Auth:         stagedCommit.AuthenticatedContent.Auth,
+				GroupContext: g.GroupContext.Marshal(),
+			}
+			if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), stagedCommit.AuthenticatedContent.Auth.Signature); err != nil {
+				return fmt.Errorf("commit signature verification failed: %w", err)
+			}
+		}
+	}
+
 	// 1. Aplicar proposals al ratchet tree
 	senderIdx := g.OwnLeafIndex
 	if stagedCommit.AuthenticatedContent != nil {
