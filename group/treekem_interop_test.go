@@ -188,6 +188,10 @@ func applyUpdatePathToTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Le
 //   - If resNode is a parent node the receiver knows the path_secret for (from
 //     leaves_private.path_secrets): derive node_key via DeriveSecret("node") +
 //     DeriveKeyPair.
+//
+// Returns (pathSecret, commitSecret, decryptLevel, error) where decryptLevel is
+// the index into levels[] at which decryption succeeded. Callers can use
+// decryptLevel to accumulate path_secrets for subsequent update_paths.
 func decryptInteropPathSecret(
 	tree *treesync.RatchetTree,
 	senderLeafIdx treesync.LeafIndex,
@@ -197,7 +201,7 @@ func decryptInteropPathSecret(
 	receiverNodeSecrets map[int][]byte, // nodeIdx → path_secret from leaves_private
 	gcBytes []byte, // serialized GroupContext for current epoch
 	cs ciphersuite.CipherSuite,
-) ([]byte, []byte, error) {
+) ([]byte, []byte, int, error) {
 	_, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	receiverNodeIdx := treesync.LeafIndexToNodeIndex(receiverLeafIdx)
 
@@ -247,15 +251,15 @@ func decryptInteropPathSecret(
 			for k := m; k < len(levels); k++ {
 				secret, err = secret.DeriveSecret(cs, "path")
 				if err != nil {
-					return nil, nil, fmt.Errorf("derive path secret at step %d: %w", k, err)
+					return nil, nil, 0, fmt.Errorf("derive path secret at step %d: %w", k, err)
 				}
 			}
 
-			return psBytes, secret.AsSlice(), nil
+			return psBytes, secret.AsSlice(), m, nil
 		}
 	}
 
-	return nil, nil, fmt.Errorf("receiver %d not in copath resolution", receiverLeafIdx)
+	return nil, nil, 0, fmt.Errorf("receiver %d not in copath resolution", receiverLeafIdx)
 }
 
 func TestTreeKEMVectors(t *testing.T) {
@@ -333,6 +337,9 @@ func TestTreeKEMVectors(t *testing.T) {
 					Extensions:              nil,
 				}).Marshal()
 
+				// Get the sender's direct path and levels for path_secret accumulation.
+				directPath, _, levels := filteredDirectPathLevels(originalTree, senderLeafIdx)
+
 				// Verify path_secret and commit_secret for each receiver leaf.
 				for leafIdx, expected := range entry.PathSecrets {
 					if leafIdx == entry.Sender || expected == nil {
@@ -344,7 +351,7 @@ func TestTreeKEMVectors(t *testing.T) {
 						t.Fatalf("missing private key for leaf %d", leafIdx)
 					}
 
-					pathSecret, commitSecret, err := decryptInteropPathSecret(
+					pathSecret, commitSecret, mIdx, err := decryptInteropPathSecret(
 						originalTree,
 						senderLeafIdx,
 						treesync.LeafIndex(leafIdx),
@@ -366,6 +373,31 @@ func TestTreeKEMVectors(t *testing.T) {
 					wantCommitSecret := mustDecodeHexBytes(t, entry.CommitSecret)
 					if !bytes.Equal(commitSecret, wantCommitSecret) {
 						t.Fatalf("commit_secret mismatch update_path[%d] receiver %d\n  got  %x\n  want %x", upIndex, leafIdx, commitSecret, wantCommitSecret)
+					}
+
+					// Accumulate path_secrets so subsequent update_paths can decrypt via
+					// parent node keys derived from these secrets (RFC §12.4.1).
+					// path_secret[mIdx]   → directPath[levels[mIdx]+1]
+					// path_secret[mIdx+1] = DeriveSecret(path_secret[mIdx], "path") → directPath[levels[mIdx+1]+1]
+					// etc.
+					// Only store if not already present to avoid overwriting correct initial values.
+					nodeSecrets := leafNodeSecretsByIndex[leafIdx]
+					if nodeSecrets == nil {
+						nodeSecrets = make(map[int][]byte)
+						leafNodeSecretsByIndex[leafIdx] = nodeSecrets
+					}
+					curSecret := ciphersuite.NewSecret(pathSecret)
+					for k := mIdx; k < len(levels); k++ {
+						nodeIdx := directPath[levels[k]+1]
+						if _, exists := nodeSecrets[int(nodeIdx)]; !exists {
+							nodeSecrets[int(nodeIdx)] = curSecret.AsSlice()
+						}
+						if k < len(levels)-1 {
+							curSecret, err = curSecret.DeriveSecret(cs, "path")
+							if err != nil {
+								t.Fatalf("accumulate path secret at step %d: %v", k, err)
+							}
+						}
 					}
 				}
 			}

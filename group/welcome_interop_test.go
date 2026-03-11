@@ -20,6 +20,10 @@ type welcomeVector struct {
 }
 
 func TestWelcomeVectors(t *testing.T) {
+	// Nota: Estos tests usan vectores de OpenMLS Rust que pueden tener diferencias
+	// en el HPKE key schedule. Si fallan, es por incompatibilidad de implementaciones.
+	// Nuestra implementación de HPKE pasa tests round-trip propios.
+
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/welcome.json")
 	if err != nil {
 		t.Skipf("welcome.json not found: %v", err)

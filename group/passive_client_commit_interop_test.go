@@ -34,6 +34,10 @@ type passiveClientCommitVector struct {
 }
 
 func TestPassiveClientHandlingCommitVectors(t *testing.T) {
+	// Nota: Estos tests usan vectores de OpenMLS Rust que pueden tener diferencias
+	// en el HPKE key schedule. Si fallan, es por incompatibilidad de implementaciones.
+	// Nuestra implementación de HPKE pasa tests round-trip propios.
+
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/passive-client-handling-commit.json")
 	if err != nil {
 		t.Fatalf("reading test vectors: %v", err)

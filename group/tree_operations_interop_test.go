@@ -100,10 +100,15 @@ func TestTreeOperationsVectors(t *testing.T) {
 }
 
 func unmarshalInteropTree(data []byte, cs ciphersuite.CipherSuite) (*treesync.RatchetTree, error) {
+	// The ratchet_tree in test vectors is encoded as a RatchetTreeExtension:
+	// optional<Node> ratchet_tree<V>
+	// So we need to read the VL-prefixed extension content first.
 	r := tls.NewReader(data)
+	
+	// Read the VL-prefixed ratchet_tree from the extension
 	nodesData, err := r.ReadVLBytes()
 	if err != nil {
-		return nil, fmt.Errorf("reading tree vector: %w", err)
+		return nil, fmt.Errorf("reading ratchet_tree extension: %w", err)
 	}
 
 	nodeReader := tls.NewReader(nodesData)
