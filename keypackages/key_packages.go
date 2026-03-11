@@ -7,6 +7,7 @@ package keypackages
 import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -25,9 +26,12 @@ import (
 type CipherSuite uint16
 
 const (
-	// MLS_128_DHKEMP256_AES128GCM_SHA256_P256 is the baseline cipher suite for MLS.
-	// This is the only cipher suite required for DAVE compatibility.
+	// MLS128DHKEMX25519 is cipher suite 1: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+	MLS128DHKEMX25519 CipherSuite = 0x0001
+	// MLS128DHKEMP256 is cipher suite 2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (baseline for MLS 1.0)
 	MLS128DHKEMP256 CipherSuite = 0x0002
+	// MLS256DHKEMX25519ChaCha20 is cipher suite 3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+	MLS256DHKEMX25519ChaCha20 CipherSuite = 0x0003
 )
 
 // ProtocolVersion represents the MLS protocol version.
@@ -124,21 +128,25 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 		return nil, nil, errors.New("credential is nil")
 	}
 
-	// Generate HPKE key pair (P-256 for MLS)
-	hpkePrivKey, hpkePubKey, err := generateHPKEKeyPair()
+	// Generate HPKE key pair appropriate for the cipher suite
+	hpkePrivKey, hpkePubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating HPKE keys: %w", err)
 	}
 
-	// Create LeafNode
+	// Create LeafNode with capabilities that advertise the actual cipher suite.
+	caps := DefaultCapabilities()
+	caps.CipherSuites = []CipherSuite{cipherSuite}
+
 	leafNode := &LeafNode{
-		EncryptionKey:  hpkePubKey.Bytes(),
-		SignatureKey:   credWithKey.SignatureKey,
-		Credential:     credWithKey.Credential,
-		Capabilities:   DefaultCapabilities(),
-		Lifetime:       DefaultLifetime(),
-		Extensions:     []Extension{},
-		LeafNodeSource: 1, // key_package
+		EncryptionKey:     hpkePubKey.Bytes(),
+		SignatureKey:      credWithKey.SignatureKey,      // *ecdsa.PublicKey, nil for Ed25519
+		SignatureKeyBytes: credWithKey.SignatureKeyBytes, // raw bytes for Ed25519
+		Credential:        credWithKey.Credential,
+		Capabilities:      caps,
+		Lifetime:          DefaultLifetime(),
+		Extensions:        []Extension{},
+		LeafNodeSource:    1, // key_package
 	}
 
 	// Create KeyPackage first so we can sign it
@@ -151,7 +159,12 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 	}
 
 	// Create signature private key wrapper
-	sigPrivKey := ciphersuite.NewSignaturePrivateKey(credWithKey.PrivateKey)
+	var sigPrivKey *ciphersuite.SignaturePrivateKey
+	if credWithKey.Ed25519PrivateKey != nil {
+		sigPrivKey = ciphersuite.NewEd25519SignaturePrivateKey(credWithKey.Ed25519PrivateKey)
+	} else {
+		sigPrivKey = ciphersuite.NewSignaturePrivateKey(credWithKey.PrivateKey)
+	}
 
 	// Sign LeafNode using SignWithLabel (RFC 9420 §7.2)
 	leafNodeTBS := leafNode.marshalTBS()
@@ -171,9 +184,10 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 
 	// Create private keys
 	privKeys := &KeyPackagePrivateKeys{
-		InitKey:       hpkePrivKey,
-		EncryptionKey: hpkePrivKey,
-		SignatureKey:  credWithKey.PrivateKey,
+		InitKey:             hpkePrivKey,
+		EncryptionKey:       hpkePrivKey,
+		SignatureKey:        credWithKey.PrivateKey,        // *ecdsa.PrivateKey, nil for Ed25519
+		Ed25519SignatureKey: credWithKey.Ed25519PrivateKey, // non-nil for CS1/CS3
 	}
 
 	return keyPackage, privKeys, nil
@@ -183,9 +197,18 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 //
 // These must be kept secret and are used for decryption and signing.
 type KeyPackagePrivateKeys struct {
-	InitKey       *ecdh.PrivateKey // HPKE private key
-	EncryptionKey *ecdh.PrivateKey // Same as InitKey for DAVE
-	SignatureKey  *ecdsa.PrivateKey
+	InitKey             *ecdh.PrivateKey   // HPKE private key
+	EncryptionKey       *ecdh.PrivateKey   // Same as InitKey for DAVE
+	SignatureKey        *ecdsa.PrivateKey  // nil for Ed25519 (CS1/CS3)
+	Ed25519SignatureKey ed25519.PrivateKey // non-nil for CS1/CS3
+}
+
+// GetSignaturePrivateKey returns a SignaturePrivateKey for either ECDSA or Ed25519.
+func (k *KeyPackagePrivateKeys) GetSignaturePrivateKey() *ciphersuite.SignaturePrivateKey {
+	if k.Ed25519SignatureKey != nil {
+		return ciphersuite.NewEd25519SignaturePrivateKey(k.Ed25519SignatureKey)
+	}
+	return ciphersuite.NewSignaturePrivateKey(k.SignatureKey)
 }
 
 // generateHPKEKeyPair generates a P-256 HPKE key pair.
@@ -195,6 +218,21 @@ func generateHPKEKeyPair() (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
 		return nil, nil, err
 	}
 	return privKey, privKey.PublicKey(), nil
+}
+
+// generateHPKEKeyPairForCS generates an HPKE key pair appropriate for the cipher suite.
+// CS1/CS3 use X25519; CS2 uses P-256.
+func generateHPKEKeyPairForCS(cs ciphersuite.CipherSuite) (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
+	switch cs {
+	case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS256DHKEMX25519ChaCha20:
+		privKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		return privKey, privKey.PublicKey(), nil
+	default: // CS2 P-256
+		return generateHPKEKeyPair()
+	}
 }
 
 // marshalTBS serializes the KeyPackage TBS (To Be Signed).
@@ -244,8 +282,12 @@ func (ln *LeafNode) marshalTBS() []byte {
 
 	buf.WriteVLBytes(ln.EncryptionKey)
 
-	// Serialize ECDSA public key as uncompressed point (0x04 || X || Y), VL-prefixed (RFC 9420 §7.2).
-	buf.WriteVLBytes(marshalP256PublicKey(ln.SignatureKey))
+	// Serialize signature public key, VL-prefixed (RFC 9420 §7.2).
+	if len(ln.SignatureKeyBytes) > 0 {
+		buf.WriteVLBytes(ln.SignatureKeyBytes)
+	} else {
+		buf.WriteVLBytes(marshalP256PublicKey(ln.SignatureKey))
+	}
 
 	buf.WriteRaw(ln.Credential.Marshal())
 
@@ -628,7 +670,7 @@ func (kp *KeyPackage) Validate() error {
 		return fmt.Errorf("unsupported protocol version: %d", kp.ProtocolVersion)
 	}
 
-	if kp.CipherSuite != MLS128DHKEMP256 {
+	if !ciphersuite.CipherSuite(kp.CipherSuite).IsSupported() {
 		return fmt.Errorf("unsupported cipher suite: %d", kp.CipherSuite)
 	}
 
@@ -653,7 +695,7 @@ func (ln *LeafNode) Validate() error {
 		return errors.New("encryption_key is empty")
 	}
 
-	if ln.SignatureKey == nil {
+	if ln.SignatureKey == nil && len(ln.SignatureKeyBytes) == 0 {
 		return errors.New("signature_key is nil")
 	}
 
@@ -677,7 +719,7 @@ func (kp *KeyPackage) MarshalTBS() []byte {
 // Verify verifica la firma del KeyPackage.
 // RFC 9420 §10.1, §12.2: VerifyWithLabel(LeafNode.SignatureKey, "KeyPackageTBS", tbs, signature)
 func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
-	if kp.LeafNode == nil || kp.LeafNode.SignatureKey == nil {
+	if kp.LeafNode == nil || (kp.LeafNode.SignatureKey == nil && len(kp.LeafNode.SignatureKeyBytes) == 0) {
 		return errors.New("keypackage: missing leaf node or signature key")
 	}
 
@@ -711,15 +753,10 @@ func marshalP256PublicKey(key *ecdsa.PublicKey) []byte {
 	if key == nil {
 		return nil
 	}
-	xBytes := key.X.Bytes()
-	yBytes := key.Y.Bytes()
-	paddedX := make([]byte, 32)
-	paddedY := make([]byte, 32)
-	copy(paddedX[32-len(xBytes):], xBytes)
-	copy(paddedY[32-len(yBytes):], yBytes)
-	out := make([]byte, 65)
-	out[0] = 0x04
-	copy(out[1:33], paddedX)
-	copy(out[33:65], paddedY)
-	return out
+	// Use crypto/ecdh for uncompressed 65-byte P-256 point (avoids deprecated .X/.Y access).
+	ecdhKey, err := key.ECDH()
+	if err != nil {
+		return nil
+	}
+	return ecdhKey.Bytes()
 }

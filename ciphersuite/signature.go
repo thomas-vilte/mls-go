@@ -61,13 +61,21 @@ func (k *SignaturePublicKey) ToECDSA() (*ecdsa.PublicKey, error) {
 }
 
 // SignaturePrivateKey represents a private signature key.
+// It is a union type supporting both ECDSA (P-256) and Ed25519.
 type SignaturePrivateKey struct {
-	ecdsa *ecdsa.PrivateKey
+	scheme     SignatureScheme
+	ecdsaKey   *ecdsa.PrivateKey
+	ed25519Key ed25519.PrivateKey // non-nil only for Ed25519
 }
 
 // NewSignaturePrivateKey creates a wrapper from an existing ecdsa.PrivateKey.
 func NewSignaturePrivateKey(priv *ecdsa.PrivateKey) *SignaturePrivateKey {
-	return &SignaturePrivateKey{ecdsa: priv}
+	return &SignaturePrivateKey{scheme: ECDSA_SECP256R1_SHA256, ecdsaKey: priv}
+}
+
+// NewEd25519SignaturePrivateKey creates a wrapper from an Ed25519 private key.
+func NewEd25519SignaturePrivateKey(priv ed25519.PrivateKey) *SignaturePrivateKey {
+	return &SignaturePrivateKey{scheme: ED25519, ed25519Key: priv}
 }
 
 // GenerateSignaturePrivateKey generates a new P-256 private key.
@@ -76,47 +84,59 @@ func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating P-256 key: %w", err)
 	}
-	return &SignaturePrivateKey{ecdsa: priv}, nil
+	return &SignaturePrivateKey{scheme: ECDSA_SECP256R1_SHA256, ecdsaKey: priv}, nil
 }
 
-// PublicKey returns the public key in uncompressed format.
-// RFC 9420 §5.1.2: Public keys are encoded in uncompressed format (0x04 || X || Y).
+// GenerateSignaturePrivateKeyForCS generates a new private key appropriate for the cipher suite.
+// CS1/CS3 use Ed25519; CS2 uses P-256 ECDSA.
+func GenerateSignaturePrivateKeyForCS(cs CipherSuite) (*SignaturePrivateKey, error) {
+	switch cs.SignatureScheme() {
+	case ED25519:
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generating Ed25519 key: %w", err)
+		}
+		return &SignaturePrivateKey{scheme: ED25519, ed25519Key: priv}, nil
+	default:
+		return GenerateSignaturePrivateKey()
+	}
+}
+
+// Scheme returns the signature scheme of this key.
+func (k *SignaturePrivateKey) Scheme() SignatureScheme {
+	return k.scheme
+}
+
+// PublicKey returns the public key bytes.
+// For ECDSA: returns uncompressed point (0x04 || X || Y, 65 bytes).
+// For Ed25519: returns raw 32-byte public key.
 func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
-	// Usar la API moderna de ecdh para obtener los bytes de la public key
-	// Convertir las coordenadas X, Y a formato uncompressed
-	pubKey := k.ecdsa.PublicKey
-
-	// Formato uncompressed: 0x04 || X || Y (65 bytes para P-256)
-	// X e Y son cada uno 32 bytes
-	xBytes := pubKey.X.Bytes()
-	yBytes := pubKey.Y.Bytes()
-
-	// Asegurar que tengan 32 bytes (padding con ceros si es necesario)
-	if len(xBytes) < 32 {
-		padded := make([]byte, 32)
-		copy(padded[32-len(xBytes):], xBytes)
-		xBytes = padded
-	}
-	if len(yBytes) < 32 {
-		padded := make([]byte, 32)
-		copy(padded[32-len(yBytes):], yBytes)
-		yBytes = padded
+	if k.scheme == ED25519 {
+		pub := k.ed25519Key.Public().(ed25519.PublicKey)
+		return NewSignaturePublicKey([]byte(pub))
 	}
 
-	// Construir formato uncompressed
-	bytes := make([]byte, 65)
-	bytes[0] = 0x04
-	copy(bytes[1:33], xBytes)
-	copy(bytes[33:65], yBytes)
-
-	return NewSignaturePublicKey(bytes)
+	// ECDSA P-256: uncompressed format via crypto/ecdh (avoids deprecated .X/.Y access)
+	ecdhKey, err := k.ecdsaKey.ECDH()
+	if err != nil {
+		// Fallback should never happen for a valid P-256 key
+		return NewSignaturePublicKey(nil)
+	}
+	return NewSignaturePublicKey(ecdhKey.PublicKey().Bytes())
 }
 
-// Sign signs the given data using ECDSA-SHA256.
-// Returns the signature in ASN.1 DER format.
+// Sign signs the given data.
+// For ECDSA: uses ECDSA-SHA256, returns ASN.1 DER format.
+// For Ed25519: returns raw 64-byte signature.
 func (k *SignaturePrivateKey) Sign(data []byte) (*Signature, error) {
+	if k.scheme == ED25519 {
+		sig := ed25519.Sign(k.ed25519Key, data)
+		return NewSignature(sig), nil
+	}
+
+	// ECDSA-SHA256
 	hash := sha256.Sum256(data)
-	r, s, err := ecdsa.Sign(rand.Reader, k.ecdsa, hash[:])
+	r, s, err := ecdsa.Sign(rand.Reader, k.ecdsaKey, hash[:])
 	if err != nil {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
@@ -201,12 +221,12 @@ func (k *OpenMlsSignaturePublicKey) verifyEd25519(data []byte, sig *Signature) e
 	if len(k.Value) != 32 {
 		return fmt.Errorf("invalid Ed25519 public key length: %d", len(k.Value))
 	}
-	
+
 	// Ed25519 signatures are 64 bytes
 	if len(sig.AsSlice()) != 64 {
 		return fmt.Errorf("invalid Ed25519 signature length: %d", len(sig.AsSlice()))
 	}
-	
+
 	if !ed25519.Verify(k.Value, data, sig.AsSlice()) {
 		return ErrInvalidSignature
 	}

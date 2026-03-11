@@ -52,6 +52,7 @@ package credentials
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -62,6 +63,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/openmls/go/ciphersuite"
 	"github.com/openmls/go/internal/tls"
 )
 
@@ -628,9 +630,11 @@ func (c *Credential) Hash() []byte {
 // └─────────────────────────────────────────┘
 // ```
 type CredentialWithKey struct {
-	Credential   *Credential
-	SignatureKey *ecdsa.PublicKey
-	PrivateKey   *ecdsa.PrivateKey // Private key para firmar (¡mantenela secreta!)
+	Credential        *Credential
+	SignatureKey      *ecdsa.PublicKey
+	PrivateKey        *ecdsa.PrivateKey  // Private key para firmar (¡mantenela secreta!) — nil for Ed25519
+	Ed25519PrivateKey ed25519.PrivateKey // non-nil for CS1/CS3 (Ed25519 scheme)
+	SignatureKeyBytes []byte             // raw public key bytes (works for both ECDSA and Ed25519)
 }
 
 // GenerateCredentialWithKey genera una nueva credential con su key pair asociado.
@@ -664,6 +668,42 @@ func GenerateCredentialWithKey(identity []byte) (*CredentialWithKey, *ecdsa.Priv
 	}
 
 	return credWithKey, privKey, nil
+}
+
+// GenerateCredentialWithKeyForCS generates a credential with a key pair appropriate for the given cipher suite.
+// For CS1/CS3 (Ed25519 signature scheme): uses Ed25519.
+// For CS2 (ECDSA): uses P-256.
+func GenerateCredentialWithKeyForCS(identity []byte, cs ciphersuite.CipherSuite) (*CredentialWithKey, *ciphersuite.SignaturePrivateKey, error) {
+	switch cs.SignatureScheme() {
+	case ciphersuite.ED25519:
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("generating Ed25519 key: %w", err)
+		}
+		cred := NewBasicCredential(identity)
+		sigPriv := ciphersuite.NewEd25519SignaturePrivateKey(priv)
+		credWithKey := &CredentialWithKey{
+			Credential:        cred,
+			SignatureKey:      nil,
+			PrivateKey:        nil,
+			Ed25519PrivateKey: priv,
+			SignatureKeyBytes: []byte(pub),
+		}
+		return credWithKey, sigPriv, nil
+	default: // ECDSA_SECP256R1_SHA256 (CS2)
+		privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("generating P-256 key: %w", err)
+		}
+		cred := NewBasicCredential(identity)
+		sigPriv := ciphersuite.NewSignaturePrivateKey(privKey)
+		credWithKey := &CredentialWithKey{
+			Credential:   cred,
+			SignatureKey: &privKey.PublicKey,
+			PrivateKey:   privKey,
+		}
+		return credWithKey, sigPriv, nil
+	}
 }
 
 // GenerateX509CredentialWithKey genera una X509Credential con su key pair.
