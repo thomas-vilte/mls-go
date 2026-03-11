@@ -425,3 +425,402 @@ func BenchmarkSecret_HKDFExpand(b *testing.B) {
 		prk.HKDFExpand(info, 64)
 	}
 }
+
+// ============================================================================
+// Tests para Cipher Suite 1 (Ed25519/X25519) - RFC 9420 §5.1
+// ============================================================================
+
+// TestEd25519_GenerateKeyPair prueba generación de keypair Ed25519
+func TestEd25519_GenerateKeyPair(t *testing.T) {
+	privKey, pubKey, err := GenerateEd25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateEd25519KeyPair failed: %v", err)
+	}
+
+	if privKey == nil {
+		t.Fatal("GenerateEd25519KeyPair should return non-nil private key")
+	}
+
+	if pubKey == nil {
+		t.Fatal("GenerateEd25519KeyPair should return non-nil public key")
+	}
+}
+
+// TestEd25519_SignVerifyWithLabel prueba firma y verificación Ed25519
+func TestEd25519_SignVerifyWithLabel(t *testing.T) {
+	privKey, pubKey, err := GenerateEd25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateEd25519KeyPair failed: %v", err)
+	}
+
+	data := []byte("test message")
+	sig, err := privKey.SignWithLabel("test_label", data)
+	if err != nil {
+		t.Fatalf("SignWithLabel failed: %v", err)
+	}
+
+	if len(sig.AsSlice()) != 64 {
+		t.Errorf("Ed25519 signature should be 64 bytes, got %d", len(sig.AsSlice()))
+	}
+
+	// Verificar con label correcto
+	if err := pubKey.VerifyWithLabel("test_label", data, sig); err != nil {
+		t.Errorf("VerifyWithLabel should succeed: %v", err)
+	}
+
+	// Verificar con label incorrecto debería fallar
+	if err := pubKey.VerifyWithLabel("wrong_label", data, sig); err == nil {
+		t.Error("VerifyWithLabel should fail with wrong label")
+	}
+
+	// Verificar con data modificada debería fallar
+	badData := []byte("tampered message")
+	if err := pubKey.VerifyWithLabel("test_label", badData, sig); err == nil {
+		t.Error("VerifyWithLabel should fail with tampered data")
+	}
+}
+
+// TestEd25519_Bytes prueba serialización de keys Ed25519
+func TestEd25519_Bytes(t *testing.T) {
+	privKey, pubKey, err := GenerateEd25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateEd25519KeyPair failed: %v", err)
+	}
+
+	privBytes := privKey.Bytes()
+	if len(privBytes) != 64 {
+		t.Errorf("Ed25519 private key should be 64 bytes, got %d", len(privBytes))
+	}
+
+	pubBytes := pubKey.Bytes()
+	if len(pubBytes) != 32 {
+		t.Errorf("Ed25519 public key should be 32 bytes, got %d", len(pubBytes))
+	}
+}
+
+// TestEd25519_NewPrivateKeyFromBytes prueba creación de private key desde bytes
+func TestEd25519_NewPrivateKeyFromBytes(t *testing.T) {
+	// Generar key original
+	privKey1, _, err := GenerateEd25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateEd25519KeyPair failed: %v", err)
+	}
+
+	// Obtener bytes
+	privBytes := privKey1.Bytes()
+
+	// Crear key desde bytes
+	privKey2, err := NewEd25519PrivateKey(privBytes)
+	if err != nil {
+		t.Fatalf("NewEd25519PrivateKey failed: %v", err)
+	}
+
+	// Ambas keys deberían firmar igual
+	data := []byte("test")
+	sig1, _ := privKey1.SignWithLabel("label", data)
+	sig2, _ := privKey2.SignWithLabel("label", data)
+
+	// Las firmas deberían ser iguales (Ed25519 es determinístico)
+	if string(sig1.AsSlice()) != string(sig2.AsSlice()) {
+		t.Error("Same private key should produce same signature")
+	}
+}
+
+// TestEd25519_InvalidKeyLength prueba longitudes inválidas
+func TestEd25519_InvalidKeyLength(t *testing.T) {
+	// Private key muy corto
+	_, err := NewEd25519PrivateKey([]byte{0x01, 0x02})
+	if err == nil {
+		t.Error("NewEd25519PrivateKey should fail with short key")
+	}
+
+	// Public key muy corto
+	_, err = NewEd25519PublicKey([]byte{0x01, 0x02})
+	if err == nil {
+		t.Error("NewEd25519PublicKey should fail with short key")
+	}
+}
+
+// ============================================================================
+// Tests para X25519 (DHKEM) - RFC 9420 §4.1
+// ============================================================================
+
+// TestX25519_GenerateKeyPair prueba generación de keypair X25519
+func TestX25519_GenerateKeyPair(t *testing.T) {
+	privKey, pubKey, err := GenerateX25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateX25519KeyPair failed: %v", err)
+	}
+
+	if privKey == nil {
+		t.Fatal("GenerateX25519KeyPair should return non-nil private key")
+	}
+
+	if pubKey == nil {
+		t.Fatal("GenerateX25519KeyPair should return non-nil public key")
+	}
+}
+
+// TestX25519_EncapDecap prueba encapsulación/decapsulación X25519
+func TestX25519_EncapDecap(t *testing.T) {
+	// Generar keypair receptor
+	pubKey, privKey, err := GenerateX25519KeyPair()
+	if err != nil {
+		t.Fatalf("GenerateX25519KeyPair failed: %v", err)
+	}
+
+	// Encapsular
+	ciphertext, sharedSecret1, err := EncapToBytes(pubKey, MLS128DHKEMX25519)
+	if err != nil {
+		t.Fatalf("EncapToBytes failed: %v", err)
+	}
+
+	if len(ciphertext) == 0 {
+		t.Fatal("EncapToBytes should return non-empty ciphertext")
+	}
+
+	if len(sharedSecret1) == 0 {
+		t.Fatal("EncapToBytes should return non-nil shared secret")
+	}
+
+	// Decapsular
+	sharedSecret2, err := DecapToBytes(ciphertext, privKey, MLS128DHKEMX25519)
+	if err != nil {
+		t.Fatalf("DecapToBytes failed: %v", err)
+	}
+
+	// Los shared secrets deberían ser iguales
+	if string(sharedSecret1) != string(sharedSecret2) {
+		t.Error("Encap/Decap should produce same shared secret")
+	}
+}
+
+// TestDeriveKeyPairX25519 prueba derivación determinística de keypair
+func TestDeriveKeyPairX25519(t *testing.T) {
+	ikm := []byte("test ikm for derivation")
+
+	// Derivar dos veces con mismo IKM
+	pub1, priv1, err := DeriveKeyPairX25519(ikm)
+	if err != nil {
+		t.Fatalf("DeriveKeyPairX25519 failed: %v", err)
+	}
+
+	pub2, priv2, err := DeriveKeyPairX25519(ikm)
+	if err != nil {
+		t.Fatalf("DeriveKeyPairX25519 failed: %v", err)
+	}
+
+	// Deberían ser iguales (derivación determinística)
+	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
+		t.Error("Same IKM should produce same keypair")
+	}
+}
+
+// ============================================================================
+// Tests para Cipher Suite 3 (ChaCha20-Poly1305) - RFC 9420 §5.1
+// ============================================================================
+
+// TestChaCha20Poly1305_EncryptDecrypt prueba cifrado/descifrado ChaCha20-Poly1305
+func TestChaCha20Poly1305_EncryptDecrypt(t *testing.T) {
+	// Generar key y nonce
+	key, err := GenerateChaCha20Key()
+	if err != nil {
+		t.Fatalf("GenerateChaCha20Key failed: %v", err)
+	}
+	nonce, err := GenerateChaCha20Nonce()
+	if err != nil {
+		t.Fatalf("GenerateChaCha20Nonce failed: %v", err)
+	}
+
+	if len(key) != 32 {
+		t.Errorf("ChaCha20 key should be 32 bytes, got %d", len(key))
+	}
+
+	if len(nonce) != 12 {
+		t.Errorf("ChaCha20 nonce should be 12 bytes, got %d", len(nonce))
+	}
+
+	plaintext := []byte("Hello, ChaCha20!")
+	aad := []byte("additional data")
+
+	// Cifrar
+	ciphertext, err := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
+	if err != nil {
+		t.Fatalf("ChaCha20Poly1305Encrypt failed: %v", err)
+	}
+
+	if len(ciphertext) <= len(plaintext) {
+		t.Error("Ciphertext should be longer than plaintext (includes auth tag)")
+	}
+
+	// Descifrar
+	decrypted, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad)
+	if err != nil {
+		t.Fatalf("ChaCha20Poly1305Decrypt failed: %v", err)
+	}
+
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("Decrypted text mismatch: got %q, want %q", string(decrypted), string(plaintext))
+	}
+}
+
+// TestChaCha20Poly1305_WrongKey prueba que key incorrecta falla
+func TestChaCha20Poly1305_WrongKey(t *testing.T) {
+	key1, _ := GenerateChaCha20Key()
+	key2, _ := GenerateChaCha20Key()
+	nonce, _ := GenerateChaCha20Nonce()
+
+	plaintext := []byte("test message")
+	aad := []byte("aad")
+
+	ciphertext, _ := ChaCha20Poly1305Encrypt(key1, nonce, plaintext, aad)
+
+	// Descifrar con key incorrecta debería fallar
+	_, err := ChaCha20Poly1305Decrypt(key2, nonce, ciphertext, aad)
+	if err == nil {
+		t.Error("ChaCha20Poly1305Decrypt should fail with wrong key")
+	}
+}
+
+// TestChaCha20Poly1305_TamperedData prueba que datos modificados fallan
+func TestChaCha20Poly1305_TamperedData(t *testing.T) {
+	key, _ := GenerateChaCha20Key()
+	nonce, _ := GenerateChaCha20Nonce()
+
+	plaintext := []byte("test message")
+	aad := []byte("aad")
+
+	ciphertext, _ := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
+
+	// Corromper un byte del ciphertext
+	ciphertext[0] ^= 0xFF
+
+	// Descifrar debería fallar
+	_, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad)
+	if err == nil {
+		t.Error("ChaCha20Poly1305Decrypt should fail with tampered ciphertext")
+	}
+}
+
+// TestChaCha20Poly1305_WrongAAD prueba que AAD incorrecto falla
+func TestChaCha20Poly1305_WrongAAD(t *testing.T) {
+	key, _ := GenerateChaCha20Key()
+	nonce, _ := GenerateChaCha20Nonce()
+
+	plaintext := []byte("test message")
+	aad1 := []byte("aad1")
+	aad2 := []byte("aad2")
+
+	ciphertext, _ := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad1)
+
+	// Descifrar con AAD incorrecto debería fallar
+	_, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad2)
+	if err == nil {
+		t.Error("ChaCha20Poly1305Decrypt should fail with wrong AAD")
+	}
+}
+
+// TestChaCha20_KeyNonceGeneration prueba generación de key y nonce
+func TestChaCha20_KeyNonceGeneration(t *testing.T) {
+	key1, _ := GenerateChaCha20Key()
+	key2, _ := GenerateChaCha20Key()
+
+	if string(key1) == string(key2) {
+		t.Error("GenerateChaCha20Key should produce different keys")
+	}
+
+	nonce1, _ := GenerateChaCha20Nonce()
+	nonce2, _ := GenerateChaCha20Nonce()
+
+	if string(nonce1) == string(nonce2) {
+		t.Error("GenerateChaCha20Nonce should produce different nonces")
+	}
+}
+
+// ============================================================================
+// Tests para funciones hash y derivación - RFC 9420 §5.2
+// ============================================================================
+
+// TestCiphersuite_Hash prueba función hash
+func TestCiphersuite_Hash(t *testing.T) {
+	data := []byte("test data")
+
+	// Hash con cs=2 (P256/AES-GCM)
+	hashFunc := MLS128DHKEMP256.HashFunction()
+	hash1 := hashFunc()
+	hash1.Write(data)
+	sum1 := hash1.Sum(nil)
+	
+	if len(sum1) != 32 {
+		t.Errorf("SHA-256 hash should be 32 bytes, got %d", len(sum1))
+	}
+
+	// Hash con cs=1 (X25519)
+	hashFunc2 := MLS128DHKEMX25519.HashFunction()
+	hash2 := hashFunc2()
+	hash2.Write(data)
+	sum2 := hash2.Sum(nil)
+	
+	if len(sum2) != 32 {
+		t.Errorf("SHA-256 hash should be 32 bytes, got %d", len(sum2))
+	}
+
+	// Mismo input debería producir mismo hash
+	hash3 := hashFunc()
+	hash3.Write(data)
+	sum3 := hash3.Sum(nil)
+	
+	if string(sum1) != string(sum3) {
+		t.Error("Hash should be deterministic")
+	}
+}
+
+// TestDeriveKeyPairP256 prueba derivación de keypair P256
+func TestDeriveKeyPairP256(t *testing.T) {
+	ikm := []byte("test ikm for P256 derivation")
+
+	// Derivar dos veces con mismo IKM
+	pub1, priv1, err := DeriveKeyPairP256(ikm)
+	if err != nil {
+		t.Fatalf("DeriveKeyPairP256 failed: %v", err)
+	}
+
+	pub2, priv2, err := DeriveKeyPairP256(ikm)
+	if err != nil {
+		t.Fatalf("DeriveKeyPairP256 failed: %v", err)
+	}
+
+	// Deberían ser iguales (derivación determinística)
+	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
+		t.Error("Same IKM should produce same P256 keypair")
+	}
+}
+
+// TestSignable_Sign_Verify prueba firma y verificación genérica
+func TestSignable_Sign_Verify(t *testing.T) {
+	// Generar keypair ECDSA
+	privKey, err := GenerateSignaturePrivateKey()
+	if err != nil {
+		t.Fatalf("GenerateSignaturePrivateKey failed: %v", err)
+	}
+
+	data := []byte("test data to sign")
+
+	// Firmar
+	sig, err := SignWithLabel(privKey, "test_label", data)
+	if err != nil {
+		t.Fatalf("SignWithLabel failed: %v", err)
+	}
+
+	// Verificar
+	pubKey := privKey.PublicKey()
+	openMlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	if err := VerifyWithLabel(openMlsPubKey, "test_label", data, sig); err != nil {
+		t.Errorf("VerifyWithLabel should succeed: %v", err)
+	}
+
+	// Verificar con label incorrecto debería fallar
+	if err := VerifyWithLabel(openMlsPubKey, "wrong_label", data, sig); err == nil {
+		t.Error("VerifyWithLabel should fail with wrong label")
+	}
+}
