@@ -417,11 +417,12 @@ func (g *Group) CreateWelcome(
 		return nil, err
 	}
 
-	encryptedGroupInfo, err := ciphersuite.AESEncrypt(
+	encryptedGroupInfo, err := ciphersuite.EncryptWithCipherSuite(
 		welcomeKey.AsSlice(),
 		welcomeNonce.AsSlice(),
 		groupInfoBytes,
 		[]byte{}, // empty AAD
+		g.CipherSuite,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting group info: %w", err)
@@ -558,11 +559,12 @@ func JoinFromWelcome(
 	if err != nil {
 		return nil, fmt.Errorf("deriving welcome_nonce: %w", err)
 	}
-	groupInfoData, err := ciphersuite.AESDecrypt(
+	groupInfoData, err := ciphersuite.DecryptWithCipherSuite(
 		welcomeKey.AsSlice(),
 		welcomeNonce.AsSlice(),
 		welcome.EncryptedGroupInfo,
 		[]byte{},
+		welcome.CipherSuite,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting group info: %w", err)

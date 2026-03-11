@@ -317,7 +317,7 @@ func (l *LeafNodeData) Validate() error {
 		return errors.New("encryption_key is empty")
 	}
 
-	if l.SignatureKey == nil {
+	if l.SignatureKey == nil && len(l.SignatureKeyRaw) == 0 {
 		return errors.New("signature_key is nil")
 	}
 
@@ -377,24 +377,25 @@ func (l *LeafNodeData) VerifyWithContext(cs ciphersuite.CipherSuite, groupID []b
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 
+// SigKeyBytes returns the raw signature public key bytes,
+// preferring SignatureKeyRaw when set (Ed25519), falling back to marshaling SignatureKey (ECDSA).
+func (l *LeafNodeData) SigKeyBytes() []byte {
+	if len(l.SignatureKeyRaw) > 0 {
+		return l.SignatureKeyRaw
+	}
+	return MarshalSignatureKey(l.SignatureKey)
+}
+
 func MarshalSignatureKey(key *ecdsa.PublicKey) []byte {
 	if key == nil {
 		return nil
 	}
-	xBytes := key.X.Bytes()
-	yBytes := key.Y.Bytes()
-
-	// Pad to 32 bytes
-	paddedX := make([]byte, 32)
-	copy(paddedX[32-len(xBytes):], xBytes)
-	paddedY := make([]byte, 32)
-	copy(paddedY[32-len(yBytes):], yBytes)
-
-	res := make([]byte, 65)
-	res[0] = 0x04
-	copy(res[1:33], paddedX)
-	copy(res[33:65], paddedY)
-	return res
+	// Use crypto/ecdh to get uncompressed 65-byte P-256 point (avoids deprecated .X/.Y access).
+	ecdhKey, err := key.ECDH()
+	if err != nil {
+		return nil
+	}
+	return ecdhKey.Bytes()
 }
 
 func (l *LeafNodeData) marshalSignatureKey() []byte {

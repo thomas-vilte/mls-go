@@ -5,6 +5,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // AESEncrypt encrypts plaintext using AES-128-GCM.
@@ -57,4 +59,36 @@ func AESDecrypt(key, nonce, ciphertext, aad []byte) ([]byte, error) {
 	}
 
 	return plaintext, nil
+}
+
+// EncryptWithCipherSuite encrypts using the appropriate AEAD for the cipher suite.
+func EncryptWithCipherSuite(key, nonce, plaintext, aad []byte, cs CipherSuite) ([]byte, error) {
+	switch cs.AeadAlgorithm() {
+	case AES128GCM:
+		return AESEncrypt(key, nonce, plaintext, aad)
+	case ChaCha20Poly1305:
+		aead, err := chacha20poly1305.New(key)
+		if err != nil {
+			return nil, fmt.Errorf("creating ChaCha20-Poly1305: %w", err)
+		}
+		return aead.Seal(nil, nonce, plaintext, aad), nil
+	default:
+		return nil, fmt.Errorf("unsupported AEAD algorithm for cipher suite %d", cs)
+	}
+}
+
+// DecryptWithCipherSuite decrypts using the appropriate AEAD for the cipher suite.
+func DecryptWithCipherSuite(key, nonce, ciphertext, aad []byte, cs CipherSuite) ([]byte, error) {
+	switch cs.AeadAlgorithm() {
+	case AES128GCM:
+		return AESDecrypt(key, nonce, ciphertext, aad)
+	case ChaCha20Poly1305:
+		aead, err := chacha20poly1305.New(key)
+		if err != nil {
+			return nil, fmt.Errorf("creating ChaCha20-Poly1305: %w", err)
+		}
+		return aead.Open(nil, nonce, ciphertext, aad)
+	default:
+		return nil, fmt.Errorf("unsupported AEAD algorithm for cipher suite %d", cs)
+	}
 }
