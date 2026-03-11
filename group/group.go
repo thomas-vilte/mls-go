@@ -13,6 +13,7 @@ package group
 import (
 	"bytes"
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
 	"sort"
@@ -105,12 +106,13 @@ func NewGroup(
 
 	// Add our leaf
 	leafData := treesync.LeafNodeData{
-		EncryptionKey:  keyPackage.InitKey,
-		SignatureKey:   &privateKeys.SignatureKey.PublicKey,
-		Credential:     keyPackage.LeafNode.Credential,
-		Capabilities:   &treesync.LeafNodeCapabilities{},
-		Lifetime:       &treesync.LeafNodeLifetime{},
-		LeafNodeSource: 1, // key_package
+		EncryptionKey:   keyPackage.InitKey,
+		SignatureKey:    keyPackage.LeafNode.SignatureKey,
+		SignatureKeyRaw: append([]byte(nil), keyPackage.LeafNode.SignatureKeyBytes...),
+		Credential:      keyPackage.LeafNode.Credential,
+		Capabilities:    &treesync.LeafNodeCapabilities{},
+		Lifetime:        &treesync.LeafNodeLifetime{},
+		LeafNodeSource:  1, // key_package
 	}
 
 	_, _ = ratchetTree.AddLeaf(leafData)
@@ -225,13 +227,13 @@ func (g *Group) UpdateMember(
 	if privateKeys == nil {
 		return nil, fmt.Errorf("private keys are nil")
 	}
-	if privateKeys.SignatureKey == nil {
-		return nil, fmt.Errorf("signature key is nil")
+	if privateKeys.SignatureKey == nil && len(privateKeys.Ed25519SignatureKey) == 0 {
+		return nil, fmt.Errorf("no signature key available")
 	}
 
 	// source = 2 (update); TBS incluye group_id + leaf_index per RFC §7.2.
 	newLeafNode.LeafNodeSource = 2
-	sigKey := ciphersuite.NewSignaturePrivateKey(privateKeys.SignatureKey)
+	sigKey := privateKeys.GetSignaturePrivateKey()
 	tbs := newLeafNode.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(g.OwnLeafIndex))
 	sig, err := ciphersuite.SignWithLabel(sigKey, "LeafNodeTBS", tbs)
 	if err != nil {
@@ -241,11 +243,12 @@ func (g *Group) UpdateMember(
 
 	// Convert treesync leaf data to keypackages leaf node.
 	kpLeafNode := &keypackages.LeafNode{
-		EncryptionKey: newLeafNode.EncryptionKey,
-		SignatureKey:  newLeafNode.SignatureKey,
-		Credential:    newLeafNode.Credential,
-		Capabilities:  treeSyncToKeyPackageCapabilities(newLeafNode.Capabilities),
-		Lifetime:      treeSyncToKeyPackageLifetime(newLeafNode.Lifetime),
+		EncryptionKey:     newLeafNode.EncryptionKey,
+		SignatureKey:      newLeafNode.SignatureKey,
+		SignatureKeyBytes: append([]byte(nil), newLeafNode.SignatureKeyRaw...),
+		Credential:        newLeafNode.Credential,
+		Capabilities:      treeSyncToKeyPackageCapabilities(newLeafNode.Capabilities),
+		Lifetime:          treeSyncToKeyPackageLifetime(newLeafNode.Lifetime),
 	}
 
 	// Create Update proposal
@@ -556,10 +559,6 @@ func (g *Group) createUpdatePath(
 		tree.Nodes[nodeIdx].ParentHash = ph
 	}
 
-	sigPubKeyECDSA, err := sigPubKey.ToECDSA()
-	if err != nil {
-		return nil, nil, fmt.Errorf("converting signature public key: %w", err)
-	}
 	var caps *treesync.LeafNodeCapabilities
 	if ownLeaf := g.RatchetTree.GetLeaf(senderLeafIdx); ownLeaf != nil && ownLeaf.LeafData != nil {
 		caps = ownLeaf.LeafData.Capabilities
@@ -567,6 +566,25 @@ func (g *Group) createUpdatePath(
 	if caps == nil {
 		caps = &treesync.LeafNodeCapabilities{}
 	}
+
+	// Determine signature key bytes to embed in the leaf node.
+	// For ECDSA: convert to *ecdsa.PublicKey (and keep raw bytes nil).
+	// For Ed25519: store raw bytes only (SignatureKey stays nil).
+	var sigPubKeyECDSA *ecdsa.PublicKey
+	var sigPubKeyRaw []byte
+	rawSigPub := sigPubKey.AsSlice()
+	if len(rawSigPub) == 65 && rawSigPub[0] == 0x04 {
+		// ECDSA uncompressed point
+		converted, err := sigPubKey.ToECDSA()
+		if err != nil {
+			return nil, nil, fmt.Errorf("converting signature public key: %w", err)
+		}
+		sigPubKeyECDSA = converted
+	} else {
+		// Ed25519 or other: store raw bytes
+		sigPubKeyRaw = append([]byte(nil), rawSigPub...)
+	}
+
 	// Derive leaf HPKE key pair from node_secret = DeriveSecret(leafSecret, "node") (RFC §12.4.2).
 	leafNodeSecret, err := leafSecret.DeriveSecret(g.CipherSuite, "node")
 	if err != nil {
@@ -577,13 +595,14 @@ func (g *Group) createUpdatePath(
 		return nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
 	}
 	leafNodeData := &treesync.LeafNodeData{
-		EncryptionKey:  leafPrivKey.PublicKey().Bytes(),
-		SignatureKey:   sigPubKeyECDSA,
-		Credential:     g.Members[g.OwnLeafIndex].Credential,
-		Capabilities:   caps,
-		Lifetime:       &treesync.LeafNodeLifetime{},
-		LeafNodeSource: 3,
-		ParentHash:     tree.Nodes[directPath[0]].ParentHash,
+		EncryptionKey:   leafPrivKey.PublicKey().Bytes(),
+		SignatureKey:    sigPubKeyECDSA,
+		SignatureKeyRaw: sigPubKeyRaw,
+		Credential:      g.Members[g.OwnLeafIndex].Credential,
+		Capabilities:    caps,
+		Lifetime:        &treesync.LeafNodeLifetime{},
+		LeafNodeSource:  3,
+		ParentHash:      tree.Nodes[directPath[0]].ParentHash,
 	}
 	// source=commit; TBS incluye group_id + leaf_index per RFC §7.2.
 	tbs := leafNodeData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx))
@@ -814,20 +833,26 @@ func (g *Group) ProcessReceivedCommit(
 	case framing.SenderTypeMember:
 		// RFC §12.4.2: verify signature using the sender's leaf key from the tree.
 		senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
-		if senderLeaf == nil || senderLeaf.LeafData == nil || senderLeaf.LeafData.SignatureKey == nil {
+		if senderLeaf == nil || senderLeaf.LeafData == nil {
 			return fmt.Errorf("missing sender signature key")
 		}
-		rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
+		rawKey := senderLeaf.LeafData.SigKeyBytes()
+		if len(rawKey) == 0 {
+			return fmt.Errorf("missing sender signature key")
+		}
 		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("commit signature verification failed: %w", err)
 		}
 	case framing.SenderTypeNewMemberCommit:
 		// RFC §12.4.3.2: external committer's key is in the UpdatePath LeafNode.
-		if commit.Path == nil || commit.Path.LeafNode == nil || commit.Path.LeafNode.SignatureKey == nil {
+		if commit.Path == nil || commit.Path.LeafNode == nil {
 			return fmt.Errorf("external commit missing leaf node signature key")
 		}
-		rawKey := treesync.MarshalSignatureKey(commit.Path.LeafNode.SignatureKey)
+		rawKey := commit.Path.LeafNode.SigKeyBytes()
+		if len(rawKey) == 0 {
+			return fmt.Errorf("external commit missing leaf node signature key")
+		}
 		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("external commit signature verification failed: %w", err)
@@ -995,10 +1020,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if senderType == framing.SenderTypeMember {
 			senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
 			senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
-			if senderLeaf == nil || senderLeaf.LeafData == nil || senderLeaf.LeafData.SignatureKey == nil {
+			if senderLeaf == nil || senderLeaf.LeafData == nil {
 				return fmt.Errorf("missing sender signature key for commit verification")
 			}
-			rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
+			rawKey := senderLeaf.LeafData.SigKeyBytes()
+			if len(rawKey) == 0 {
+				return fmt.Errorf("missing sender signature key for commit verification")
+			}
 			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 			ac := &framing.AuthenticatedContent{
 				WireFormat:   stagedCommit.AuthenticatedContent.WireFormat,
@@ -1433,7 +1461,10 @@ func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.Auth
 	}
 
 	// RFC 9420 §6.1: verificar firma del FramedContent con la clave pública del sender
-	rawKey := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
+	rawKey := senderLeaf.LeafData.SigKeyBytes()
+	if len(rawKey) == 0 {
+		return nil, 0, fmt.Errorf("missing sender signature key")
+	}
 	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 		return nil, 0, fmt.Errorf("private message signature invalid: %w", err)
@@ -1684,15 +1715,16 @@ func NewGroupFromReInit(
 	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
 	ratchetTree := treesync.NewRatchetTree(1)
 	leafData := treesync.LeafNodeData{
-		EncryptionKey:  myKP.InitKey,
-		SignatureKey:   myKP.LeafNode.SignatureKey,
-		Credential:     myKP.LeafNode.Credential,
-		Capabilities:   toTreeSyncCapabilities(myKP.LeafNode.Capabilities),
-		Lifetime:       keyPackageToTreeSyncLifetime(myKP.LeafNode.Lifetime),
-		Extensions:     keyPackageExtensionsToTreeSync(myKP.LeafNode.Extensions),
-		LeafNodeSource: 1,
-		ParentHash:     append([]byte(nil), myKP.LeafNode.ParentHash...),
-		Signature:      append([]byte(nil), myKP.LeafNode.Signature...),
+		EncryptionKey:   myKP.InitKey,
+		SignatureKey:    myKP.LeafNode.SignatureKey,
+		SignatureKeyRaw: append([]byte(nil), myKP.LeafNode.SignatureKeyBytes...),
+		Credential:      myKP.LeafNode.Credential,
+		Capabilities:    toTreeSyncCapabilities(myKP.LeafNode.Capabilities),
+		Lifetime:        keyPackageToTreeSyncLifetime(myKP.LeafNode.Lifetime),
+		Extensions:      keyPackageExtensionsToTreeSync(myKP.LeafNode.Extensions),
+		LeafNodeSource:  1,
+		ParentHash:      append([]byte(nil), myKP.LeafNode.ParentHash...),
+		Signature:       append([]byte(nil), myKP.LeafNode.Signature...),
 	}
 	if leafData.Capabilities == nil {
 		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
@@ -1833,12 +1865,15 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 	case framing.SenderTypeMember:
 		senderIdx := LeafNodeIndex(pm.Content.Sender.LeafIndex)
 		leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(senderIdx))
-		if leaf == nil || leaf.LeafData == nil || leaf.LeafData.SignatureKey == nil {
+		if leaf == nil || leaf.LeafData == nil {
 			return fmt.Errorf("missing sender signature key")
 		}
 
-		rawKey := treesync.MarshalSignatureKey(leaf.LeafData.SignatureKey)
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		rawKey := leaf.LeafData.SigKeyBytes()
+		if len(rawKey) == 0 {
+			return fmt.Errorf("missing sender signature key")
+		}
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,

@@ -35,7 +35,8 @@ func TestWelcomeVectors(t *testing.T) {
 	}
 
 	for i, v := range vectors {
-		if ciphersuite.CipherSuite(v.CipherSuite) != ciphersuite.MLS128DHKEMP256 {
+		cs := ciphersuite.CipherSuite(v.CipherSuite)
+		if !cs.IsSupported() {
 			continue
 		}
 
@@ -50,7 +51,13 @@ func TestWelcomeVectors(t *testing.T) {
 			}
 
 			initPrivBytes := mustDecodeHexBytes(t, v.InitPriv)
-			initPrivKey, err := ecdh.P256().NewPrivateKey(initPrivBytes)
+			var initPrivKey *ecdh.PrivateKey
+			switch cs {
+			case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS256DHKEMX25519ChaCha20:
+				initPrivKey, err = ecdh.X25519().NewPrivateKey(initPrivBytes)
+			case ciphersuite.MLS128DHKEMP256:
+				initPrivKey, err = ecdh.P256().NewPrivateKey(initPrivBytes)
+			}
 			if err != nil {
 				t.Fatalf("parse init_priv: %v", err)
 			}
@@ -77,7 +84,7 @@ func TestWelcomeVectors(t *testing.T) {
 			}
 
 			signerPubBytes := mustDecodeHexBytes(t, v.SignerPub)
-			signerPub := ciphersuite.NewOpenMlsSignaturePublicKey(signerPubBytes, ciphersuite.ECDSA_SECP256R1_SHA256)
+			signerPub := ciphersuite.NewOpenMlsSignaturePublicKey(signerPubBytes, cs.SignatureScheme())
 			sig := ciphersuite.NewSignature(welcome.GroupInfo.Signature)
 			if err := ciphersuite.VerifyWithLabel(signerPub, "GroupInfoTBS", welcome.GroupInfo.MarshalTBS(), sig); err != nil {
 				t.Fatalf("group info signature mismatch with signer_pub: %v", err)
