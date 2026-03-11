@@ -146,6 +146,21 @@ func (ks *KeySchedule) SetPskSecretDirect(pskSecret *ciphersuite.Secret) error {
 	return nil
 }
 
+// SetPskSecretFromInput sets the psk_secret from a test vector input.
+// This is used for interop testing where psk_secret is provided as an input.
+func (ks *KeySchedule) SetPskSecretFromInput(pskSecretInput *ciphersuite.Secret) error {
+	if ks.joinerSecret == nil {
+		return fmt.Errorf("joiner_secret not computed")
+	}
+	ks.rawPskSecret = pskSecretInput
+	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecretInput)
+	if err != nil {
+		return fmt.Errorf("HKDF extract member_secret: %w", err)
+	}
+	ks.pskSecret = memberSecret
+	return nil
+}
+
 // ComputeEpochSecret computes epoch_secret = ExpandWithLabel(member_secret, "epoch", GroupContext, Nh).
 func (ks *KeySchedule) ComputeEpochSecret(groupContext []byte) (*ciphersuite.Secret, error) {
 	if ks.pskSecret == nil {
