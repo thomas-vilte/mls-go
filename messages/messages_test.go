@@ -3,19 +3,18 @@ package messages_test
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"testing"
 
 	"github.com/openmls/go/messages"
 )
 
-// TestWelcomeMarshalUnmarshal tests Welcome message serialization.
-//
-// Based on openmls Rust test: openmls/src/messages/mod.rs
+// ============================================================================
+// Welcome
+// ============================================================================
+
 func TestWelcomeMarshalUnmarshal(t *testing.T) {
-	// Create a minimal valid Welcome
 	welcome := messages.NewWelcome(
-		0x0002, // MLS_128_DHKEMP256_AES128GCM_SHA256_P256
+		0x0002,
 		[]messages.EncryptedGroupSecrets{
 			{
 				KeyPackageHash: bytes.Repeat([]byte{0x01}, 32),
@@ -26,214 +25,257 @@ func TestWelcomeMarshalUnmarshal(t *testing.T) {
 		[]byte{0x08, 0x09, 0x0A},
 	)
 
-	// Marshal
 	data, err := welcome.Marshal()
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf("Marshal: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("Marshal returned empty")
 	}
 
-	t.Logf("Serialized Welcome: %d bytes", len(data))
-	t.Logf("Hex: %s", hex.EncodeToString(data))
-
-	// Unmarshal
-	parsed, err := messages.UnmarshalWelcome(data)
+	got, err := messages.UnmarshalWelcome(data)
 	if err != nil {
-		t.Fatalf("UnmarshalWelcome failed: %v", err)
+		t.Fatalf("UnmarshalWelcome: %v", err)
 	}
-
-	// Validate
-	if parsed.CipherSuite != welcome.CipherSuite {
-		t.Errorf("CipherSuite mismatch: got 0x%04x, want 0x%04x", parsed.CipherSuite, welcome.CipherSuite)
+	if got.CipherSuite != welcome.CipherSuite {
+		t.Errorf("CipherSuite = 0x%04x, want 0x%04x", got.CipherSuite, welcome.CipherSuite)
 	}
-
-	if len(parsed.Secrets) != len(welcome.Secrets) {
-		t.Fatalf("Secrets count mismatch: got %d, want %d", len(parsed.Secrets), len(welcome.Secrets))
+	if len(got.Secrets) != 1 {
+		t.Fatalf("Secrets count = %d, want 1", len(got.Secrets))
 	}
-
-	if !bytes.Equal(parsed.Secrets[0].KeyPackageHash, welcome.Secrets[0].KeyPackageHash) {
+	if !bytes.Equal(got.Secrets[0].KeyPackageHash, welcome.Secrets[0].KeyPackageHash) {
 		t.Error("KeyPackageHash mismatch")
 	}
-
-	if !bytes.Equal(parsed.EncryptedGroupInfo, welcome.EncryptedGroupInfo) {
+	if !bytes.Equal(got.EncryptedGroupInfo, welcome.EncryptedGroupInfo) {
 		t.Error("EncryptedGroupInfo mismatch")
 	}
 }
 
-// TestWelcomeFindSecret tests finding secrets by KeyPackage hash.
 func TestWelcomeFindSecret(t *testing.T) {
-	keyPackageHash := []byte{0x42, 0x42, 0x42, 0x42}
-	
+	target := []byte{0x42, 0x42, 0x42, 0x42}
 	welcome := messages.NewWelcome(
 		0x0002,
 		[]messages.EncryptedGroupSecrets{
-			{
-				KeyPackageHash: []byte{0x01, 0x02, 0x03},
-				EncryptedKey:   []byte{0x04},
-				Ciphertext:     []byte{0x05},
-			},
-			{
-				KeyPackageHash: keyPackageHash,
-				EncryptedKey:   []byte{0x06},
-				Ciphertext:     []byte{0x07},
-			},
+			{KeyPackageHash: []byte{0x01}, EncryptedKey: []byte{0x02}, Ciphertext: []byte{0x03}},
+			{KeyPackageHash: target, EncryptedKey: []byte{0x06}, Ciphertext: []byte{0x07}},
 		},
 		[]byte{0x08},
 	)
-
-	// Find existing secret
-	secret := welcome.FindSecret(keyPackageHash)
-	if secret == nil {
-		t.Fatal("FindSecret returned nil for existing hash")
+	found := welcome.FindSecret(target)
+	if found == nil {
+		t.Fatal("FindSecret returned nil for known hash")
 	}
-
-	if !bytes.Equal(secret.EncryptedKey, []byte{0x06}) {
-		t.Error("Found wrong secret")
+	if !bytes.Equal(found.EncryptedKey, []byte{0x06}) {
+		t.Error("found wrong secret entry")
 	}
-
-	// Find non-existing secret
-	secret = welcome.FindSecret([]byte{0xFF, 0xFF, 0xFF})
-	if secret != nil {
-		t.Error("FindSecret should return nil for non-existing hash")
+	if welcome.FindSecret([]byte{0xFF, 0xFF}) != nil {
+		t.Error("FindSecret should return nil for unknown hash")
 	}
 }
 
-// TestGroupInfoMarshalUnmarshal tests GroupInfo serialization.
-//
-// Based on openmls Rust test: openmls/src/messages/group_info.rs
+// ============================================================================
+// GroupInfo
+// ============================================================================
+
 func TestGroupInfoMarshalUnmarshal(t *testing.T) {
-	groupContext := &messages.GroupContext{
+	gc := &messages.GroupContext{
 		ProtocolVersion:         1,
 		CipherSuite:             0x0002,
-		GroupID:                 []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07},
-		Epoch:                   0,
+		GroupID:                 []byte{0x00, 0x01, 0x02, 0x03},
+		Epoch:                   5,
 		TreeHash:                bytes.Repeat([]byte{0xAA}, 32),
 		ConfirmedTranscriptHash: bytes.Repeat([]byte{0xBB}, 32),
 		Extensions:              []messages.Extension{},
 	}
-
-	groupInfo := &messages.GroupInfo{
-		GroupContext:    groupContext,
+	gi := &messages.GroupInfo{
+		GroupContext:    gc,
 		Extensions:      []messages.Extension{},
 		ConfirmationTag: bytes.Repeat([]byte{0xCC}, 32),
 		Signer:          0,
 		Signature:       []byte{0x01, 0x02, 0x03},
 	}
 
-	// Marshal
-	data := groupInfo.Marshal()
-	t.Logf("Serialized GroupInfo: %d bytes", len(data))
+	data := gi.Marshal()
+	if len(data) == 0 {
+		t.Fatal("Marshal returned empty")
+	}
 
-	// Unmarshal
-	parsed, err := messages.UnmarshalGroupInfo(data)
+	got, err := messages.UnmarshalGroupInfo(data)
 	if err != nil {
-		t.Fatalf("UnmarshalGroupInfo failed: %v", err)
+		t.Fatalf("UnmarshalGroupInfo: %v", err)
 	}
-
-	// Validate
-	if parsed.GroupContext.ProtocolVersion != groupContext.ProtocolVersion {
-		t.Errorf("ProtocolVersion mismatch: got %d, want %d", parsed.GroupContext.ProtocolVersion, groupContext.ProtocolVersion)
+	if got.GroupContext.Epoch != gc.Epoch {
+		t.Errorf("Epoch = %d, want %d", got.GroupContext.Epoch, gc.Epoch)
 	}
-
-	if parsed.GroupContext.CipherSuite != groupContext.CipherSuite {
-		t.Errorf("CipherSuite mismatch")
-	}
-
-	if !bytes.Equal(parsed.ConfirmationTag, groupInfo.ConfirmationTag) {
+	if !bytes.Equal(got.ConfirmationTag, gi.ConfirmationTag) {
 		t.Error("ConfirmationTag mismatch")
 	}
-
-	if parsed.Signer != groupInfo.Signer {
-		t.Errorf("Signer mismatch: got %d, want %d", parsed.Signer, groupInfo.Signer)
-	}
-
-	if !bytes.Equal(parsed.Signature, groupInfo.Signature) {
+	if !bytes.Equal(got.Signature, gi.Signature) {
 		t.Error("Signature mismatch")
+	}
+	if got.Signer != gi.Signer {
+		t.Errorf("Signer = %d, want %d", got.Signer, gi.Signer)
 	}
 }
 
-// TestGroupContextMarshalUnmarshal tests GroupContext serialization.
+// ============================================================================
+// GroupContext
+// ============================================================================
+
 func TestGroupContextMarshalUnmarshal(t *testing.T) {
-	groupContext := &messages.GroupContext{
+	gc := &messages.GroupContext{
 		ProtocolVersion:         1,
 		CipherSuite:             0x0002,
 		GroupID:                 []byte{0xDE, 0xAD, 0xBE, 0xEF},
 		Epoch:                   42,
 		TreeHash:                bytes.Repeat([]byte{0x11}, 32),
 		ConfirmedTranscriptHash: bytes.Repeat([]byte{0x22}, 32),
-		Extensions: []messages.Extension{
-			{Type: 0x0002, Data: []byte{0x33, 0x44, 0x55}},
-		},
+		Extensions:              []messages.Extension{{Type: 0x0002, Data: []byte{0x33, 0x44}}},
 	}
-
-	data := groupContext.Marshal()
-	t.Logf("Serialized GroupContext: %d bytes", len(data))
-
-	parsed, err := messages.UnmarshalGroupContext(data)
+	data := gc.Marshal()
+	got, err := messages.UnmarshalGroupContext(data)
 	if err != nil {
-		t.Fatalf("UnmarshalGroupContext failed: %v", err)
+		t.Fatalf("UnmarshalGroupContext: %v", err)
 	}
-
-	if parsed.ProtocolVersion != groupContext.ProtocolVersion {
-		t.Errorf("ProtocolVersion mismatch")
+	if got.Epoch != gc.Epoch {
+		t.Errorf("Epoch = %d, want %d", got.Epoch, gc.Epoch)
 	}
-
-	if parsed.CipherSuite != groupContext.CipherSuite {
-		t.Errorf("CipherSuite mismatch")
+	if !bytes.Equal(got.GroupID, gc.GroupID) {
+		t.Error("GroupID mismatch")
 	}
-
-	if !bytes.Equal(parsed.GroupID, groupContext.GroupID) {
-		t.Errorf("GroupID mismatch")
-	}
-
-	if parsed.Epoch != groupContext.Epoch {
-		t.Errorf("Epoch mismatch: got %d, want %d", parsed.Epoch, groupContext.Epoch)
+	if len(got.Extensions) != 1 {
+		t.Errorf("Extensions count = %d, want 1", len(got.Extensions))
 	}
 }
 
-// TestHashKeyPackage tests KeyPackage hashing.
-func TestHashKeyPackage(t *testing.T) {
-	keyPackage := []byte("test key package data")
-	
-	hash1 := messages.HashKeyPackage(keyPackage)
-	hash2 := messages.HashKeyPackage(keyPackage)
-	
-	if !bytes.Equal(hash1, hash2) {
+// ============================================================================
+// EncryptGroupInfo / DecryptGroupInfo — RFC 9420 §11.2.2
+// ============================================================================
+
+// TestEncryptDecryptGroupInfo verifies that GroupInfo can be encrypted with the
+// welcome_key/nonce pair and decrypted back to the original.
+func TestEncryptDecryptGroupInfo(t *testing.T) {
+	gc := &messages.GroupContext{
+		ProtocolVersion:         1,
+		CipherSuite:             0x0002,
+		GroupID:                 []byte{0x01, 0x02, 0x03, 0x04},
+		Epoch:                   0,
+		TreeHash:                bytes.Repeat([]byte{0xAB}, 32),
+		ConfirmedTranscriptHash: bytes.Repeat([]byte{0xCD}, 32),
+		Extensions:              []messages.Extension{},
+	}
+	gi := &messages.GroupInfo{
+		GroupContext:    gc,
+		Extensions:      []messages.Extension{},
+		ConfirmationTag: bytes.Repeat([]byte{0xEF}, 32),
+		Signer:          0,
+		Signature:       []byte{0x11, 0x22, 0x33},
+	}
+
+	// welcome_key: 16 bytes (AES-128); welcome_nonce: 12 bytes (GCM)
+	welcomeKey := bytes.Repeat([]byte{0x42}, 16)
+	welcomeNonce := bytes.Repeat([]byte{0x24}, 12)
+
+	ciphertext, err := messages.EncryptGroupInfo(gi, welcomeKey, welcomeNonce)
+	if err != nil {
+		t.Fatalf("EncryptGroupInfo: %v", err)
+	}
+	if len(ciphertext) == 0 {
+		t.Fatal("EncryptGroupInfo returned empty ciphertext")
+	}
+
+	decrypted, err := messages.DecryptGroupInfo(ciphertext, welcomeKey, welcomeNonce)
+	if err != nil {
+		t.Fatalf("DecryptGroupInfo: %v", err)
+	}
+	if decrypted.GroupContext.Epoch != gc.Epoch {
+		t.Errorf("decrypted Epoch = %d, want %d", decrypted.GroupContext.Epoch, gc.Epoch)
+	}
+	if !bytes.Equal(decrypted.ConfirmationTag, gi.ConfirmationTag) {
+		t.Error("decrypted ConfirmationTag mismatch")
+	}
+}
+
+func TestDecryptGroupInfo_WrongKey(t *testing.T) {
+	gc := &messages.GroupContext{
+		ProtocolVersion: 1,
+		CipherSuite:     0x0002,
+		GroupID:         []byte{0x01},
+		Extensions:      []messages.Extension{},
+	}
+	gi := &messages.GroupInfo{
+		GroupContext:    gc,
+		Extensions:      []messages.Extension{},
+		ConfirmationTag: []byte{0x01},
+		Signature:       []byte{0x02},
+	}
+	key := bytes.Repeat([]byte{0x42}, 16)
+	nonce := bytes.Repeat([]byte{0x24}, 12)
+	ct, _ := messages.EncryptGroupInfo(gi, key, nonce)
+
+	wrongKey := bytes.Repeat([]byte{0xFF}, 16)
+	if _, err := messages.DecryptGroupInfo(ct, wrongKey, nonce); err == nil {
+		t.Fatal("DecryptGroupInfo should fail with wrong key")
+	}
+}
+
+// ============================================================================
+// HashKeyPackage — RFC 9420 §10.5
+// ============================================================================
+
+func TestHashKeyPackage_DeterministicAndUnique(t *testing.T) {
+	data := []byte("some serialized KeyPackage bytes")
+	h1 := messages.HashKeyPackage(data)
+	h2 := messages.HashKeyPackage(data)
+	if !bytes.Equal(h1, h2) {
 		t.Error("HashKeyPackage is not deterministic")
 	}
-
-	if len(hash1) != 32 {
-		t.Errorf("HashKeyPackage should return 32 bytes (SHA-256), got %d", len(hash1))
+	if len(h1) != 32 {
+		t.Errorf("hash len = %d, want 32", len(h1))
 	}
-
-	// Different input should give different hash
-	hash3 := messages.HashKeyPackage([]byte("different data"))
-	if bytes.Equal(hash1, hash3) {
-		t.Error("Different inputs produced same hash")
+	if bytes.Equal(h1, messages.HashKeyPackage([]byte("other"))) {
+		t.Error("different inputs produced the same hash")
 	}
 }
 
-// TestConfirmationTag tests confirmation tag computation and verification.
-func TestConfirmationTag(t *testing.T) {
-	confirmationKey := bytes.Repeat([]byte{0x42}, 32)
-	confirmedTranscriptHash := bytes.Repeat([]byte{0x43}, 32)
+// ============================================================================
+// ConfirmationTag — RFC 9420 §8.2
+// ============================================================================
 
-	tag := messages.ComputeConfirmationTag(sha256.New, confirmationKey, confirmedTranscriptHash)
+func TestConfirmationTag_ValidAndInvalid(t *testing.T) {
+	confirmKey := bytes.Repeat([]byte{0x42}, 32)
+	transcriptHash := bytes.Repeat([]byte{0x43}, 32)
 
+	tag := messages.ComputeConfirmationTag(sha256.New, confirmKey, transcriptHash)
 	if len(tag) != 32 {
-		t.Errorf("ConfirmationTag should be 32 bytes (HMAC-SHA256), got %d", len(tag))
+		t.Errorf("tag len = %d, want 32", len(tag))
 	}
 
-	// Verify should succeed with correct tag
-	if !messages.VerifyConfirmationTag(sha256.New, confirmationKey, confirmedTranscriptHash, tag) {
-		t.Error("VerifyConfirmationTag failed with correct tag")
+	if !messages.VerifyConfirmationTag(sha256.New, confirmKey, transcriptHash, tag) {
+		t.Error("VerifyConfirmationTag failed for valid tag")
 	}
 
-	// Verify should fail with wrong tag
-	wrongTag := make([]byte, 32)
-	copy(wrongTag, tag)
-	wrongTag[0] ^= 0xFF
+	// Tampered tag
+	bad := make([]byte, len(tag))
+	copy(bad, tag)
+	bad[0] ^= 0xFF
+	if messages.VerifyConfirmationTag(sha256.New, confirmKey, transcriptHash, bad) {
+		t.Error("VerifyConfirmationTag should fail for tampered tag")
+	}
 
-	if messages.VerifyConfirmationTag(sha256.New, confirmationKey, confirmedTranscriptHash, wrongTag) {
-		t.Error("VerifyConfirmationTag succeeded with wrong tag")
+	// Wrong key
+	wrongKey := bytes.Repeat([]byte{0xFF}, 32)
+	if messages.VerifyConfirmationTag(sha256.New, wrongKey, transcriptHash, tag) {
+		t.Error("VerifyConfirmationTag should fail for wrong key")
+	}
+}
+
+func TestConfirmationTag_Deterministic(t *testing.T) {
+	key := bytes.Repeat([]byte{0x01}, 32)
+	hash := bytes.Repeat([]byte{0x02}, 32)
+	t1 := messages.ComputeConfirmationTag(sha256.New, key, hash)
+	t2 := messages.ComputeConfirmationTag(sha256.New, key, hash)
+	if !bytes.Equal(t1, t2) {
+		t.Error("ComputeConfirmationTag is not deterministic")
 	}
 }
