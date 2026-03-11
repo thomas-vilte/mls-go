@@ -370,6 +370,124 @@ func TestPSKCombination(t *testing.T) {
 	}
 }
 
+// TestComputePskSecret_WithPSKs prueba ComputePskSecret con PSKs externas
+func TestComputePskSecret_WithPSKs(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
+	
+	// Crear KeySchedule
+	initSecret, _ := ciphersuite.NewSecretRandomCS(cs)
+	ks := NewKeySchedule(cs, initSecret)
+	
+	// Set commit secret
+	commitSecret, _ := ciphersuite.NewSecretRandomCS(cs)
+	ks.SetCommitSecret(commitSecret)
+	
+	// Compute joiner secret
+	groupContext := []byte("test group context")
+	_, err := ks.ComputeJoinerSecret(groupContext)
+	if err != nil {
+		t.Fatalf("ComputeJoinerSecret: %v", err)
+	}
+	
+	// PSKs externas
+	psks := []Psk{
+		{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")},
+		{PskType: PskTypeExternal, PskId: []byte("psk2"), Psk: []byte("secret2")},
+	}
+	
+	// ComputePskSecret con PSKs
+	pskSecret, err := ks.ComputePskSecret(psks)
+	if err != nil {
+		t.Fatalf("ComputePskSecret: %v", err)
+	}
+	
+	if pskSecret == nil {
+		t.Fatal("ComputePskSecret should return non-nil secret")
+	}
+	
+	// Verificar que el resultado difiere del caso sin PSKs
+	ks2 := NewKeySchedule(cs, initSecret)
+	ks2.SetCommitSecret(commitSecret)
+	ks2.ComputeJoinerSecret(groupContext)
+	
+	zeroPskSecret, _ := ks2.ComputePskSecret([]Psk{})
+	
+	if string(pskSecret.AsSlice()) == string(zeroPskSecret.AsSlice()) {
+		t.Error("PskSecret with PSKs should differ from zero PSK case")
+	}
+}
+
+// TestPskInput_ResumptionType prueba PSK con tipo Resumption
+func TestPskInput_ResumptionType(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
+	
+	// PSK de resumption
+	psks := []Psk{
+		{
+			PskType:    PskTypeResumption,
+			PskId:      []byte("resumption-psk-id"),
+			Psk:        []byte("resumption-secret"),
+			Usage:      0x01, // ResumptionPskUsageReinit
+			PskGroupID: []byte("test-group"),
+			PskEpoch:   5,
+		},
+	}
+	
+	pskInput, err := ComputePskInput(psks, cs)
+	if err != nil {
+		t.Fatalf("ComputePskInput with Resumption PSK: %v", err)
+	}
+	
+	if len(pskInput) != cs.HashLength() {
+		t.Errorf("Resumption PSK input len = %d, want %d", len(pskInput), cs.HashLength())
+	}
+}
+
+// TestPskMarshal_Roundtrip prueba marshal/unmarshal de PSK
+// Nota: PskID no es exportado, testeamos ComputePskInput que lo usa internamente
+func TestPskMarshal_Roundtrip(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
+	
+	// PSK externa
+	psks := []Psk{
+		{
+			PskType: PskTypeExternal,
+			PskId:   []byte("external-psk-id"),
+			Psk:     []byte("external-secret"),
+		},
+	}
+	
+	pskInput, err := ComputePskInput(psks, cs)
+	if err != nil {
+		t.Fatalf("ComputePskInput: %v", err)
+	}
+	
+	if len(pskInput) != cs.HashLength() {
+		t.Errorf("PSK input len = %d, want %d", len(pskInput), cs.HashLength())
+	}
+	
+	// PSK de resumption
+	psksResumption := []Psk{
+		{
+			PskType:    PskTypeResumption,
+			PskId:      []byte("resumption-id"),
+			Psk:        []byte("resumption-secret"),
+			Usage:      0x01,
+			PskGroupID: []byte("group-123"),
+			PskEpoch:   10,
+		},
+	}
+	
+	pskInput2, err := ComputePskInput(psksResumption, cs)
+	if err != nil {
+		t.Fatalf("ComputePskInput (resumption): %v", err)
+	}
+	
+	if len(pskInput2) != cs.HashLength() {
+		t.Errorf("Resumption PSK input len = %d, want %d", len(pskInput2), cs.HashLength())
+	}
+}
+
 // ============================================================================
 // Exporter — RFC 9420 §8.5
 // ============================================================================

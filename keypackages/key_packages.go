@@ -197,19 +197,6 @@ func generateHPKEKeyPair() (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
 	return privKey, privKey.PublicKey(), nil
 }
 
-// signData signs data with an ECDSA private key using SHA-256.
-func signData(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
-	hash := sha256.Sum256(data)
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, hash[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// Concatenate R and S (64 bytes total for P-256)
-	signature := append(r.Bytes(), s.Bytes()...)
-	return signature, nil
-}
-
 // marshalTBS serializes the KeyPackage TBS (To Be Signed).
 func (kp *KeyPackage) marshalTBS() []byte {
 	buf := tls.NewWriter()
