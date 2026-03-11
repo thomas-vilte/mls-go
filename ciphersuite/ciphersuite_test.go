@@ -6,15 +6,30 @@ import (
 
 // TestCipherSuite_IsSupported prueba qué cipher suites están soportadas.
 func TestCipherSuite_IsSupported(t *testing.T) {
-	// MLS128DHKEMP256 debería estar soportado
-	if !MLS128DHKEMP256.IsSupported() {
-		t.Error("MLS128DHKEMP256 should be supported")
+	// MLS128DHKEMX25519 (cs=1) debería estar soportado
+	if !MLS128DHKEMX25519.IsSupported() {
+		t.Error("MLS128DHKEMX25519 (cs=1) should be supported")
 	}
 
-	// Cipher suites no soportadas
-	var unsupported CipherSuite = 0x0001
+	// MLS128DHKEMP256 (cs=2) debería estar soportado
+	if !MLS128DHKEMP256.IsSupported() {
+		t.Error("MLS128DHKEMP256 (cs=2) should be supported")
+	}
+
+	// MLS256DHKEMX25519ChaCha20 (cs=3) debería estar soportado
+	if !MLS256DHKEMX25519ChaCha20.IsSupported() {
+		t.Error("MLS256DHKEMX25519ChaCha20 (cs=3) should be supported")
+	}
+
+	// Cipher suites no soportadas (cs=4,5,6,7 son placeholders)
+	var unsupported CipherSuite = 0x0004
 	if unsupported.IsSupported() {
-		t.Error("Unknown cipher suite should not be supported")
+		t.Error("Unknown cipher suite 0x0004 should not be supported")
+	}
+
+	unsupported = 0xFFFF
+	if unsupported.IsSupported() {
+		t.Error("Unknown cipher suite 0xFFFF should not be supported")
 	}
 }
 

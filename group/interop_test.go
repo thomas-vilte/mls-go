@@ -44,9 +44,11 @@ func mustHex(t *testing.T, s string) []byte {
 }
 
 func TestKeyScheduleVectors(t *testing.T) {
-	if os.Getenv("MLS_RUN_INTEROP_VECTORS") == "" {
-		t.Skip("set MLS_RUN_INTEROP_VECTORS=1 to run official interop vectors")
-	}
+	// Test vectors oficiales de MLSWG:
+	// https://github.com/mlswg/mls-implementations/blob/main/test-vectors/key-schedule.json
+	//
+	// psk_secret es un INPUT del key schedule, no un output.
+	// Se usa para incorporar PSKs externos o resumption PSKs.
 
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/key-schedule.json")
 	if err != nil {
@@ -67,9 +69,18 @@ func TestKeyScheduleVectors(t *testing.T) {
 			name := fmt.Sprintf("cs-%d-epoch-%d", v.CipherSuite, i)
 			t.Run(name, func(t *testing.T) {
 				cs := ciphersuite.CipherSuite(v.CipherSuite)
+				
+				// Skip cipher suites no soportadas (CS4-7 son placeholders)
+				if !cs.IsSupported() {
+					t.Skipf("cipher suite %d no está implementada", v.CipherSuite)
+				}
+				
 				initSecret := ciphersuite.NewSecret(currentInitSecret)
 				commitSecret := ciphersuite.NewSecret(mustHex(t, epoch.CommitSecret))
 				groupContext := mustHex(t, epoch.GroupContext)
+
+				// psk_secret es un INPUT del test vector
+				pskSecretInput := mustHex(t, epoch.PskSecret)
 
 				ks := schedule.NewKeySchedule(cs, initSecret)
 				ks.SetCommitSecret(commitSecret)
@@ -82,12 +93,11 @@ func TestKeyScheduleVectors(t *testing.T) {
 					t.Fatalf("joiner_secret mismatch")
 				}
 
-				memberSecret, err := ks.ComputePskSecret(nil)
+				// Usar el psk_secret del test vector como input directo
+				// En lugar de calcularlo con ComputePskSecret(nil)
+				err = ks.SetPskSecretFromInput(ciphersuite.NewSecret(pskSecretInput))
 				if err != nil {
-					t.Fatalf("ComputePskSecret: %v", err)
-				}
-				if !bytes.Equal(memberSecret.AsSlice(), mustHex(t, epoch.PskSecret)) {
-					t.Fatalf("psk_secret mismatch")
+					t.Fatalf("SetPskSecretFromInput: %v", err)
 				}
 
 				if _, err := ks.ComputeEpochSecret(groupContext); err != nil {

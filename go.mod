@@ -1,5 +1,7 @@
 module github.com/openmls/go
 
-go 1.23.0
+go 1.26.1
 
-toolchain go1.24.5
+require golang.org/x/crypto v0.48.0
+
+require golang.org/x/sys v0.42.0 // indirect

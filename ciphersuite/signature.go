@@ -2,6 +2,7 @@ package ciphersuite
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -156,9 +157,22 @@ func (k *OpenMlsSignaturePublicKey) Scheme() SignatureScheme {
 	return k.SignatureScheme
 }
 
-// Verify verifies a signature using ECDSA-SHA256.
-// Expects signature in ASN.1 DER format.
+// Verify verifies a signature using the appropriate algorithm for the signature scheme.
+// For ECDSA: expects signature in ASN.1 DER format.
+// For Ed25519: expects raw 64-byte signature.
 func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
+	switch k.SignatureScheme {
+	case ECDSA_SECP256R1_SHA256:
+		return k.verifyECDSA(data, sig)
+	case ED25519:
+		return k.verifyEd25519(data, sig)
+	default:
+		return fmt.Errorf("unsupported signature scheme: %v", k.SignatureScheme)
+	}
+}
+
+// verifyECDSA verifies an ECDSA-SHA256 signature.
+func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
 	pubKey, err := NewSignaturePublicKey(k.Value).ToECDSA()
 	if err != nil {
 		return err
@@ -176,6 +190,24 @@ func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 	}
 
 	if !ecdsa.Verify(pubKey, hash[:], ecdsaSig.R, ecdsaSig.S) {
+		return ErrInvalidSignature
+	}
+	return nil
+}
+
+// verifyEd25519 verifies an Ed25519 signature.
+func (k *OpenMlsSignaturePublicKey) verifyEd25519(data []byte, sig *Signature) error {
+	// Ed25519 public keys are 32 bytes
+	if len(k.Value) != 32 {
+		return fmt.Errorf("invalid Ed25519 public key length: %d", len(k.Value))
+	}
+	
+	// Ed25519 signatures are 64 bytes
+	if len(sig.AsSlice()) != 64 {
+		return fmt.Errorf("invalid Ed25519 signature length: %d", len(sig.AsSlice()))
+	}
+	
+	if !ed25519.Verify(k.Value, data, sig.AsSlice()) {
 		return ErrInvalidSignature
 	}
 	return nil

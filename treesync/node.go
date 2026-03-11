@@ -205,11 +205,15 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
 	}
 
-	// 7. extensions<V>
+	// 7. extensions<V> - This is a vector of Extension structs, not just VLBytes
+	// Each Extension is: extension_type (2 bytes) + extension_data (VLBytes)
+	// The whole vector is VL-prefixed
 	extsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
+	// For now, store the raw extension data
+	// TODO: Parse individual extensions if needed
 	l.Extensions = [][]byte{extsData}
 
 	// 8. signature<V>
@@ -222,10 +226,12 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 }
 
 // UnmarshalCapabilities deserializes capabilities.
+// Format: protocol_versions<V> || cipher_suites<V> || extensions<V> || proposals<V> || credentials<V>
+// Note: In test vectors, capabilities are NOT VL-prefixed as a whole.
 func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
 	c := &LeafNodeCapabilities{}
 
-	// ProtocolVersions
+	// ProtocolVersions<V>
 	versData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -239,7 +245,7 @@ func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
 		c.ProtocolVersions = append(c.ProtocolVersions, v)
 	}
 
-	// CipherSuites
+	// CipherSuites<V>
 	csData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -253,7 +259,7 @@ func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
 		c.CipherSuites = append(c.CipherSuites, cs)
 	}
 
-	// Extensions
+	// Extensions<V>
 	extsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -267,7 +273,7 @@ func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
 		c.Extensions = append(c.Extensions, e)
 	}
 
-	// Proposals
+	// Proposals<V>
 	propsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -281,7 +287,7 @@ func UnmarshalCapabilities(r *tls.Reader) (*LeafNodeCapabilities, error) {
 		c.Proposals = append(c.Proposals, p)
 	}
 
-	// Credentials
+	// Credentials<V>
 	credsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -367,7 +373,7 @@ func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
 func (l *LeafNodeData) VerifyWithContext(cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
 	tbs := l.MarshalTBSWithContext(groupID, leafIndex)
 	pubKeyBytes := l.marshalSignatureKey()
-	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, ciphersuite.SignatureScheme(0))
+	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 
