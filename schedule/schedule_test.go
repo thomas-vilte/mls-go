@@ -503,7 +503,7 @@ func TestExporter_LengthAndLabel(t *testing.T) {
 
 	// Requested length is honoured.
 	for _, length := range []int{16, 32, 64} {
-		out, err := Exporter(exporterSecret, ExporterLabelAuthenticationKey, ctx, length)
+		out, err := Exporter(exporterSecret, cs, ExporterLabelAuthenticationKey, ctx, length)
 		if err != nil {
 			t.Fatalf("Exporter(len=%d): %v", length, err)
 		}
@@ -513,14 +513,14 @@ func TestExporter_LengthAndLabel(t *testing.T) {
 	}
 
 	// Different labels produce different outputs.
-	out1, _ := Exporter(exporterSecret, "label-A", ctx, 32)
-	out2, _ := Exporter(exporterSecret, "label-B", ctx, 32)
+	out1, _ := Exporter(exporterSecret, cs, "label-A", ctx, 32)
+	out2, _ := Exporter(exporterSecret, cs, "label-B", ctx, 32)
 	if bytes.Equal(out1, out2) {
 		t.Error("different labels produced the same exported value")
 	}
 
 	// Different contexts produce different outputs.
-	out3, _ := Exporter(exporterSecret, "label-A", []byte("ctx-X"), 32)
+	out3, _ := Exporter(exporterSecret, cs, "label-A", []byte("ctx-X"), 32)
 	if bytes.Equal(out1, out3) {
 		t.Error("different contexts produced the same exported value")
 	}

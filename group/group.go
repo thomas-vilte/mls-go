@@ -87,6 +87,7 @@ type Group struct {
 	state                 GroupState
 	SecretTree            *secrettree.Tree
 	CachedPsks            map[string][]byte
+	PSKStore              PSKStore
 	// MyLeafEncryptionKey es la clave HPKE privada del leaf propio, usada para
 	// descifrar path secrets en commits recibidos (RFC 9420 §12.4.2).
 	MyLeafEncryptionKey []byte
@@ -1053,31 +1054,50 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if proposal.Type == ProposalTypePreSharedKey && proposal.PreSharedKey != nil {
 			pid := proposal.PreSharedKey.PskID
 			var pskBytes []byte
-			var ok bool
-
-			if pid.PskType == 2 { // resumption
-				// Resumption PSK: keyed by (group_id, epoch) compound key
+			var err error
+			if pid.PskType == 2 { // Resumption PSK
 				resumptionKey := resumptionPskCacheKey(pid.PskGroupID, pid.PskEpoch)
+				var ok bool
 				pskBytes, ok = g.CachedPsks[resumptionKey]
 				if !ok {
-					return fmt.Errorf("missing resumption PSK for group=%x epoch=%d", pid.PskGroupID, pid.PskEpoch)
+					// Intentar resolver desde PSKStore si está disponible
+					if g.PSKStore != nil {
+						resolver := NewPSKResolver(g.PSKStore)
+						pskBytes, err = resolver.ResolvePSK(&pid)
+						if err != nil {
+							return fmt.Errorf("resolving resumption PSK: %w", err)
+						}
+					} else {
+						return fmt.Errorf("missing resumption PSK for group=%x epoch=%d", pid.PskGroupID, pid.PskEpoch)
+					}
 				}
-			} else { // external (1) or branch (3)
-				pskBytes, ok = g.CachedPsks[string(pid.ID)]
-				if !ok {
+				psks = append(psks, schedule.Psk{
+					Psk:        pskBytes,
+					PskId:      pid.ID,
+					PskNonce:   pid.Nonce,
+					PskType:    schedule.PskType(pid.PskType),
+					Usage:      pid.Usage,
+					PskGroupID: pid.PskGroupID,
+					PskEpoch:   pid.PskEpoch,
+				})
+			} else { // External o Branch PSK
+				pskBytes, ok := g.CachedPsks[string(pid.ID)]
+				if !ok && g.PSKStore != nil {
+					pskBytes, err = g.PSKStore.GetPSK(pid.ID)
+					if err != nil {
+						return fmt.Errorf("resolving PSK from store: %w", err)
+					}
+				} else if !ok {
 					return fmt.Errorf("missing PSK for proposal: %x", pid.ID)
 				}
+				psks = append(psks, schedule.Psk{
+					Psk:      pskBytes,
+					PskId:    pid.ID,
+					PskNonce: pid.Nonce,
+					PskType:  schedule.PskType(pid.PskType),
+					Usage:    pid.Usage,
+				})
 			}
-
-			psks = append(psks, schedule.Psk{
-				Psk:        pskBytes,
-				PskId:      pid.ID,
-				PskNonce:   pid.Nonce,
-				PskType:    schedule.PskType(pid.PskType),
-				Usage:      pid.Usage,
-				PskGroupID: pid.PskGroupID,
-				PskEpoch:   pid.PskEpoch,
-			})
 		}
 	}
 
@@ -1840,7 +1860,7 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		if err != nil {
 			return fmt.Errorf("external sender: %w", err)
 		}
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(sigKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(sigKey, g.CipherSuite.SignatureScheme())
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,
@@ -1997,4 +2017,20 @@ func keyPackageLeafToTreeSync(leaf *keypackages.LeafNode) *treesync.LeafNodeData
 		leafData.Capabilities = &treesync.LeafNodeCapabilities{}
 	}
 	return leafData
+}
+
+// Export deriva una clave externa usando MLS Exporter (RFC 9420 §8.5).
+// Útil para aplicaciones que necesitan derivar keys de sesión (e.g., DAVE media keys).
+// El label debe ser único para la aplicación. El contexto puede ser nil.
+func (g *Group) Export(label string, context []byte, length int) ([]byte, error) {
+	if g.EpochSecrets == nil || g.EpochSecrets.ExporterSecret == nil {
+		return nil, fmt.Errorf("exporter_secret not available")
+	}
+
+	if g.state != StateOperational {
+		return nil, fmt.Errorf("group not operational")
+	}
+
+	// RFC 9420 §8.5 = HKDF-Expand-Label(exporter_secret, label, context, length)
+	return schedule.Exporter(g.EpochSecrets.ExporterSecret, g.CipherSuite, schedule.ExporterLabel(label), context, length)
 }
