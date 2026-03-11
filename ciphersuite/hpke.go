@@ -1,49 +1,27 @@
+// Package ciphersuite - HPKE operations for MLS (RFC 9420 §5.1.3, RFC 9180)
+//
+// Implementación nativa usando crypto/hpke de Go 1.26.
+// Sigue RFC 9180 (HPKE) y RFC 9420 (MLS) al pie de la letra.
 package ciphersuite
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdh"
-	"crypto/elliptic"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 
+	"crypto/hpke"
 	"github.com/openmls/go/internal/tls"
 )
 
-// EncryptContext represents the context for HPKE encryption (RFC 9420 §5.1.3).
+// EncryptWithLabel encripta usando HPKE con label (RFC 9420 §5.1.3).
 //
-//	struct {
-//	    opaque label<V>;
-//	    opaque context<V>;
-//	} EncryptContext;
-type EncryptContext struct {
-	Label   []byte
-	Context []byte
-}
-
-// NewEncryptContext creates an encryption context with MLS prefix.
-func NewEncryptContext(label string, context []byte) *EncryptContext {
-	return &EncryptContext{
-		Label:   []byte(LabelPrefix + label),
-		Context: context,
-	}
-}
-
-// Marshal serializes the context to TLS format.
-func (ec *EncryptContext) Marshal() []byte {
-	w := tls.NewWriter()
-	w.WriteVLBytes(ec.Label)
-	w.WriteVLBytes(ec.Context)
-	return w.Bytes()
-}
-
-// EncryptWithLabel encrypts to an HPKE public key with label (RFC 9420 §5.1.3).
+// Implementa:
+//   HPKE.Encrypt(pkR, info, aad, plaintext) -> (enc, ciphertext)
 //
-// EncryptWithLabel(PublicKey, Label, Context, Plaintext) =
+// Donde:
+//   - info = Serialize(VL("MLS 1.0 " + label) || context)
+//   - pkR es la public key del receptor
 //
-//	SealBase(PublicKey, EncryptContext, "", Plaintext)
+// Usa crypto/hpke nativo de Go 1.26 para todas las cipher suites.
 func EncryptWithLabel(
 	publicKey []byte,
 	label string,
@@ -51,63 +29,72 @@ func EncryptWithLabel(
 	plaintext []byte,
 	ciphersuite CipherSuite,
 ) (*HpkeCiphertext, error) {
-	encContext := NewEncryptContext(label, context)
-	return encryptWithLabelInternal(publicKey, encContext, plaintext, ciphersuite)
-}
-
-// EncapToBytes performs DHKEM encapsulation, returning (kem_output, shared_secret).
-// shared_secret is the DHKEM ExtractAndExpand result (RFC 9180 §4.1).
-func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) ([]byte, []byte, error) {
-	sharedSecret, enc, err := dhkemEncap(recipientPubKeyBytes, cs)
-	if err != nil {
-		return nil, nil, err
+	switch ciphersuite {
+	case MLS128DHKEMX25519:
+		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.AES128GCM())
+	case MLS256DHKEMX25519ChaCha20:
+		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.ChaCha20Poly1305())
+	case MLS128DHKEMP256:
+		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.P256(), hpke.AES128GCM())
+	default:
+		return nil, fmt.Errorf("unsupported cipher suite: %d", ciphersuite)
 	}
-	return enc, sharedSecret, nil
 }
 
-// DecapToBytes performs DHKEM decapsulation, returning the shared_secret.
-// shared_secret is the DHKEM ExtractAndExpand result (RFC 9180 §4.1).
-func DecapToBytes(enc, privKeyBytes []byte, cs CipherSuite) ([]byte, error) {
-	return dhkemDecap(enc, privKeyBytes, cs)
-}
-
-func encryptWithLabelInternal(
+// encryptWithLabelNative es la implementación nativa usando crypto/hpke.
+func encryptWithLabelNative(
 	publicKey []byte,
-	encContext *EncryptContext,
+	label string,
+	context []byte,
 	plaintext []byte,
-	cs CipherSuite,
+	curve ecdh.Curve,
+	aead hpke.AEAD,
 ) (*HpkeCiphertext, error) {
-	contextBytes := encContext.Marshal()
+	// Construir info = Serialize(VL("MLS 1.0 " + label) || VL(context))
+	// Según RFC 9420 §5.1.3, ambos campos llevan length prefix
+	encContext := NewEncryptContext(label, context)
+	info := encContext.Marshal()
 
-	sharedSecret, enc, err := dhkemEncap(publicKey, cs)
+	// Parsear public key
+	pubKey, err := curve.NewPublicKey(publicKey)
 	if err != nil {
-		return nil, fmt.Errorf("DHKEM encap: %w", err)
+		return nil, fmt.Errorf("parsing public key: %w", err)
+	}
+	pk, err := hpke.NewDHKEMPublicKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("creating HPKE public key: %w", err)
 	}
 
-	key, baseNonce, err := hpkeKeyScheduleBase(sharedSecret, contextBytes, cs)
+	// Encrypt usando HPKE Seal (RFC 9180 §4.1)
+	// Seal retorna enc || ciphertext concatenado
+	encapsulatedAndCt, err := hpke.Seal(pk, hpke.HKDFSHA256(), aead, info, plaintext)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("HPKE seal: %w", err)
 	}
 
-	// seq = 0 → nonce = base_nonce XOR I2OSP(0, Nn) = base_nonce
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
+	// Separar KEM output del ciphertext
+	// El largo del KEM output depende de la curva:
+	// - X25519: 32 bytes
+	// - P256: 65 bytes (punto sin comprimir: 0x04 + 32 + 32)
+	kemOutputLen := len(publicKey) // Mismo largo que la public key
+	if len(encapsulatedAndCt) < kemOutputLen {
+		return nil, fmt.Errorf("HPKE output too short: %d bytes", len(encapsulatedAndCt))
 	}
 
-	ct := aead.Seal(nil, baseNonce, plaintext, nil)
-	return &HpkeCiphertext{KEMOutput: enc, Ciphertext: ct}, nil
+	return &HpkeCiphertext{
+		KEMOutput:  encapsulatedAndCt[:kemOutputLen],
+		Ciphertext: encapsulatedAndCt[kemOutputLen:],
+	}, nil
 }
 
-// DecryptWithLabel decrypts with HPKE and label (RFC 9420 §5.1.3).
+// DecryptWithLabel desencripta usando HPKE con label (RFC 9420 §5.1.3).
 //
-// DecryptWithLabel(PrivateKey, Label, Context, KEMOutput, Ciphertext) =
+// Implementa:
+//   HPKE.Decrypt(skR, info, aad, enc, ciphertext) -> plaintext
 //
-//	OpenBase(KEMOutput, PrivateKey, EncryptContext, "", Ciphertext)
+// Donde:
+//   - info = Serialize(VL("MLS 1.0 " + label) || context)
+//   - skR es la private key del receptor
 func DecryptWithLabel(
 	privateKey []byte,
 	label string,
@@ -115,194 +102,113 @@ func DecryptWithLabel(
 	ciphertext *HpkeCiphertext,
 	ciphersuite CipherSuite,
 ) ([]byte, error) {
-	encContext := NewEncryptContext(label, context)
-	return decryptWithLabelInternal(privateKey, encContext, ciphertext, ciphersuite)
+	switch ciphersuite {
+	case MLS128DHKEMX25519:
+		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.AES128GCM())
+	case MLS256DHKEMX25519ChaCha20:
+		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.ChaCha20Poly1305())
+	case MLS128DHKEMP256:
+		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.P256(), hpke.AES128GCM())
+	default:
+		return nil, fmt.Errorf("unsupported cipher suite: %d", ciphersuite)
+	}
 }
 
-func decryptWithLabelInternal(
+// decryptWithLabelNative es la implementación nativa usando crypto/hpke.
+func decryptWithLabelNative(
 	privateKey []byte,
-	encContext *EncryptContext,
+	label string,
+	context []byte,
 	ciphertext *HpkeCiphertext,
-	cs CipherSuite,
+	curve ecdh.Curve,
+	aead hpke.AEAD,
 ) ([]byte, error) {
-	contextBytes := encContext.Marshal()
+	// Construir info = Serialize(VL("MLS 1.0 " + label) || VL(context))
+	// Según RFC 9420 §5.1.3, ambos campos llevan length prefix
+	encContext := NewEncryptContext(label, context)
+	info := encContext.Marshal()
 
-	sharedSecret, err := dhkemDecap(ciphertext.KEMOutput, privateKey, cs)
-	if err != nil {
-		return nil, fmt.Errorf("DHKEM decap: %w", err)
-	}
-
-	key, baseNonce, err := hpkeKeyScheduleBase(sharedSecret, contextBytes, cs)
-	if err != nil {
-		return nil, err
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("%w: creating cipher: %v", ErrAeadDecryption, err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("%w: creating GCM: %v", ErrAeadDecryption, err)
-	}
-
-	plaintext, err := aead.Open(nil, baseNonce, ciphertext.Ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAeadDecryption, err)
-	}
-	return plaintext, nil
-}
-
-// DeriveKeyPair derives an HPKE key pair from IKM (RFC 9180 §4.1).
-func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
-	// DeriveKeyPair uses kem_suite_id (RFC 9180 §4.1)
-	kemID := kemSuiteID(cs)
-	dkpPrk := hpkeLabeledExtract(nil, "dkp_prk", ikm, kemID)
-	order := elliptic.P256().Params().N
-
-	for ctr := 0; ctr < 256; ctr++ {
-		skBytes, err := hpkeLabeledExpand(dkpPrk, "candidate", []byte{byte(ctr)}, 32, kemID)
-		if err != nil {
-			return nil, err
-		}
-
-		skInt := new(big.Int).SetBytes(skBytes)
-		if skInt.Sign() == 0 || skInt.Cmp(order) >= 0 {
-			continue
-		}
-
-		priv, err := ecdh.P256().NewPrivateKey(skBytes)
-		if err == nil {
-			return priv, nil
-		}
-	}
-
-	return nil, fmt.Errorf("derive key pair: no valid private key candidate")
-}
-
-// dhkemEncap performs DHKEM(P-256, HKDF-SHA256) encapsulation (RFC 9180 §4.1).
-// Returns (shared_secret, kem_output).
-func dhkemEncap(pkR []byte, cs CipherSuite) (sharedSecret, enc []byte, err error) {
-	skE, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	pkRKey, err := ecdh.P256().NewPublicKey(pkR)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing recipient public key: %w", err)
-	}
-	dh, err := skE.ECDH(pkRKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ECDH: %w", err)
-	}
-	enc = skE.PublicKey().Bytes()
-	kemCtx := append(enc, pkR...)
-	sharedSecret, err = dhkemExtractAndExpand(dh, kemCtx, cs)
-	if err == nil { fmt.Printf("[DEBUG encap] sharedSecret first4=%x kemCtx first4=%x\n", sharedSecret[:4], kemCtx[:4]) }
-	return sharedSecret, enc, err
-}
-
-// dhkemDecap performs DHKEM(P-256, HKDF-SHA256) decapsulation (RFC 9180 §4.1).
-func dhkemDecap(enc, skR []byte, cs CipherSuite) ([]byte, error) {
-	privKey, err := ecdh.P256().NewPrivateKey(skR)
+	// Parsear private key
+	privKey, err := curve.NewPrivateKey(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
-	pkE, err := ecdh.P256().NewPublicKey(enc)
+	sk, err := hpke.NewDHKEMPrivateKey(privKey)
 	if err != nil {
-		return nil, fmt.Errorf("parsing ephemeral public key: %w", err)
+		return nil, fmt.Errorf("creating HPKE private key: %w", err)
 	}
-	dh, err := privKey.ECDH(pkE)
+
+	// Reconstruir enc || ciphertext para HPKE Open
+	encapsulatedAndCt := append(ciphertext.KEMOutput, ciphertext.Ciphertext...)
+
+	// Decrypt usando HPKE Open (RFC 9180 §4.1)
+	plaintext, err := hpke.Open(sk, hpke.HKDFSHA256(), aead, info, encapsulatedAndCt)
 	if err != nil {
-		return nil, fmt.Errorf("ECDH: %w", err)
+		return nil, fmt.Errorf("HPKE open: %w", err)
 	}
-	pkR := privKey.PublicKey().Bytes()
-	kemCtx := append(enc, pkR...)
-	ss, err := dhkemExtractAndExpand(dh, kemCtx, cs)
-	if err == nil { fmt.Printf("[DEBUG decap] sharedSecret first4=%x kemCtx first4=%x pkR first4=%x\n", ss[:4], kemCtx[:4], pkR[:4]) }
-	return ss, err
+
+	return plaintext, nil
 }
 
-// dhkemExtractAndExpand implements ExtractAndExpand for DHKEM(P-256).
-// Uses "eae_prk" label for extract (as in hpke-rs used by OpenMLS test vectors).
-func dhkemExtractAndExpand(dh, kemCtx []byte, cs CipherSuite) ([]byte, error) {
-	kemID := kemSuiteID(cs)
-	prk := hpkeLabeledExtract(nil, "eae_prk", dh, kemID)
-	return hpkeLabeledExpand(prk, "shared_secret", kemCtx, 32, kemID)
-}
+// DeriveKeyPair deriva un HPKE key pair desde IKM (RFC 9180 §4.1).
+//
+// Implementa el algoritmo DeriveKeyPair exacto de RFC 9180 §4.1 usando
+// la implementación nativa de crypto/hpke, que aplica LabeledExtract /
+// LabeledExpand con el suite_id del KEM correcto.
+func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
+	var kem hpke.KEM
+	switch cs {
+	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+		kem = hpke.DHKEM(ecdh.X25519())
+	case MLS128DHKEMP256:
+		kem = hpke.DHKEM(ecdh.P256())
+	default:
+		return nil, fmt.Errorf("unsupported cipher suite: %d", cs)
+	}
 
-// hpkeKeyScheduleBase runs the HPKE KeySchedule for base mode (RFC 9180 §5.1).
-// info is the serialized EncryptContext.
-func hpkeKeyScheduleBase(sharedSecret, info []byte, cs CipherSuite) (key, baseNonce []byte, err error) {
-	suiteID := hpkeSuiteID(cs)
-
-	// ks_context = mode(0x00) || LabeledExtract("", "psk_id_hash", psk_id="") ||
-	//                             LabeledExtract("", "info_hash", info)
-	// RFC 9180 §5.1 — psk_id_hash and info_hash use LabeledExtract, NOT plain Hash()
-	pskIDHash := hpkeLabeledExtract(nil, "psk_id_hash", nil, suiteID)
-	infoHash := hpkeLabeledExtract(nil, "info_hash", info, suiteID)
-
-	ksContext := []byte{0x00} // mode = base
-	ksContext = append(ksContext, pskIDHash...)
-	ksContext = append(ksContext, infoHash...)
-
-	// secret = LabeledExtract(shared_secret, "secret", psk="")
-	secret := hpkeLabeledExtract(sharedSecret, "secret", nil, suiteID)
-
-	// key = LabeledExpand(secret, "key", ks_context, Nk)
-	key, err = hpkeLabeledExpand(secret, "key", ksContext, 16, suiteID)
+	privKey, err := kem.DeriveKeyPair(ikm)
 	if err != nil {
-		return nil, nil, fmt.Errorf("expand key: %w", err)
+		return nil, fmt.Errorf("DeriveKeyPair: %w", err)
 	}
 
-	// base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
-	baseNonce, err = hpkeLabeledExpand(secret, "base_nonce", ksContext, 12, suiteID)
+	// hpke.PrivateKey → *ecdh.PrivateKey via bytes round-trip
+	privBytes, err := privKey.Bytes()
 	if err != nil {
-		return nil, nil, fmt.Errorf("expand nonce: %w", err)
+		return nil, fmt.Errorf("DeriveKeyPair marshal: %w", err)
 	}
-
-	return key, baseNonce, nil
-}
-
-// hpkeSuiteID returns the full HPKE suite ID (RFC 9180 §5.1).
-// suite_id = "HPKE" || I2OSP(kem_id, 2) || I2OSP(kdf_id, 2) || I2OSP(aead_id, 2)
-func hpkeSuiteID(cs CipherSuite) []byte {
-	config := cs.HPKEConfig()
-	return []byte{
-		'H', 'P', 'K', 'E',
-		byte(config.KEM >> 8), byte(config.KEM),
-		byte(config.KDF >> 8), byte(config.KDF),
-		byte(config.AEAD >> 8), byte(config.AEAD),
+	switch cs {
+	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+		return ecdh.X25519().NewPrivateKey(privBytes)
+	case MLS128DHKEMP256:
+		return ecdh.P256().NewPrivateKey(privBytes)
+	default:
+		return nil, fmt.Errorf("unsupported cipher suite: %d", cs)
 	}
 }
 
-// kemSuiteID returns the KEM-specific suite ID (RFC 9180 §4.1).
-// kem_suite_id = "KEM" || I2OSP(kem_id, 2)
-func kemSuiteID(cs CipherSuite) []byte {
-	config := cs.HPKEConfig()
-	return []byte{
-		'K', 'E', 'M',
-		byte(config.KEM >> 8), byte(config.KEM),
+// EncryptContext representa el contexto para encriptación HPKE (RFC 9420 §5.1.3).
+//
+//	struct {
+//	    opaque label<V> = "MLS 1.0 " + Label;
+//	    opaque context<V> = Context;
+//	} EncryptContext;
+type EncryptContext struct {
+	Label   []byte
+	Context []byte
+}
+
+// NewEncryptContext crea un contexto de encriptación con prefijo MLS.
+func NewEncryptContext(label string, context []byte) *EncryptContext {
+	return &EncryptContext{
+		Label:   []byte(LabelPrefix + label),
+		Context: context,
 	}
 }
 
-// hpkeLabeledExtract computes HKDF-Extract with HPKE v1 labeling (RFC 9180 §4).
-// LabeledExtract(salt, label, ikm) = HKDF-Extract(salt, "HPKE-v1" || suite_id || label || ikm)
-func hpkeLabeledExtract(salt []byte, label string, ikm, suiteID []byte) []byte {
-	labeled := []byte("HPKE-v1")
-	labeled = append(labeled, suiteID...)
-	labeled = append(labeled, []byte(label)...)
-	labeled = append(labeled, ikm...)
-	return hkdfExtract(salt, labeled)
-}
-
-// hpkeLabeledExpand computes HKDF-Expand with HPKE v1 labeling (RFC 9180 §4).
-// LabeledExpand(prk, label, info, L) = HKDF-Expand(prk, I2OSP(L,2) || "HPKE-v1" || suite_id || label || info, L)
-func hpkeLabeledExpand(prk []byte, label string, info []byte, length int, suiteID []byte) ([]byte, error) {
-	labeled := []byte{byte(length >> 8), byte(length)} // I2OSP(L, 2)
-	labeled = append(labeled, []byte("HPKE-v1")...)
-	labeled = append(labeled, suiteID...)
-	labeled = append(labeled, []byte(label)...)
-	labeled = append(labeled, info...)
-	return hkdfExpand(prk, labeled, length)
+// Marshal serializa a TLS format.
+func (ec *EncryptContext) Marshal() []byte {
+	w := tls.NewWriter()
+	w.WriteVLBytes(ec.Label)
+	w.WriteVLBytes(ec.Context)
+	return w.Bytes()
 }
