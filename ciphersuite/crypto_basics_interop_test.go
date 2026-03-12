@@ -179,7 +179,7 @@ func testSignWithLabel(t *testing.T, v cryptoBasicsVector) {
 
 	// Also test sign+verify round-trip using the private key
 	privBytes := mustDecodeHex(t, v.SignWithLabel.Priv)
-	
+
 	// For Ed25519 (cs=1, cs=3), use Ed25519 key derivation from 32-byte seed
 	if sigScheme == ED25519 {
 		// Test vectors provide 32-byte seed, derive full 64-byte private key

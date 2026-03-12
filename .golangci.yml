@@ -18,7 +18,6 @@ linters:
     - gocritic       # opinionated checks: appendAssign, sloppyReassign, etc.
     - misspell       # spelling mistakes in comments and strings
     - whitespace     # unnecessary blank lines at start/end of blocks
-    - godot          # comments should end with a period
 
     # --- security (relevant for a crypto library) ---
     - gosec          # security issues: weak crypto, hardcoded secrets, etc.

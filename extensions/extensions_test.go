@@ -37,9 +37,15 @@ func TestExtensionsMarshal_OrderDeterministic(t *testing.T) {
 	exts := extensions.NewExtensions()
 
 	// Add extensions in random order
-	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeExternalSenders, Data: []byte{0x03}})
-	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeApplicationID, Data: []byte{0x01}})
-	exts.Add(extensions.Extension{Type: extensions.ExtensionTypeRatchetTree, Data: []byte{0x02}})
+	if err := exts.Add(extensions.Extension{Type: extensions.ExtensionTypeExternalSenders, Data: []byte{0x03}}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := exts.Add(extensions.Extension{Type: extensions.ExtensionTypeApplicationID, Data: []byte{0x01}}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := exts.Add(extensions.Extension{Type: extensions.ExtensionTypeRatchetTree, Data: []byte{0x02}}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
 
 	// Marshal multiple times
 	data1 := exts.Marshal()

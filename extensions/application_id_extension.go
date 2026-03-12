@@ -10,206 +10,138 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// ApplicationIdExtension permite agregar identificadores específicos de la aplicación
-// a un KeyPackage.
+// ApplicationIDExtension adds an application-specific identifier to a KeyPackage.
 //
-// # ¿Para qué sirve?
+// Per RFC 9420 §11.2.1, this extension identifies the application or service
+// using the MLS client. Useful when multiple apps share MLS infrastructure.
 //
-// Esta extensión se usa para identificar la aplicación o servicio que está usando
-// el cliente MLS. Es útil cuando múltiples aplicaciones comparten la misma infraestructura
-// MLS pero necesitan distinguirse entre sí.
+// # Structure (RFC 9420 §11.2.1)
 //
-// # Estructura (RFC 9420 §11.2.1)
-//
-// ```
+// ```text
 // ┌─────────────────────────────────────────┐
-// │    ApplicationIdExtension               │
+// │    ApplicationIDExtension               │
 // ├─────────────────────────────────────────┤
-// │  application_id: opaque<V>              │  ← Identificador de la app
+// │  application_id: opaque<V>              │
 // └─────────────────────────────────────────┘
 // ```
 //
-// # Ubicación
+// # Location
 //
-// - **KeyPackage**: Sí ✅
-// - **GroupInfo**: No ❌
-// - **GroupContext**: No ❌
-// - **LeafNode**: Sí ✅
+// - KeyPackage: Yes
+// - LeafNode: Yes
+// - GroupInfo: No
+// - GroupContext: No
 //
-// # Ejemplos de Uso
+// # Common Formats
 //
-// // Crear con ID de aplicación
-// ext := NewApplicationIdExtension([]byte("my-app-identifier"))
+// - UTF-8 string: "com.example.chat", "discord-voice"
+// - Reverse DNS: "com.company.app" (recommended)
+// - Arbitrary bytes: app-specific binary identifiers
 //
-// // Crear desde string
-// ext := NewApplicationIdExtensionFromString("com.example.chat")
+// # Example
 //
-// // Validar
+// // Create from bytes
+// ext := NewApplicationIDExtension([]byte("my-app-identifier"))
+//
+// // Create from string
+// ext := NewApplicationIDExtensionFromString("com.example.chat")
+//
+// // Validate
 //
 //	if err := ext.Validate(); err != nil {
-//	    return err  // Extensión inválida
+//	    return err
 //	}
 //
-// // Serializar
+// // Serialize
 // data := ext.Marshal()
-//
-// // Deserializar
-// ext2, err := UnmarshalApplicationIdExtension(data)
-//
-// # Formatos Comunes
-//
-// - **String UTF-8**: "com.example.chat", "discord-voice"
-// - **Bytes arbitrarios**: identificadores binarios específicos
-// - **Reverse DNS**: "com.company.app" (recomendado)
 //
 // # RFC Compliance
 //
 // RFC 9420 §11.2.1:
 // "The ApplicationId extension allows applications to add an explicit,
 // application-defined identifier to a KeyPackage."
-type ApplicationIdExtension struct {
-	ApplicationId []byte // Identificador de la aplicación (opaque<V>)
+type ApplicationIDExtension struct {
+	ApplicationID []byte // Application identifier (opaque<V>)
 }
 
-// NewApplicationIdExtension crea una nueva ApplicationIdExtension.
+// NewApplicationIDExtension creates an ApplicationIDExtension.
 //
-// El application_id puede ser cualquier secuencia de bytes hasta 65535 bytes.
-// Se recomienda usar un formato legible como reverse DNS ("com.example.app").
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("com.example.chat"))
-func NewApplicationIdExtension(appId []byte) *ApplicationIdExtension {
-	return &ApplicationIdExtension{
-		ApplicationId: appId,
+// The application_id can be any byte sequence up to 65535 bytes.
+// Recommended format: reverse DNS ("com.example.app").
+func NewApplicationIDExtension(appID []byte) *ApplicationIDExtension {
+	return &ApplicationIDExtension{
+		ApplicationID: appID,
 	}
 }
 
-// NewApplicationIdExtensionFromString crea una ApplicationIdExtension desde string.
+// NewApplicationIDExtensionFromString creates an ApplicationIDExtension from string.
 //
-// Útil para identifiers legibles como "com.example.chat" o "discord-voice".
-// El string se convierte a UTF-8.
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtensionFromString("com.example.chat")
-func NewApplicationIdExtensionFromString(appId string) *ApplicationIdExtension {
-	return NewApplicationIdExtension([]byte(appId))
+// Converts the string to UTF-8 bytes.
+func NewApplicationIDExtensionFromString(appID string) *ApplicationIDExtension {
+	return NewApplicationIDExtension([]byte(appID))
 }
 
-// Marshal serializa la extensión a formato TLS.
+// Marshal serializes the extension to TLS format.
 //
-// # Encoding
-//
-// ```
+// ```text
 // ┌─────────────────────────────────────────┐
 // │  application_id_length: varint          │
 // ├─────────────────────────────────────────┤
 // │  application_id: opaque[]               │
 // └─────────────────────────────────────────┘
 // ```
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("test"))
-// data := ext.Marshal()
-// // data: [0x04, 't', 'e', 's', 't']
-func (a *ApplicationIdExtension) Marshal() []byte {
+func (a *ApplicationIDExtension) Marshal() []byte {
 	buf := tls.NewWriter()
-	buf.WriteVLBytes(a.ApplicationId)
+	buf.WriteVLBytes(a.ApplicationID)
 	return buf.Bytes()
 }
 
-// UnmarshalApplicationIdExtension parsea una ApplicationIdExtension desde TLS.
+// UnmarshalApplicationIDExtension parses an ApplicationIDExtension from TLS.
 //
-// # Decoding
-//
-// Lee application_id como variable-length bytes.
-//
-// # Ejemplo
-//
-// data := []byte{0x04, 't', 'e', 's', 't'}
-// ext, err := UnmarshalApplicationIdExtension(data)
-//
-//	if err != nil {
-//	    return err
-//	}
-//
-// // ext.ApplicationId == []byte("test")
-func UnmarshalApplicationIdExtension(data []byte) (*ApplicationIdExtension, error) {
+// Reads application_id as variable-length bytes per RFC 9420 §11.2.1.
+func UnmarshalApplicationIDExtension(data []byte) (*ApplicationIDExtension, error) {
 	buf := tls.NewReader(data)
-	appId, err := buf.ReadVLBytes()
+	appID, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading application_id: %w", err)
 	}
-	return &ApplicationIdExtension{
-		ApplicationId: appId,
+	return &ApplicationIDExtension{
+		ApplicationID: appID,
 	}, nil
 }
 
-// Validate valida la extensión.
+// Validate validates the extension per RFC 9420 §11.2.1.
 //
-// # Reglas de Validación
+// # Validation Rules
 //
-// - ✅ ApplicationId no debe ser nil
-// - ✅ ApplicationId no debe estar vacío
-// - ✅ ApplicationId <= 65535 bytes (límite de varint)
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("test"))
-//
-//	if err := ext.Validate(); err != nil {
-//	    return err  // Extensión inválida
-//	}
-func (a *ApplicationIdExtension) Validate() error {
-	if a.ApplicationId == nil {
+// - ApplicationID must not be nil
+// - ApplicationID must not be empty
+// - ApplicationID <= 65535 bytes (varint limit)
+func (a *ApplicationIDExtension) Validate() error {
+	if a.ApplicationID == nil {
 		return errors.New("application_id cannot be nil")
 	}
-	if len(a.ApplicationId) == 0 {
+	if len(a.ApplicationID) == 0 {
 		return errors.New("application_id cannot be empty")
 	}
-	if len(a.ApplicationId) > 65535 {
-		return fmt.Errorf("application_id too long: %d bytes (max 65535)", len(a.ApplicationId))
+	if len(a.ApplicationID) > 65535 {
+		return fmt.Errorf("application_id too long: %d bytes (max 65535)", len(a.ApplicationID))
 	}
 	return nil
 }
 
-// Equal compara dos ApplicationIdExtension para igualdad.
-//
-// Compara los ApplicationId bytes usando comparación constante.
-//
-// # Ejemplo
-//
-// ext1 := NewApplicationIdExtension([]byte("test"))
-// ext2 := NewApplicationIdExtension([]byte("test"))
-// ext3 := NewApplicationIdExtension([]byte("other"))
-//
-// ext1.Equal(ext2)  // true
-// ext1.Equal(ext3)  // false
-func (a *ApplicationIdExtension) Equal(other *ApplicationIdExtension) bool {
+// Equal compares two ApplicationIDExtension instances.
+func (a *ApplicationIDExtension) Equal(other *ApplicationIDExtension) bool {
 	if a == nil || other == nil {
 		return a == other
 	}
-	return bytes.Equal(a.ApplicationId, other.ApplicationId)
+	return bytes.Equal(a.ApplicationID, other.ApplicationID)
 }
 
-// ToExtension convierte a Extension genérica.
+// ToExtension converts to a generic Extension.
 //
-// Útil para agregar a una colección Extensions.
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("test"))
-// genericExt, err := ext.ToExtension()
-//
-//	if err != nil {
-//	    return err
-//	}
-//
-// exts := NewExtensions()
-// exts.Add(*genericExt)
-func (a *ApplicationIdExtension) ToExtension() (*Extension, error) {
+// Useful for adding to an Extensions collection.
+func (a *ApplicationIDExtension) ToExtension() (*Extension, error) {
 	data := a.Marshal()
 	return &Extension{
 		Type: ExtensionTypeApplicationID,
@@ -217,59 +149,35 @@ func (a *ApplicationIdExtension) ToExtension() (*Extension, error) {
 	}, nil
 }
 
-// FromExtension crea desde Extension genérica.
+// FromApplicationIDExtension creates an ApplicationIDExtension from a generic Extension.
 //
-// Devuelve error si el Type no es ExtensionTypeApplicationID.
-//
-// # Ejemplo
-//
-// genericExt := &Extension{Type: ExtensionTypeApplicationID, Data: []byte{0x04, 't', 'e', 's', 't'}}
-// ext, err := FromApplicationIdExtension(genericExt)
-//
-//	if err != nil {
-//	    return err
-//	}
-//
-// // ext.ApplicationId == []byte("test")
-func FromApplicationIdExtension(ext *Extension) (*ApplicationIdExtension, error) {
+// Returns error if Type is not ExtensionTypeApplicationID.
+func FromApplicationIDExtension(ext *Extension) (*ApplicationIDExtension, error) {
 	if ext.Type != ExtensionTypeApplicationID {
 		return nil, fmt.Errorf("wrong extension type: %d", ext.Type)
 	}
-	return UnmarshalApplicationIdExtension(ext.Data)
+	return UnmarshalApplicationIDExtension(ext.Data)
 }
 
-// String devuelve el ApplicationId como string legible.
+// String returns the ApplicationID as a human-readable string.
 //
-// Intenta decodificar como UTF-8. Si no es válido UTF-8,
-// devuelve representación hexadecimal.
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("com.example.chat"))
-// fmt.Println(ext.String())  // "com.example.chat"
-func (a *ApplicationIdExtension) String() string {
-	if a == nil || a.ApplicationId == nil {
+// Attempts UTF-8 decoding. Falls back to hex if invalid UTF-8.
+func (a *ApplicationIDExtension) String() string {
+	if a == nil || a.ApplicationID == nil {
 		return ""
 	}
-	// Try UTF-8 first
-	if validUTF8(a.ApplicationId) {
-		return string(a.ApplicationId)
+	if validUTF8(a.ApplicationID) {
+		return string(a.ApplicationID)
 	}
-	// Fallback to hex
-	return hex.EncodeToString(a.ApplicationId)
+	return hex.EncodeToString(a.ApplicationID)
 }
 
-// Len devuelve la longitud del ApplicationId en bytes.
-//
-// # Ejemplo
-//
-// ext := NewApplicationIdExtension([]byte("test"))
-// // ext.Len() == 4
-func (a *ApplicationIdExtension) Len() int {
+// Len returns the length of the ApplicationID in bytes.
+func (a *ApplicationIDExtension) Len() int {
 	if a == nil {
 		return 0
 	}
-	return len(a.ApplicationId)
+	return len(a.ApplicationID)
 }
 
 // Helper function to check valid UTF-8
@@ -277,11 +185,9 @@ func validUTF8(b []byte) bool {
 	for i := 0; i < len(b); {
 		c := b[i]
 		if c < 0x80 {
-			// ASCII
 			i++
 			continue
 		}
-		// Multi-byte UTF-8
 		n := utf8Len(c)
 		if n == 0 || i+n > len(b) {
 			return false

@@ -1,4 +1,7 @@
-// Package extensions - Required Capabilities Extension (RFC 9420 §11.2.1)
+// Use of this source code is governed by a MIT-style license
+// that can be found in the LICENSE file.
+
+// Package extensions - Required Capabilities Extension (RFC 9420 §11.2.3)
 package extensions
 
 import (
@@ -11,8 +14,12 @@ import (
 
 // RequiredCapabilitiesExtension specifies capabilities required for group members.
 //
-// This extension is used in LeafNode and GroupContext to ensure all members
-// support the required features.
+// This extension is used in GroupContext to ensure all members support the required
+// features before joining the group.
+//
+// # Structure (RFC 9420 §11.2.3)
+//
+// ```text
 //
 //	struct {
 //	    ProtocolVersion protocol_versions<V>;
@@ -21,6 +28,43 @@ import (
 //	    ProposalType proposals<V>;
 //	    CredentialType credentials<V>;
 //	} RequiredCapabilities;
+//
+// ```
+//
+// # Location
+//
+// - **KeyPackage**: No ❌
+// - **GroupInfo**: No ❌
+// - **GroupContext**: Yes ✅
+//
+// # Purpose
+//
+// RequiredCapabilities ensures all group members support:
+//   - Specific protocol versions
+//   - Required cipher suites
+//   - Mandatory extensions
+//   - Supported proposal types
+//   - Accepted credential types
+//
+// # Example
+//
+// // Create extension
+// req := NewRequiredCapabilities()
+// req.AddProtocolVersion(0x01)      // MLS 1.0
+// req.AddCipherSuite(0x0002)         // MLS_128_DHKEMP256...
+// req.AddExtension(ExtensionTypeExternalSenders)
+//
+// // Validate
+//
+//	if err := req.Validate(); err != nil {
+//	    return err
+//	}
+//
+// // Serialize
+// data := req.Marshal()
+//
+// // Deserialize
+// req2, err := UnmarshalRequiredCapabilities(data)
 type RequiredCapabilitiesExtension struct {
 	ProtocolVersions []uint16                     // Protocol versions required
 	CipherSuites     []uint16                     // Cipher suites required
@@ -66,6 +110,20 @@ func (r *RequiredCapabilitiesExtension) AddCredential(cred credentials.Credentia
 }
 
 // Marshal serializes the RequiredCapabilities extension to TLS format.
+//
+// # Encoding (RFC 9420 §11.2.3)
+//
+// ```text
+// ┌─────────────────────────────────────────────────────────────┐
+// │         RequiredCapabilities Encoding                       │
+// ├─────────────────────────────────────────────────────────────┤
+// │  protocol_versions<V>    : opaque<V>                        │
+// │  cipher_suites<V>        : opaque<V>                        │
+// │  extensions<V>           : opaque<V>                        │
+// │  proposals<V>            : opaque<V>                        │
+// │  credentials<V>          : opaque<V>                        │
+// └─────────────────────────────────────────────────────────────┘
+// ```
 func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 	buf := tls.NewWriter()
 
@@ -108,6 +166,21 @@ func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 }
 
 // UnmarshalRequiredCapabilities parses a RequiredCapabilities extension from TLS format.
+//
+// # Decoding
+//
+// Reads five vectors: protocol_versions, cipher_suites, extensions, proposals, credentials.
+//
+// # Example
+//
+// data := []byte{...}  // serialized data
+// req, err := UnmarshalRequiredCapabilities(data)
+//
+//	if err != nil {
+//	    return err
+//	}
+//
+// // req.ProtocolVersions contains parsed versions
 func UnmarshalRequiredCapabilities(data []byte) (*RequiredCapabilitiesExtension, error) {
 	buf := tls.NewReader(data)
 
@@ -201,6 +274,13 @@ func UnmarshalRequiredCapabilities(data []byte) (*RequiredCapabilitiesExtension,
 }
 
 // Validate validates the RequiredCapabilities extension.
+//
+// # Validation Rules
+//
+// - protocol_versions must not be empty
+// - cipher_suites must not be empty
+// - Protocol version 0 is invalid
+// - Cipher suite 0 is invalid
 func (r *RequiredCapabilitiesExtension) Validate() error {
 	if len(r.ProtocolVersions) == 0 {
 		return errors.New("protocol_versions cannot be empty")
@@ -286,7 +366,7 @@ func (r *RequiredCapabilitiesExtension) Equal(other *RequiredCapabilitiesExtensi
 	return true
 }
 
-// IsEmpty devuelve true si la extensión no tiene capacidades requeridas.
+// IsEmpty returns true if the extension has no required capabilities.
 func (r *RequiredCapabilitiesExtension) IsEmpty() bool {
 	return len(r.ProtocolVersions) == 0 &&
 		len(r.CipherSuites) == 0 &&
@@ -295,35 +375,35 @@ func (r *RequiredCapabilitiesExtension) IsEmpty() bool {
 		len(r.Credentials) == 0
 }
 
-// SupportsAll verifica si esta extensión soporta todas las capacidades de otra.
-// Devuelve true si todas las capacidades de other están presentes en esta.
+// SupportsAll checks if this extension supports all capabilities from another.
+// Returns true if all capabilities in other are present in this.
 func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesExtension) bool {
 	if other == nil {
 		return true
 	}
 
-	// Verificar protocol versions
+	// Check protocol versions
 	for _, v := range other.ProtocolVersions {
 		if !r.HasProtocolVersion(v) {
 			return false
 		}
 	}
 
-	// Verificar cipher suites
+	// Check cipher suites
 	for _, cs := range other.CipherSuites {
 		if !r.HasCipherSuite(cs) {
 			return false
 		}
 	}
 
-	// Verificar extensions
+	// Check extensions
 	for _, ext := range other.Extensions {
 		if !r.HasExtension(ext) {
 			return false
 		}
 	}
 
-	// Verificar proposals
+	// Check proposals
 	for _, p := range other.Proposals {
 		found := false
 		for _, rp := range r.Proposals {
@@ -337,7 +417,7 @@ func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesE
 		}
 	}
 
-	// Verificar credentials
+	// Check credentials
 	for _, c := range other.Credentials {
 		found := false
 		for _, rc := range r.Credentials {
@@ -354,7 +434,7 @@ func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesE
 	return true
 }
 
-// HasCredential verifica si un tipo de credential es requerido.
+// HasCredential checks if a credential type is required.
 func (r *RequiredCapabilitiesExtension) HasCredential(cred credentials.CredentialType) bool {
 	for _, c := range r.Credentials {
 		if c == cred {

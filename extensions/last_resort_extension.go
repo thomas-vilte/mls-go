@@ -7,56 +7,56 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// LastResortExtension marca un KeyPackage para uso en escenarios "last resort".
+// LastResortExtension marks a KeyPackage for "last resort" use.
 //
-// # ¿Para qué sirve?
+// Per RFC 9420 §11.2.5, this extension marks KeyPackages that should only
+// be used when no other KeyPackages are available.
 //
-// Esta extensión se usa para marcar KeyPackages que deben ser usados
-// únicamente cuando no hay otras opciones disponibles. Es útil para:
+// # Structure (RFC 9420 §11.2.5)
 //
-//   - KeyPackages de respaldo
-//   - Situaciones de emergencia
-//   - Fallback cuando los KeyPackages normales se agotan
+// ```text
+// ┌─────────────────────────────────────────┐
+// │    LastResortExtension                  │
+// ├─────────────────────────────────────────┤
+// │  (no data - marker only)                │
+// └─────────────────────────────────────────┘
+// ```
 //
-// # Estructura (RFC 9420 §11.2.5)
+// # Location
 //
-//	.----------------------------------------------.
-//	|          LastResortExtension                 |
-//	|----------------------------------------------|
-//	|  (sin datos - es solo un marker)             |
-//	'----------------------------------------------'
+// - KeyPackage: Yes
+// - GroupInfo: No
+// - GroupContext: No
 //
-// # Ubicación
+// # Usage Flow
 //
-// - **KeyPackage**: Sí ✅
-// - **GroupInfo**: No ❌
-// - **GroupContext**: No ❌
+// ```text
+// ┌─────────────────────────────────────────────────────────────┐
+// │  1. Client generates normal KeyPackages                     │
+// │  2. Client generates "last resort" KeyPackages              │
+// │  3. Upload both to delivery service                         │
+// │  4. DS uses normal KeyPackages first                        │
+// │  5. If exhausted, uses "last resort" KeyPackages            │
+// └─────────────────────────────────────────────────────────────┘
+// ```
 //
-// # ¿Cómo funciona?
+// # Example
 //
-//	.----------------------------------------------.
-//	|              FLUJO DE USO                    |
-//	|----------------------------------------------|
-//	|  1. Cliente genera KeyPackages normales      |
-//	|  2. Cliente genera KeyPackages "last resort" |
-//	|  3. Sube ambos al delivery service           |
-//	|  4. DS usa normales primero                  |
-//	|  5. Si se agotan, usa los "last resort"      |
-//	'----------------------------------------------'
+// // Create last resort extension
+// ext := NewLastResortExtension()
 //
-// # Ejemplo de Uso
-//
-// // Crear extensión last resort
-// ext := extensions.NewLastResortExtension()
-//
-// // Validar
+// // Validate (always succeeds - no data to validate)
 //
 //	if err := ext.Validate(); err != nil {
 //	    return err
 //	}
 //
-// // Convertir a extensión genérica
-// genericExt, _ := ext.ToExtension()
+// // Convert to generic extension
+// genericExt, err := ext.ToExtension()
+//
+//	if err != nil {
+//	    return err
+//	}
 //
 // # RFC Compliance
 //
@@ -64,114 +64,51 @@ import (
 // "The LastResort extension is used to mark KeyPackages that should
 // only be used as a last resort, when no other KeyPackages are available."
 type LastResortExtension struct {
-	// LastResortExtension no tiene datos - es solo un marker
-	// La presencia de la extensión indica que es last resort
+	// No data - presence of the extension indicates "last resort"
 }
 
-// NewLastResortExtension crea una nueva LastResortExtension.
-//
-// # Ejemplo
-//
-// ext := extensions.NewLastResortExtension()
+// NewLastResortExtension creates a LastResortExtension.
 func NewLastResortExtension() *LastResortExtension {
 	return &LastResortExtension{}
 }
 
-// Marshal serializa la extensión a formato TLS.
+// Marshal serializes the extension to TLS format.
 //
-// # Encoding
+// Since LastResortExtension has no data, it marshals to empty bytes.
 //
-// LastResortExtension no tiene datos, por lo que Marshal devuelve
-// un vector de longitud 0.
-//
-//	.----------------------------------------------.
-//	|              TLS ENCODING                    |
-//	|----------------------------------------------|
-//	|  length (varint) : 0x00                      |
-//	|  data            : (0 bytes)                 |
-//	|  Total           : 1 byte                    |
-//	'----------------------------------------------'
-//
-// # Ejemplo
-//
-// ext := extensions.NewLastResortExtension()
-// data := ext.Marshal()
-// // data: []byte{0x00} (varint encoding of 0)
+// ```text
+// ┌─────────────────────────────────────────┐
+// │  extension_data_length: varint = 0      │
+// └─────────────────────────────────────────┘
+// ```
 func (l *LastResortExtension) Marshal() []byte {
 	buf := tls.NewWriter()
 	buf.WriteVLBytes([]byte{}) // Empty data
 	return buf.Bytes()
 }
 
-// UnmarshalLastResortExtension parsea una LastResortExtension desde TLS.
+// UnmarshalLastResortExtension parses a LastResortExtension from TLS.
 //
-// # Decoding
-//
-// LastResortExtension no tiene datos, por lo que solo verifica que
-// los datos estén presentes (aunque sean vacíos).
-//
-// # Ejemplo
-//
-// data := []byte{0x00}
-// ext, err := UnmarshalLastResortExtension(data)
-//
-//	if err != nil {
-//	    return err
-//	}
-func UnmarshalLastResortExtension(data []byte) (*LastResortExtension, error) {
-	// LastResortExtension no tiene datos, cualquier input es válido
-	// (incluso nil o vacío)
-	return &LastResortExtension{}, nil
+// Reads empty extension data (no data to parse).
+func UnmarshalLastResortExtension(_ []byte) (*LastResortExtension, error) {
+	return NewLastResortExtension(), nil
 }
 
-// Validate valida la extensión.
+// Validate validates the extension.
 //
-// # Reglas de Validación
-//
-// LastResortExtension siempre es válida - no tiene datos que validar.
-//
-// # Ejemplo
-//
-// ext := extensions.NewLastResortExtension()
-//
-//	if err := ext.Validate(); err != nil {
-//	    return err  // Nunca falla
-//	}
+// LastResortExtension is always valid (has no data).
 func (l *LastResortExtension) Validate() error {
-	// LastResortExtension siempre es válida
 	return nil
 }
 
-// Equal compara dos LastResortExtension para igualdad.
+// Equal compares two LastResortExtension instances.
 //
-// Todas las LastResortExtension son iguales (no tienen datos).
-//
-// # Ejemplo
-//
-// ext1 := extensions.NewLastResortExtension()
-// ext2 := extensions.NewLastResortExtension()
-//
-// ext1.Equal(ext2)  // true
-func (l *LastResortExtension) Equal(other *LastResortExtension) bool {
-	// Todas las LastResortExtension son iguales
+// All LastResortExtension instances are equal (no data).
+func (l *LastResortExtension) Equal(_ *LastResortExtension) bool {
 	return true
 }
 
-// ToExtension convierte a Extension genérica.
-//
-// Útil para agregar a una colección Extensions.
-//
-// # Ejemplo
-//
-// ext := extensions.NewLastResortExtension()
-// genericExt, err := ext.ToExtension()
-//
-//	if err != nil {
-//	    return err
-//	}
-//
-// exts := extensions.NewExtensions()
-// exts.Add(*genericExt)
+// ToExtension converts to a generic Extension.
 func (l *LastResortExtension) ToExtension() (*Extension, error) {
 	data := l.Marshal()
 	return &Extension{
@@ -180,18 +117,9 @@ func (l *LastResortExtension) ToExtension() (*Extension, error) {
 	}, nil
 }
 
-// FromLastResortExtension crea desde Extension genérica.
+// FromLastResortExtension creates a LastResortExtension from a generic Extension.
 //
-// Devuelve error si el Type no es ExtensionTypeLastResort.
-//
-// # Ejemplo
-//
-// genericExt := &Extension{Type: ExtensionTypeLastResort, Data: []byte{0x00}}
-// ext, err := FromLastResortExtension(genericExt)
-//
-//	if err != nil {
-//	    return err
-//	}
+// Returns error if Type is not ExtensionTypeLastResort.
 func FromLastResortExtension(ext *Extension) (*LastResortExtension, error) {
 	if ext.Type != ExtensionTypeLastResort {
 		return nil, fmt.Errorf("wrong extension type: %d", ext.Type)
@@ -199,25 +127,12 @@ func FromLastResortExtension(ext *Extension) (*LastResortExtension, error) {
 	return UnmarshalLastResortExtension(ext.Data)
 }
 
-// String devuelve una representación string de la extensión.
-//
-// # Ejemplo
-//
-// ext := extensions.NewLastResortExtension()
-// fmt.Println(ext.String())  // "LastResortExtension"
+// String returns a human-readable representation.
 func (l *LastResortExtension) String() string {
 	return "LastResortExtension"
 }
 
-// IsLastResort verifica si una extensión genérica es LastResort.
-//
-// # Ejemplo
-//
-// genericExt := &Extension{Type: ExtensionTypeLastResort, Data: []byte{0x00}}
-//
-//	if extensions.IsLastResort(genericExt) {
-//	    // Es una extensión last resort
-//	}
-func IsLastResort(ext *Extension) bool {
-	return ext.Type == ExtensionTypeLastResort
+// Len returns the length of the extension data (always 0).
+func (l *LastResortExtension) Len() int {
+	return 0
 }

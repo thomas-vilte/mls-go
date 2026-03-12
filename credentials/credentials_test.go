@@ -37,13 +37,13 @@ func generateTestCertificate(t *testing.T) ([]byte, *ecdsa.PrivateKey) {
 }
 
 // ============================================================================
-// BasicCredential
+// BasicCredential Tests
 // ============================================================================
 
 func TestBasicCredentialMarshalUnmarshal(t *testing.T) {
 	for _, identity := range [][]byte{
 		[]byte("Alice"),
-		[]byte{0x01, 0x02, 0x03},
+		{0x01, 0x02, 0x03},
 	} {
 		cred := credentials.NewBasicCredential(identity)
 		data := cred.Marshal()
@@ -101,7 +101,7 @@ func TestBasicCredentialValidate_Valid(t *testing.T) {
 }
 
 // ============================================================================
-// X509Credential
+// X509Credential Tests
 // ============================================================================
 
 func TestX509CredentialMarshalUnmarshal(t *testing.T) {
@@ -202,7 +202,7 @@ func TestGenerateX509CredentialWithKey(t *testing.T) {
 }
 
 // ============================================================================
-// GREASE
+// GREASE Tests
 // ============================================================================
 
 func TestGREASECredential(t *testing.T) {
@@ -219,7 +219,7 @@ func TestGREASECredential(t *testing.T) {
 }
 
 // ============================================================================
-// CredentialWithKey generation
+// CredentialWithKey Generation Tests
 // ============================================================================
 
 func TestGenerateCredentialWithKey(t *testing.T) {
@@ -251,7 +251,7 @@ func TestGenerateCredentialWithKey_IsRandom(t *testing.T) {
 }
 
 // ============================================================================
-// Sign / Verify (RFC 9420 §5.1.1 raw R||S encoding)
+// Sign / Verify Tests (RFC 9420 §5.1.1 raw R||S encoding)
 // ============================================================================
 
 func TestSignVerify_Valid(t *testing.T) {
@@ -291,7 +291,7 @@ func TestSignVerify_TamperedSignature(t *testing.T) {
 }
 
 // ============================================================================
-// Credential hash
+// Credential Hash Tests
 // ============================================================================
 
 func TestCredentialHash_DeterministicAndUnique(t *testing.T) {
@@ -310,7 +310,7 @@ func TestCredentialHash_DeterministicAndUnique(t *testing.T) {
 }
 
 // ============================================================================
-// CredentialType.String()
+// CredentialType.String() Tests
 // ============================================================================
 
 func TestCredentialTypeString(t *testing.T) {
@@ -334,24 +334,24 @@ func TestCredentialTypeString(t *testing.T) {
 // Error Paths — RFC 9420 §5.3
 // ============================================================================
 
-// TestUnmarshalCredential_UnknownType prueba tipo de credential desconocido
+// TestUnmarshalCredential_UnknownType tests unknown credential type.
 func TestUnmarshalCredential_UnknownType(t *testing.T) {
-	// Tipo desconocido no-GREASE (0x9999)
+	// Unknown non-GREASE type (0x9999)
 	w := tls.NewWriter()
-	w.WriteUint16(0x9999) // credential_type desconocido
+	w.WriteUint16(0x9999) // unknown credential_type
 	w.WriteVLBytes([]byte("unknown body"))
 	data := w.Bytes()
 
-	// Debería retornar error o credential con tipo desconocido
+	// Should return error or credential with unknown type
 	cred, err := credentials.UnmarshalCredential(data)
 	if err == nil && cred == nil {
 		t.Error("UnmarshalCredential should return error or non-nil credential")
 	}
 }
 
-// TestValidateX509Chain_Expired prueba certificado expirado
+// TestValidateX509Chain_Expired tests expired certificate.
 func TestValidateX509Chain_Expired(t *testing.T) {
-	// Crear certificado expirado
+	// Create expired certificate
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("ecdsa.GenerateKey: %v", err)
@@ -361,7 +361,7 @@ func TestValidateX509Chain_Expired(t *testing.T) {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "Expired"},
 		NotBefore:    time.Now().Add(-48 * time.Hour),
-		NotAfter:     time.Now().Add(-24 * time.Hour), // Expirado
+		NotAfter:     time.Now().Add(-24 * time.Hour), // Expired
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 
@@ -385,10 +385,10 @@ func TestValidateX509Chain_Expired(t *testing.T) {
 	}
 }
 
-// TestValidateX509Chain_NilCredential prueba validación con credential nil
+// TestValidateX509Chain_NilCredential tests validation with nil credential.
 func TestValidateX509Chain_NilCredential(t *testing.T) {
-	// Este test documenta que Validate con nil causa panic
-	// Es un comportamiento conocido que debería manejarse en producción
+	// This test documents that Validate with nil causes panic
+	// It's a known behavior that should be handled in production
 	t.Skip("Validate with nil credential panics - known issue")
 }
 
@@ -409,6 +409,8 @@ func BenchmarkSign(b *testing.B) {
 	data := []byte("benchmark data")
 	b.ResetTimer()
 	for range b.N {
-		credentials.Sign(privKey, data)
+		if _, err := credentials.Sign(privKey, data); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

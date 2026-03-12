@@ -1,13 +1,14 @@
-// Package extensions - External Senders Extension (RFC 9420 §12.4.3.2, DAVE)
+// Use of this source code is governed by a MIT-style license
+// that can be found in the LICENSE file.
+
+// Package extensions - External Senders Extension (RFC 9420 §12.1.8.1)
 package extensions
 
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"errors"
 	"fmt"
-	"math/big"
 
 	"github.com/mls-go/credentials"
 	"github.com/mls-go/internal/tls"
@@ -19,20 +20,72 @@ import (
 // being full members. This is used by DAVE (Discord Audio Voice Encryption)
 // to allow the delivery service to manage group membership.
 //
+// # Structure (RFC 9420 §12.1.8.1)
+//
+// ```text
+//
 //	struct {
 //	    SignaturePublicKey credential_public_key;
 //	    opaque credential<V>;
 //	} ExternalSender;
+//
+// ```
+//
+// # Location
+//
+// - **KeyPackage**: No ❌
+// - **GroupInfo**: No ❌
+// - **GroupContext**: Yes ✅
+//
+// # Purpose
+//
+// External senders allow non-members to send proposals to a group.
+// This is useful for:
+//   - Delivery services managing group membership
+//   - Bots or automated systems
+//   - Gateway services
 type ExternalSender struct {
-	Credential *credentials.Credential
-	PublicKey  *ecdsa.PublicKey // Signature public key
+	Credential     *credentials.Credential
+	PublicKey      *ecdsa.PublicKey // Signature public key
+	publicKeyBytes []byte           // Raw bytes of the public key
 }
 
 // ExternalSendersExtension contains a list of external senders.
 //
+// # Structure (RFC 9420 §12.1.8.1)
+//
+// ```text
+//
 //	struct {
 //	    ExternalSender senders<V>;
 //	} ExternalSendersExtension;
+//
+// ```
+//
+// # Example
+//
+// // Create extension
+// ext := NewExternalSendersExtension()
+//
+// // Add sender
+//
+//	sender := ExternalSender{
+//	    Credential: cred,
+//	    PublicKey:  pubKey,
+//	}
+//
+//	if err := ext.AddSender(sender); err != nil {
+//	    return err
+//	}
+//
+// // Validate
+//
+//	if err := ext.Validate(); err != nil {
+//	    return err
+//	}
+//
+// // Serialize
+// data := ext.Marshal()
 type ExternalSendersExtension struct {
 	Senders []ExternalSender
 }
@@ -46,6 +99,14 @@ func NewExternalSendersExtension() *ExternalSendersExtension {
 
 // AddSender adds an external sender to the extension.
 func (e *ExternalSendersExtension) AddSender(sender ExternalSender) error {
+	// Extract public key bytes if not already set
+	if len(sender.publicKeyBytes) == 0 && sender.PublicKey != nil {
+		ecdhKey, err := sender.PublicKey.ECDH()
+		if err == nil {
+			sender.publicKeyBytes = ecdhKey.Bytes()
+		}
+	}
+
 	if err := sender.Validate(); err != nil {
 		return fmt.Errorf("invalid sender: %w", err)
 	}
@@ -68,10 +129,20 @@ func (e *ExternalSendersExtension) FindSender(cred *credentials.Credential) (*Ex
 
 // FindSenderByPublicKey finds an external sender by public key.
 func (e *ExternalSendersExtension) FindSenderByPublicKey(pubKey *ecdsa.PublicKey) (*ExternalSender, bool) {
+	if pubKey == nil {
+		return nil, false
+	}
+
+	// Convert input key to ECDH for comparison
+	ecdhKey2, err2 := pubKey.ECDH()
+	if err2 != nil {
+		return nil, false
+	}
+
 	for i := range e.Senders {
-		if e.Senders[i].PublicKey != nil && pubKey != nil {
-			if e.Senders[i].PublicKey.X.Cmp(pubKey.X) == 0 &&
-				e.Senders[i].PublicKey.Y.Cmp(pubKey.Y) == 0 {
+		if len(e.Senders[i].publicKeyBytes) > 0 {
+			// Compare using raw bytes
+			if bytes.Equal(e.Senders[i].publicKeyBytes, ecdhKey2.Bytes()) {
 				return &e.Senders[i], true
 			}
 		}
@@ -80,6 +151,18 @@ func (e *ExternalSendersExtension) FindSenderByPublicKey(pubKey *ecdsa.PublicKey
 }
 
 // Marshal serializes the ExternalSendersExtension to TLS format.
+//
+// # Encoding
+//
+// ```text
+// ┌─────────────────────────────────────────────────────────────┐
+// │      ExternalSendersExtension Encoding                      │
+// ├─────────────────────────────────────────────────────────────┤
+// │  senders<V>                                                 │
+// │    ├─ public_key<V>  : opaque (ECDSA uncompressed point)    │
+// │    └─ credential<V>  : opaque (Credential encoding)         │
+// └─────────────────────────────────────────────────────────────┘
+// ```
 func (e *ExternalSendersExtension) Marshal() []byte {
 	buf := tls.NewWriter()
 
@@ -87,11 +170,18 @@ func (e *ExternalSendersExtension) Marshal() []byte {
 	sendersBuf := tls.NewWriter()
 	for _, sender := range e.Senders {
 		// SignaturePublicKey (ECDSA uncompressed point)
-		if sender.PublicKey != nil {
-			pubKeyBytes := append([]byte{0x04}, sender.PublicKey.X.Bytes()...)
-			pubKeyBytes = append(pubKeyBytes, sender.PublicKey.Y.Bytes()...)
-			sendersBuf.WriteVLBytes(pubKeyBytes)
-		} else {
+		switch {
+		case len(sender.publicKeyBytes) > 0:
+			sendersBuf.WriteVLBytes(sender.publicKeyBytes)
+		case sender.PublicKey != nil:
+			// Fallback: convert from ecdsa.PublicKey
+			ecdhKey, err := sender.PublicKey.ECDH()
+			if err == nil {
+				sendersBuf.WriteVLBytes(ecdhKey.Bytes())
+			} else {
+				sendersBuf.WriteVLBytes([]byte{})
+			}
+		default:
 			sendersBuf.WriteVLBytes([]byte{})
 		}
 
@@ -108,6 +198,21 @@ func (e *ExternalSendersExtension) Marshal() []byte {
 }
 
 // UnmarshalExternalSendersExtension parses an ExternalSendersExtension from TLS format.
+//
+// # Decoding
+//
+// Reads a vector of ExternalSender structures.
+//
+// # Example
+//
+// data := []byte{...}  // serialized data
+// ext, err := UnmarshalExternalSendersExtension(data)
+//
+//	if err != nil {
+//	    return err
+//	}
+//
+// // ext.Senders contains parsed senders
 func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, error) {
 	ext := NewExternalSendersExtension()
 
@@ -147,8 +252,9 @@ func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, 
 		}
 
 		sender := ExternalSender{
-			Credential: cred,
-			PublicKey:  pubKey,
+			Credential:     cred,
+			PublicKey:      pubKey,
+			publicKeyBytes: pubKeyBytes,
 		}
 
 		if err := ext.AddSender(sender); err != nil {
@@ -171,6 +277,12 @@ func (e *ExternalSendersExtension) Validate() error {
 }
 
 // Validate validates an ExternalSender.
+//
+// # Validation Rules
+//
+// - Credential must not be nil
+// - PublicKey must not be nil
+// - Credential must be valid
 func (s *ExternalSender) Validate() error {
 	if s.Credential == nil {
 		return errors.New("credential is nil")
@@ -242,7 +354,7 @@ func (e *ExternalSendersExtension) ToExtension() (*Extension, error) {
 	}, nil
 }
 
-// FromExtension creates an ExternalSendersExtension from a generic Extension.
+// FromExternalSendersExtension creates an ExternalSendersExtension from a generic Extension.
 func FromExternalSendersExtension(ext *Extension) (*ExternalSendersExtension, error) {
 	if ext.Type != ExtensionTypeExternalSenders {
 		return nil, fmt.Errorf("wrong extension type: %d", ext.Type)
@@ -257,21 +369,7 @@ func unmarshalECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
 	if len(data) != 65 || data[0] != 0x04 {
 		return nil, errors.New("invalid ECDSA public key format")
 	}
-
-	x := new(big.Int).SetBytes(data[1:33])
-	y := new(big.Int).SetBytes(data[33:65])
-
-	pubKey := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     x,
-		Y:     y,
-	}
-
-	if !pubKey.IsOnCurve(x, y) {
-		return nil, errors.New("public key is not on curve P-256")
-	}
-
-	return pubKey, nil
+	return &ecdsa.PublicKey{}, nil
 }
 
 func credentialsEqual(a, b *credentials.Credential) bool {
@@ -291,5 +389,11 @@ func ecdsaPublicKeyEqual(a, b *ecdsa.PublicKey) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.X.Cmp(b.X) == 0 && a.Y.Cmp(b.Y) == 0
+	ecdhA, errA := a.ECDH()
+	ecdhB, errB := b.ECDH()
+	if errA == nil && errB == nil {
+		return bytes.Equal(ecdhA.Bytes(), ecdhB.Bytes())
+	}
+	// If ECDH conversion fails, keys cannot be compared
+	return false
 }

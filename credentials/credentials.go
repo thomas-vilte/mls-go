@@ -1,40 +1,43 @@
-// Package credentials implementa los tipos de credenciales para MLS según RFC 9420 §5.3.
+// Copyright 2024 MLS-Go Authors. All rights reserved.
+// Use of this source code is governed by a MIT-style license
+// that can be found in the LICENSE file.
+
+// Package credentials implements MLS credential types per RFC 9420 §5.3.
 //
-// # ¿Qué es esto?
+// # Overview
 //
-// Acá tenés las credenciales que autentican a los miembros en un grupo MLS.
-// Cada KeyPackage y cada nodo hoja en el ratchet tree tiene una credencial
-// que dice "che, este soy yo, confíen en mí".
+// Credentials authenticate group members in MLS. Each KeyPackage and leaf node
+// in the ratchet tree has a credential that proves identity.
 //
-// # Tipos de Credenciales (RFC 9420 §5.3)
+// # Credential Types (RFC 9420 §5.3)
 //
-// Implementamos dos tipos:
-//   - BasicCredential (§11.2.1): La más simple, solo una identidad
-//   - X509Credential (§11.2.2): Cadena de certificados X.509 para PKI
+// Two types are implemented:
+//   - BasicCredential (§11.2.1): Simple identity (user ID, username, email)
+//   - X509Credential (§11.2.2): X.509 certificate chain for PKI authentication
 //
-// # ¿Cómo se usa?
+// # Usage
 //
-// Credential básica (para user IDs):
+// Basic credential (for user IDs):
 //
 //	cred := credentials.NewBasicCredentialFromUint64(userID)
 //	credWithKey, privKey, err := credentials.GenerateCredentialWithKey(identity)
 //
-// Credential X.509 (para autenticación con certificados):
+// X.509 credential (for PKI authentication):
 //
 //	certs := [][]byte{certDER1, certDER2}
 //	cred := credentials.NewX509Credential(certs)
 //	err := cred.ValidateX509()
 //
-// # Estructura de una Credential
+// # Credential Structure (RFC 9420 §5.3)
 //
-// ```
+// ```text
 // ┌────────────────────────────────────────────────────────────┐
 // │                    Credential (RFC 9420)                   │
 // ├────────────────────────────────────────────────────────────┤
 // │  credential_type: uint16                                   │
 // │    ├─ 0x0001: BasicCredential                              │
 // │    ├─ 0x0002: X509Credential                               │
-// │    └─ 0x0A0A: GREASE (para testing)                        │
+// │    └─ 0x0A0A: GREASE (extensibility testing)               │
 // │                                                            │
 // │  credential: select (credential_type)                      │
 // │    ├─ basic: opaque identity<V>                            │
@@ -42,9 +45,9 @@
 // └────────────────────────────────────────────────────────────┘
 // ```
 //
-// # Compliance con RFC
+// # RFC Compliance
 //
-//   - RFC 9420 §5.3: Tipos de Credenciales
+//   - RFC 9420 §5.3: Credential Types
 //   - RFC 9420 §11.2.1: BasicCredential
 //   - RFC 9420 §11.2.2: X509Credential
 //   - RFC 9420 §13.5: GREASE handling
@@ -67,7 +70,7 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// CredentialType representa el tipo de credencial según RFC 9420 §5.3.
+// CredentialType represents a credential type per RFC 9420 §5.3.
 //
 //	enum {
 //	    basic(1),
@@ -76,34 +79,36 @@ import (
 //	    (2^16-1)
 //	} CredentialType;
 //
-// Tipos que manejamos:
-//   - BasicCredential (0x0001): La más simple, solo una identidad
-//   - X509Credential (0x0002): Cadena de certificados X.509
-//   - GREASE (0x0A0A, 0x1A1A, etc.): Para testing de extensibilidad
+// Supported types:
+//   - BasicCredential (0x0001): Simple opaque identity
+//   - X509Credential (0x0002): X.509 certificate chain
+//   - GREASE (0x0A0A, 0x1A1A, etc.): Extensibility testing
 type CredentialType uint16
 
 const (
-	// BasicCredential es el tipo más simple (RFC 9420 §11.2.1).
-	// Contiene una identidad opaca como bytes.
-	// La podés usar para:
-	//   - User ID como uint64 big-endian (8 bytes)
-	//   - Username como string UTF-8
-	//   - Email como string UTF-8
+	// BasicCredential is the simplest credential type (RFC 9420 §11.2.1).
+	// Contains an opaque identity as bytes.
+	// Common formats:
+	//   - User ID as uint64 big-endian (8 bytes)
+	//   - Username as UTF-8 string
+	//   - Email as UTF-8 string
 	BasicCredential CredentialType = 0x0001
 
-	// X509Credential contiene una cadena de certificados X.509 (RFC 9420 §11.2.2).
-	// Se usa para autenticación PKI más robusta.
-	// El primer certificado es el end-entity, los demás son intermediarios.
+	// X509Credential contains an X.509 certificate chain (RFC 9420 §11.2.2).
+	// Used for PKI-based authentication.
+	// First certificate is end-entity, rest are intermediates.
 	X509Credential CredentialType = 0x0002
 
-	// GREASE_CREDENTIAL_TYPE es para testing de extensibilidad (RFC 9420 §13.5).
-	// Los valores GREASE (0x0A0A, 0x1A1A, etc.) aseguran que tu código
-	// maneje bien tipos desconocidos sin romperse.
-	GREASE_CREDENTIAL_TYPE CredentialType = 0x0A0A
+	// GREASE_CREDENTIAL is for extensibility testing (RFC 9420 §13.5).
+	// GREASE values (0x0A0A, 0x1A1A, etc.) ensure implementations
+	// handle unknown types gracefully without breaking.
+	//
+	//nolint:revive // GREASE naming follows RFC 9420 convention
+	GREASE_CREDENTIAL CredentialType = 0x0A0A
 )
 
-// String devuelve un nombre legible para el tipo de credencial.
-// Lo usamos para logging y debugging.
+// String returns a human-readable name for the credential type.
+// Used for logging and debugging.
 func (ct CredentialType) String() string {
 	switch ct {
 	case BasicCredential:
@@ -118,22 +123,22 @@ func (ct CredentialType) String() string {
 	}
 }
 
-// isGREASE devuelve true si es un tipo GREASE.
-// GREASE son valores como 0x0A0A, 0x1A1A, 0x2A2A, ..., 0xEAEA.
-// La gracia es que el byte alto y bajo tienen la misma forma: 0xA0, 0xA.
+// isGREASE returns true if this is a GREASE type.
+// GREASE values are: 0x0A0A, 0x1A1A, 0x2A2A, ..., 0xEAEA.
+// The pattern ensures high and low bytes have the same form: 0xA0, 0xA.
 func (ct CredentialType) isGREASE() bool {
 	// GREASE values: 0x0A0A, 0x1A1A, 0x2A2A, ..., 0xEAEA
 	return ct >= 0x0A0A && ct <= 0xEAEA && (uint16(ct)&0x0F0F) == 0x0A0A
 }
 
-// Credential representa una credencial MLS (RFC 9420 §5.3).
+// Credential represents an MLS credential per RFC 9420 §5.3.
 //
-// Las credenciales autentican miembros del grupo y contienen información de identidad.
-// Cada KeyPackage y nodo hoja tiene una Credential que dice "este soy yo".
+// Credentials authenticate group members and contain identity information.
+// Each KeyPackage and leaf node has a Credential that proves "this is me".
 //
-// # Estructura (TLS encoding)
+// # Structure (TLS encoding per RFC 9420 §5.3)
 //
-// ```
+// ```text
 //
 //	struct {
 //	    CredentialType credential_type;  // uint16
@@ -145,32 +150,32 @@ func (ct CredentialType) isGREASE() bool {
 //
 // ```
 //
-// # ¿Qué tipo elegir?
+// # Which type to choose?
 //
 // **BasicCredential:**
-//   - ✅ Simple, liviana
-//   - ✅ Perfecta para user IDs
-//   - ❌ Sin validación criptográfica
+//   - ✅ Simple, lightweight
+//   - ✅ Perfect for user IDs
+//   - ❌ No cryptographic validation
 //
 // **X509Credential:**
-//   - ✅ Validación PKI completa
-//   - ✅ Cadena de confianza
-//   - ❌ Más pesada, más compleja
+//   - ✅ Full PKI validation
+//   - ✅ Verifiable chain of trust
+//   - ❌ Heavier, more complex
 type Credential struct {
 	CredentialType CredentialType
-	Identity       []byte   // Para BasicCredential: identidad opaca
-	Certificates   [][]byte // Para X509Credential: certificados DER
+	Identity       []byte   // For BasicCredential: opaque identity
+	Certificates   [][]byte // For X509Credential: DER-encoded certificates
 }
 
-// NewBasicCredential crea una nueva BasicCredential.
+// NewBasicCredential creates a new BasicCredential.
 //
-// BasicCredential contiene una identidad opaca como bytes.
-// Los formatos más comunes son:
-//   - User ID como uint64 big-endian (8 bytes) - el más usado
-//   - Username como string UTF-8
-//   - Email como string UTF-8
+// BasicCredential contains an opaque identity as bytes.
+// Common formats:
+//   - User ID as uint64 big-endian (8 bytes) - most common
+//   - Username as UTF-8 string
+//   - Email as UTF-8 string
 //
-// # Ejemplo
+// # Example
 //
 //	// User ID
 //	cred := NewBasicCredentialFromUint64(12345678901234567890)
@@ -187,20 +192,20 @@ func NewBasicCredential(identity []byte) *Credential {
 	}
 }
 
-// NewBasicCredentialFromString crea una BasicCredential desde un string.
+// NewBasicCredentialFromString creates a BasicCredential from a string.
 //
-// Útil para usernames, emails, o cualquier identidad legible.
-// El string se guarda como UTF-8.
+// Useful for usernames, emails, or any human-readable identity.
+// The string is stored as UTF-8.
 func NewBasicCredentialFromString(identity string) *Credential {
 	return NewBasicCredential([]byte(identity))
 }
 
-// NewBasicCredentialFromUint64 crea una BasicCredential desde un uint64.
+// NewBasicCredentialFromUint64 creates a BasicCredential from a uint64.
 //
-// El ID se encodea como big-endian (network byte order).
-// Este es el formato que usan la mayoría de los protocolos para user IDs.
+// The ID is encoded as big-endian (network byte order).
+// This is the format most protocols use for user IDs.
 //
-// # Ejemplo
+// # Example
 //
 //	userID := uint64(12345678901234567890)
 //	cred := NewBasicCredentialFromUint64(userID)
@@ -211,25 +216,30 @@ func NewBasicCredentialFromUint64(id uint64) *Credential {
 	return NewBasicCredential(identity)
 }
 
-// NewX509Credential crea una nueva X509Credential desde certificados DER.
+// NewX509Credential creates a new X509Credential from DER-encoded certificates.
 //
-// La cadena de certificados va ordenada así:
-//   - certificates[0]: Certificado end-entity (el tuyo)
-//   - certificates[1..n]: Certificados CA intermedios
-//   - Root CA: Normalmente se omite (se asume que es trusted)
+// Certificate chain ordering:
+//   - certificates[0]: End-entity certificate (yours)
+//   - certificates[1..n]: Intermediate CA certificates
+//   - Root CA: Normally omitted (assumed trusted)
 //
-// # ¿Cuándo usar esto?
+// # When to use
 //
-// Usá X509Credential cuando necesites:
-//   - Validación PKI completa
-//   - Cadena de confianza verificable
-//   - Autenticación fuerte (ej: servidores, gateways)
+// Use X509Credential when you need:
+//   - Full PKI validation
+//   - Verifiable chain of trust
+//   - Strong authentication (e.g., servers, gateways)
 //
-// # Ejemplo
+// # Example
 //
-//	certDER, _ := os.ReadFile("server.crt")
+//	certDER, err := os.ReadFile("server.crt")
+//	if err != nil {
+//	    return err
+//	}
 //	cred := NewX509Credential([][]byte{certDER})
-//	err := cred.Validate()
+//	if err := cred.Validate(); err != nil {
+//	    return err
+//	}
 func NewX509Credential(certificates [][]byte) *Credential {
 	return &Credential{
 		CredentialType: X509Credential,
@@ -237,26 +247,24 @@ func NewX509Credential(certificates [][]byte) *Credential {
 	}
 }
 
-// Marshal serializa la Credential a formato TLS (RFC 9420 §5.3).
+// Marshal serializes the Credential to TLS format per RFC 9420 §5.3.
 //
 // # Encoding
 //
-// ```
+// ```text
 // ┌─────────────────────────────────────────┐
 // │  credential_type: uint16                │
-//
-//	├─────────────────────────────────────────┤
-//
+// ├─────────────────────────────────────────┤
 // │  credential: variable-length            │
 // │    ├─ Basic:  opaque identity<V>        │
 // │    └─ X509:   opaque cert_data<V>       │
 // └─────────────────────────────────────────┘
-// ```
+// ```text
 //
-// Para X509Credential, los certificados se concatenan con length prefix:
-// ```
+// For X509Credential, certificates are concatenated with length prefix:
+// ```text
 // cert_data = [len(cert1)][cert1][len(cert2)][cert2]...
-// ```
+// ```text.
 func (c *Credential) Marshal() []byte {
 	buf := tls.NewWriter()
 	buf.WriteUint16(uint16(c.CredentialType))
@@ -265,7 +273,7 @@ func (c *Credential) Marshal() []byte {
 	case BasicCredential:
 		buf.WriteVLBytes(c.Identity)
 	case X509Credential:
-		// X509Credential: concatenamos certs con length prefix
+		// X509Credential: concatenate certs with length prefix
 		var certData []byte
 		for _, cert := range c.Certificates {
 			certLen := make([]byte, 2)
@@ -275,25 +283,25 @@ func (c *Credential) Marshal() []byte {
 		}
 		buf.WriteVLBytes(certData)
 	default:
-		// GREASE o desconocido: escribimos datos vacíos
+		// GREASE or unknown: write empty data
 		buf.WriteVLBytes(nil)
 	}
 
 	return buf.Bytes()
 }
 
-// UnmarshalCredential parsea una Credential desde formato TLS.
+// UnmarshalCredential parses a Credential from TLS format per RFC 9420 §5.3.
 //
-// Devuelve la credential o un error si el encoding es inválido.
+// Returns the credential or an error if encoding is invalid.
 //
-// # Ejemplo
+// # Example
 //
 //	data := cred.Marshal()
 //	parsed, err := UnmarshalCredential(data)
 //	if err != nil {
 //	    return err
 //	}
-//	fmt.Printf("Tipo: %s\n", parsed.Type())
+//	fmt.Printf("Type: %s\n", parsed.Type())
 func UnmarshalCredential(data []byte) (*Credential, error) {
 	buf := tls.NewReader(data)
 
@@ -321,7 +329,7 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 			return nil, fmt.Errorf("reading cert_data: %w", err)
 		}
 
-		// Parsear cadena de certificados
+		// Parse certificate chain
 		var certificates [][]byte
 		for len(certData) > 0 {
 			if len(certData) < 2 {
@@ -345,7 +353,7 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 		}, nil
 
 	default:
-		// GREASE o desconocido: skippeamos los datos
+		// GREASE or unknown: skip data
 		_, err := buf.ReadVLBytes()
 		if err != nil {
 			return nil, fmt.Errorf("reading unknown credential data: %w", err)
@@ -356,7 +364,7 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 	}
 }
 
-// UnmarshalCredentialFromReader deserializes a Credential inline from a TLS reader (RFC 9420 §5.3).
+// UnmarshalCredentialFromReader deserializes a Credential inline from a TLS reader per RFC 9420 §5.3.
 // Used when Credential is embedded directly in a struct without an outer VL wrapper.
 func UnmarshalCredentialFromReader(r *tls.Reader) (*Credential, error) {
 	credType, err := r.ReadUint16()
@@ -418,12 +426,12 @@ func UnmarshalCredentialFromReader(r *tls.Reader) (*Credential, error) {
 	}
 }
 
-// IdentityString devuelve la identidad como string legible.
+// IdentityString returns the identity as a human-readable string.
 //
-// Para IDs numéricas (8 bytes), devuelve la representación decimal.
-// Para otros formatos, devuelve el string UTF-8.
+// For numeric IDs (8 bytes), returns decimal representation.
+// For other formats, returns UTF-8 string.
 //
-// # Ejemplo
+// # Example
 //
 //	cred := NewBasicCredentialFromUint64(42)
 //	fmt.Println(cred.IdentityString()) // "42"
@@ -435,7 +443,7 @@ func (c *Credential) IdentityString() string {
 		return ""
 	}
 
-	// Intentamos decodificar como uint64 si son 8 bytes
+	// Try to decode as uint64 if 8 bytes
 	if len(c.Identity) == 8 {
 		id := binary.BigEndian.Uint64(c.Identity)
 		return fmt.Sprintf("%d", id)
@@ -444,28 +452,27 @@ func (c *Credential) IdentityString() string {
 	return string(c.Identity)
 }
 
-// Validate valida la credential según las reglas de MLS (RFC 9420 §5.3).
+// Validate validates the credential per MLS rules (RFC 9420 §5.3).
 //
-// # Qué valida
+// # What is validated
 //
 // **BasicCredential:**
-//   - ✅ Identidad no vacía
-//   - ✅ Identidad <= 65535 bytes
+//   - ✅ Non-empty identity
+//   - ✅ Identity <= 65535 bytes
 //
 // **X509Credential:**
-//   - ✅ Al menos un certificado
-//   - ✅ Todos los certificados son DER válidos
-//   - ✅ Certificado end-entity no expirado
+//   - ✅ At least one certificate
+//   - ✅ All certificates are valid DER
+//   - ✅ End-entity certificate not expired
 //
 // **GREASE:**
-//   - ✅ Siempre válido (RFC 9420 §13.5)
+//   - ✅ Always valid (RFC 9420 §13.5)
 //
-// # Ejemplo
+// # Example
 //
 //	cred := NewBasicCredentialFromString("alice")
-//	err := cred.Validate()
-//	if err != nil {
-//	    return err // Credential inválida
+//	if err := cred.Validate(); err != nil {
+//	    return err // Invalid credential
 //	}
 func (c *Credential) Validate() error {
 	switch c.CredentialType {
@@ -475,18 +482,18 @@ func (c *Credential) Validate() error {
 		return c.validateX509()
 	default:
 		if c.CredentialType.isGREASE() {
-			// GREASE siempre es válido (RFC 9420 §13.5)
+			// GREASE is always valid (RFC 9420 §13.5)
 			return nil
 		}
 		return fmt.Errorf("unsupported credential type: 0x%04x", uint16(c.CredentialType))
 	}
 }
 
-// validateBasic valida una BasicCredential.
+// validateBasic validates a BasicCredential.
 //
 // Checks:
-//   - Identidad no vacía
-//   - Identidad no demasiado larga (max 65535 bytes)
+//   - Identity non-empty
+//   - Identity not too large (max 65535 bytes)
 func (c *Credential) validateBasic() error {
 	if len(c.Identity) == 0 {
 		return errors.New("BasicCredential: identity cannot be empty")
@@ -499,21 +506,21 @@ func (c *Credential) validateBasic() error {
 	return nil
 }
 
-// validateX509 valida una X509Credential.
+// validateX509 validates an X509Credential.
 //
 // Checks:
-//   - ✅ Al menos un certificado presente
-//   - ✅ Todos los certificados son DER válidos
-//   - ✅ Certificado end-entity no expirado
+//   - ✅ At least one certificate present
+//   - ✅ All certificates are valid DER
+//   - ✅ End-entity certificate not expired
 //
-// Nota: La validación completa de la cadena requiere trusted roots
-// y es específica de cada aplicación. Usá ValidateX509Chain para eso.
+// Note: Full chain validation requires trusted roots and is
+// application-specific. Use ValidateX509Chain for that.
 func (c *Credential) validateX509() error {
 	if len(c.Certificates) == 0 {
 		return errors.New("X509Credential: at least one certificate required")
 	}
 
-	// Validar certificado end-entity
+	// Validate end-entity certificate
 	endEntity, err := x509.ParseCertificate(c.Certificates[0])
 	if err != nil {
 		return fmt.Errorf("X509Credential: invalid end-entity certificate: %w", err)
@@ -528,7 +535,7 @@ func (c *Credential) validateX509() error {
 		return errors.New("X509Credential: certificate expired")
 	}
 
-	// Validar certificados intermedios (básico DER check)
+	// Validate intermediate certificates (basic DER check)
 	for i, certDER := range c.Certificates[1:] {
 		_, err := x509.ParseCertificate(certDER)
 		if err != nil {
@@ -539,35 +546,37 @@ func (c *Credential) validateX509() error {
 	return nil
 }
 
-// ValidateX509Chain hace validación completa de la cadena X.509.
+// ValidateX509Chain performs full X.509 chain validation.
 //
-// # Qué requiere
+// # Requirements
 //
 //   - Trusted root CA certificates (roots)
-//   - Opcional: Intermediate CA certificates
-//   - Opcional: DNS name o IP address a verificar
+//   - Optional: Intermediate CA certificates
+//   - Optional: DNS name or IP address to verify
 //
-// # Qué valida
+// # What is validated
 //
-//   - ✅ Cadena válida y completa
-//   - ✅ Todos los certificados no expirados
-//   - ✅ Firma criptográfica válida
+//   - ✅ Valid and complete chain
+//   - ✅ All certificates not expired
+//   - ✅ Valid cryptographic signatures
 //   - ✅ Trusted root
-//   - ✅ DNS name match (si se provee)
+//   - ✅ DNS name match (if provided)
 //
-// # Ejemplo
+// # Example
 //
-//	roots, _ := x509.SystemCertPool()
-//	err := cred.ValidateX509Chain(roots, "server.example.com")
+//	roots, err := x509.SystemCertPool()
 //	if err != nil {
-//	    return err // Cadena inválida o no trusted
+//	    return err
+//	}
+//	if err := cred.ValidateX509Chain(roots, "server.example.com"); err != nil {
+//	    return err // Invalid or untrusted chain
 //	}
 func (c *Credential) ValidateX509Chain(roots *x509.CertPool, dnsName string) error {
 	if err := c.validateX509(); err != nil {
 		return err
 	}
 
-	// Parsear certificados
+	// Parse certificates
 	certs := make([]*x509.Certificate, len(c.Certificates))
 	for i, certDER := range c.Certificates {
 		cert, err := x509.ParseCertificate(certDER)
@@ -577,13 +586,13 @@ func (c *Credential) ValidateX509Chain(roots *x509.CertPool, dnsName string) err
 		certs[i] = cert
 	}
 
-	// Armar cadena de certificados
+	// Build certificate chain
 	intermediates := x509.NewCertPool()
 	for _, cert := range certs[1:] {
 		intermediates.AddCert(cert)
 	}
 
-	// Verificar cadena
+	// Verify chain
 	opts := x509.VerifyOptions{
 		Roots:         roots,
 		Intermediates: intermediates,
@@ -598,62 +607,62 @@ func (c *Credential) ValidateX509Chain(roots *x509.CertPool, dnsName string) err
 	return err
 }
 
-// Hash computa el hash de una credential.
+// Hash computes the hash of a credential.
 //
-// Se usa para KeyPackage references y otros identificadores.
+// Used for KeyPackage references and other identifiers.
 // Hash(Credential) = SHA-256(MLSByte(credential_type) || credential_data)
 //
-// # Ejemplo
+// # Example
 //
 //	hash := cred.Hash()
-//	// hash: []byte de 32 bytes (SHA-256)
+//	// hash: []byte of 32 bytes (SHA-256)
 func (c *Credential) Hash() []byte {
 	data := c.Marshal()
 	hash := sha256.Sum256(data)
 	return hash[:]
 }
 
-// CredentialWithKey empareja una Credential con su key pair de firma.
+// CredentialWithKey pairs a Credential with its signature key pair.
 //
-// Esto se usa cuando generás KeyPackages y firmás mensajes MLS.
-// La Credential te identifica, las keys te permiten firmar.
+// Used when generating KeyPackages and signing MLS messages.
+// The Credential identifies you, the keys allow you to sign.
 //
-// # Estructura
+// # Structure
 //
-// ```
+// ```text
 // ┌─────────────────────────────────────────┐
 // │         CredentialWithKey               │
 // ├─────────────────────────────────────────┤
-// │  Credential:    tu identidad            │
+// │  Credential:    your identity           │
 // │  SignatureKey:  public key (P-256)      │
-// │  PrivateKey:    private key (secreto)   │
+// │  PrivateKey:    private key (secret)    │
 // └─────────────────────────────────────────┘
-// ```
+// ```text.
 type CredentialWithKey struct {
 	Credential        *Credential
 	SignatureKey      *ecdsa.PublicKey
-	PrivateKey        *ecdsa.PrivateKey  // Private key para firmar (¡mantenela secreta!) — nil for Ed25519
+	PrivateKey        *ecdsa.PrivateKey  // Private key for signing (keep secret!) — nil for Ed25519
 	Ed25519PrivateKey ed25519.PrivateKey // non-nil for CS1/CS3 (Ed25519 scheme)
 	SignatureKeyBytes []byte             // raw public key bytes (works for both ECDSA and Ed25519)
 }
 
-// GenerateCredentialWithKey genera una nueva credential con su key pair asociado.
+// GenerateCredentialWithKey generates a new credential with associated key pair.
 //
-// Devuelve la credential con keys, y la private key por separado para conveniencia.
-// La private key tenés que guardarla de forma segura y usarla solo para firmar.
+// Returns the credential with keys, and the private key separately for convenience.
+// Store the private key securely and use it only for signing.
 //
-// Usa la curva P-256 como requiere MLS (RFC 9420 §5.1).
+// Uses P-256 curve as required by MLS (RFC 9420 §5.1).
 //
-// # Ejemplo
+// # Example
 //
 //	credWithKey, privKey, err := GenerateCredentialWithKey([]byte("alice"))
 //	if err != nil {
 //	    return err
 //	}
-//	// Guardar privKey de forma segura
-//	// Usar credWithKey para crear KeyPackage
+//	// Store privKey securely
+//	// Use credWithKey to create KeyPackage
 func GenerateCredentialWithKey(identity []byte) (*CredentialWithKey, *ecdsa.PrivateKey, error) {
-	// Generar key pair P-256 (requerido para MLS)
+	// Generate P-256 key pair (required for MLS)
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating key pair: %w", err)
@@ -706,12 +715,12 @@ func GenerateCredentialWithKeyForCS(identity []byte, cs ciphersuite.CipherSuite)
 	}
 }
 
-// GenerateX509CredentialWithKey genera una X509Credential con su key pair.
+// GenerateX509CredentialWithKey generates an X509Credential with its key pair.
 //
-// Esto es útil para testing y para entidades que necesitan autenticación X.509
-// (ej: servidores, gateways).
+// Useful for testing and entities requiring X.509 authentication
+// (e.g., servers, gateways).
 //
-// Nota: Para producción, los certificados deberían ser emitidos por una CA trusted.
+// Note: For production, certificates should be issued by a trusted CA.
 func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*CredentialWithKey, error) {
 	cred := NewX509Credential([][]byte{certDER})
 
@@ -722,14 +731,14 @@ func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*
 	}, nil
 }
 
-// Sign firma datos con la private key de la credential.
+// Sign signs data with the credential's private key.
 //
-// El formato de firma es ECDSA-SHA256 como requiere MLS (RFC 9420 §5.1.2).
-// La firma se encodea como R || S raw (64 bytes para P-256).
+// Signature format is ECDSA-SHA256 as required by MLS (RFC 9420 §5.1.2).
+// Signature is encoded as R || S raw (64 bytes for P-256).
 //
-// # Encoding de la firma
+// # Signature Encoding
 //
-// ```
+// ```text
 // ┌─────────────────────────────────────────┐
 // │      Signature (64 bytes)               │
 // ├─────────────────────────────────────────┤
@@ -738,9 +747,9 @@ func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*
 // └─────────────────────────────────────────┘
 // ```
 //
-// Nota: Esto difiere de DER encoding. MLS usa raw encoding por eficiencia.
+// Note: This differs from DER encoding. MLS uses raw encoding for efficiency.
 //
-// # Ejemplo
+// # Example
 //
 //	signature, err := Sign(privKey, []byte("message"))
 //	if err != nil {
@@ -754,8 +763,8 @@ func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
 
-	// Encodear como R || S (64 bytes para P-256)
-	// FillBytes asegura que siempre sean 32 bytes c/u
+	// Encode as R || S (64 bytes for P-256)
+	// FillBytes ensures always 32 bytes each
 	signature := make([]byte, 64)
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
@@ -763,21 +772,21 @@ func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 	return signature, nil
 }
 
-// Verify verifica una firma usando la public key de la credential.
+// Verify verifies a signature using the credential's public key.
 //
-// Espera la firma en formato R || S (64 bytes para P-256).
-// Devuelve true si la firma es válida, false si no.
+// Expects signature in R || S format (64 bytes for P-256).
+// Returns true if signature is valid, false otherwise.
 //
-// # Ejemplo
+// # Example
 //
 //	valid := Verify(pubKey, data, signature)
 //	if !valid {
-//	    return errors.New("firma inválida")
+//	    return errors.New("invalid signature")
 //	}
 func Verify(pubKey *ecdsa.PublicKey, data, signature []byte) bool {
 	hash := sha256.Sum256(data)
 
-	// Decodificar firma (formato R || S, 64 bytes para P-256)
+	// Decode signature (R || S format, 64 bytes for P-256)
 	if len(signature) != 64 {
 		return false
 	}
@@ -788,20 +797,20 @@ func Verify(pubKey *ecdsa.PublicKey, data, signature []byte) bool {
 	return ecdsa.Verify(pubKey, hash[:], r, s)
 }
 
-// IsGREASE devuelve true si la credential es tipo GREASE.
+// IsGREASE returns true if the credential is GREASE type.
 //
 // GREASE (Generate Random Extensions And Sustain Extensibility)
-// se usa para asegurar que las implementaciones manejen bien tipos desconocidos.
-// Ver RFC 9420 §13.5.
+// ensures implementations handle unknown types gracefully.
+// See RFC 9420 §13.5.
 //
-// Los valores GREASE son: 0x0A0A, 0x1A1A, 0x2A2A, ..., 0xEAEA.
+// GREASE values are: 0x0A0A, 0x1A1A, 0x2A2A, ..., 0xEAEA.
 func (c *Credential) IsGREASE() bool {
 	return c.CredentialType.isGREASE()
 }
 
-// Type devuelve el tipo de credential.
+// Type returns the credential type.
 //
-// Útil para switch/case y logging.
+// Useful for switch/case and logging.
 func (c *Credential) Type() CredentialType {
 	return c.CredentialType
 }
