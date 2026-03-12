@@ -14,6 +14,8 @@
 #    runs-on: ubuntu-latest
 #    steps:
 #      - uses: actions/checkout@v4
+#        with:
+#          submodules: recursive
 #
 #      - uses: actions/setup-go@v5
 #        with:
@@ -71,7 +73,7 @@
 #  fuzz:
 #    name: Fuzz Tests
 #    runs-on: ubuntu-latest
-#    if: github.event_name == 'schedule'
+#    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 #    steps:
 #      - uses: actions/checkout@v4
 #
@@ -80,11 +82,34 @@
 #          go-version: '1.26'
 #          cache: true
 #
+#      - name: Fuzz ProcessReceivedCommit
+#        run: go test -fuzz=FuzzProcessReceivedCommit -fuzztime=30s ./group/
+#
+#      - name: Fuzz JoinFromWelcome
+#        run: go test -fuzz=FuzzJoinFromWelcome -fuzztime=30s ./group/
+#
+#      - name: Fuzz UnmarshalPrivateMessage
+#        run: go test -fuzz=FuzzUnmarshalPrivateMessage -fuzztime=30s ./framing/
+#
+#      - name: Fuzz UnmarshalPublicMessage
+#        run: go test -fuzz=FuzzUnmarshalPublicMessage -fuzztime=30s ./framing/
+#
+#      - name: Fuzz UnmarshalTreeFromExtension
+#        run: go test -fuzz=FuzzUnmarshalRatchetTree -fuzztime=30s ./treesync/
+#
 #      - name: Fuzz AEAD
-#        run: go test -fuzz=FuzzAEAD -fuzztime=60s ./ciphersuite/
+#        run: go test -fuzz=FuzzAEAD -fuzztime=30s ./ciphersuite/
 #
-#      - name: Fuzz HKDF
-#        run: go test -fuzz=FuzzHKDF -fuzztime=60s ./ciphersuite/
+#  bench:
+#    name: Performance Benchmarks
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
 #
-#      - name: Fuzz Secret
-#        run: go test -fuzz=FuzzSecret -fuzztime=60s ./ciphersuite/
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: '1.26'
+#          cache: true
+#
+#      - name: Run Benchmarks
+#        run: go test -bench=. -benchtime=5s ./group/ ./ciphersuite/
