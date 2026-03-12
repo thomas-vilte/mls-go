@@ -12,6 +12,7 @@ package group
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -94,7 +95,16 @@ type Group struct {
 	MyLeafEncryptionKey []byte
 }
 
-// NewGroup This is the entry point for creating a new group.
+// NewGroup creates a new MLS group with a single member (the creator).
+//
+// RFC 9420 §11.1
+// This is the primary entry point for a member starting a new group.
+// It initializes the group state, ratchet tree, and epoch secrets.
+//
+// Example:
+//
+//	kp, kpPriv, _ := keypackages.Generate(cred, cs)
+//	group, err := group.NewGroup(groupID, cs, kp, kpPriv)
 func NewGroup(
 	groupID *GroupID,
 	cipherSuite ciphersuite.CipherSuite,
@@ -189,9 +199,13 @@ func NewGroup(
 	return group, nil
 }
 
-// AddMember adds a new member to the group.
+// AddMember creates a proposal to add a new member to the group.
 //
-// This creates an Add proposal and stages it for commit.
+// RFC 9420 §12.1.1
+// The proposal is added to the group's pending proposal list and must be
+// committed (via Commit) to take effect.
+//
+// Returns the generated Proposal which can be sent to other members.
 func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state")
@@ -264,9 +278,11 @@ func (g *Group) UpdateMember(
 	return proposal, nil
 }
 
-// RemoveMember removes a member from the group.
+// RemoveMember creates a proposal to remove a member from the group.
 //
-// This creates a Remove proposal.
+// RFC 9420 §12.1.3
+// The proposal is added to the pending proposal list. The removed member
+// will not be able to read messages sent after this proposal is committed.
 func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state")
@@ -293,27 +309,42 @@ func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 
 // Commit applies all pending proposals and creates a new epoch.
 //
-// This is the main function to advance the group to a new epoch.
 // RFC 9420 §12.4
-// Commit applies all pending proposals and creates a new epoch, generating a PublicMessage.
-//
 // This is the main function to advance the group to a new epoch.
-// RFC 9420 §12.4
+// It generates a Commit message (as a PublicMessage by default) that should be
+// broadcast to the group. A Welcome message should also be generated for new members.
 func (g *Group) Commit(
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
-	psks []schedule.Psk,
+	externalPsks []schedule.Psk,
 ) (*StagedCommit, error) {
-	return g.CommitWithFormat(sigPrivKey, sigPubKey, psks, framing.WireFormatPublicMessage)
+	return g.CommitWithContext(context.Background(), sigPrivKey, sigPubKey, externalPsks, framing.WireFormatPublicMessage)
 }
 
-// CommitWithFormat creates a new epoch using the specified WireFormat for the commit signature.
+// CommitWithFormat creates a Commit using a specific wire format.
 func (g *Group) CommitWithFormat(
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
-	psks []schedule.Psk,
-	wireFormat framing.WireFormat,
+	externalPsks []schedule.Psk,
+	format framing.WireFormat,
 ) (*StagedCommit, error) {
+	return g.CommitWithContext(context.Background(), sigPrivKey, sigPubKey, externalPsks, format)
+}
+
+// CommitWithContext creates a Commit with support for context cancellation.
+func (g *Group) CommitWithContext(
+	ctx context.Context,
+	sigPrivKey *ciphersuite.SignaturePrivateKey,
+	sigPubKey *ciphersuite.SignaturePublicKey,
+	externalPsks []schedule.Psk,
+	format framing.WireFormat,
+) (*StagedCommit, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state: %w", ErrInvalidGroupState)
 	}
@@ -383,8 +414,9 @@ func (g *Group) CommitWithFormat(
 
 	groupContextBytes := g.GroupContext.Marshal()
 	ac := &framing.AuthenticatedContent{
-		WireFormat:   wireFormat,
+		WireFormat:   format,
 		Content:      content,
+		Auth:         framing.FramedContentAuthData{}, // Aún sin firma
 		GroupContext: groupContextBytes,
 	}
 
@@ -429,7 +461,7 @@ func (g *Group) CommitWithFormat(
 	if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
 		return nil, fmt.Errorf("new epoch joiner secret: %w", err)
 	}
-	if _, err = newKS.ComputePskSecret(psks); err != nil {
+	if _, err = newKS.ComputePskSecret(externalPsks); err != nil {
 		return nil, fmt.Errorf("new epoch psk secret: %w", err)
 	}
 	if _, err = newKS.ComputeEpochSecret(newGCBytes); err != nil {
@@ -996,29 +1028,36 @@ func (g *Group) decryptPathSecret(
 	return nil, fmt.Errorf("own leaf not found in any copath resolution")
 }
 
-// MergeCommit applies a commit and advances the protocol state
+// MergeCommit applies a received or locally-generated commit to the group state.
+//
 // RFC 9420 §12.4.2
+// This function verifies the commit, applies its proposals, updates the ratchet tree,
+// and derives the key schedule for the new epoch.
 func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit && g.state != StateOperational {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
 	}
 
-	// PHASE 1.2: Epoch validation (RFC 9420 §12.4.1)
-	// PHASE 1.3: GroupID validation (RFC 9420 §12.4.1)
+	// Epoch validation (RFC 9420 §12.4.1)
+	// GroupID validation (RFC 9420 §12.4.1)
 	if stagedCommit.AuthenticatedContent != nil {
-		// Validar GroupID
+		// Validate GroupID
 		if !bytes.Equal(stagedCommit.AuthenticatedContent.Content.GroupID, g.GroupContext.GroupID.AsSlice()) {
-			return fmt.Errorf("group_id mismatch: message has %x, group is %x",
-				stagedCommit.AuthenticatedContent.Content.GroupID, g.GroupContext.GroupID.AsSlice())
+			return &ErrGroupIDMismatch{
+				Got:  stagedCommit.AuthenticatedContent.Content.GroupID,
+				Want: g.GroupContext.GroupID.AsSlice(),
+			}
 		}
 
-		// Validar epoch
+		// Validate epoch
 		if stagedCommit.AuthenticatedContent.Content.Epoch != g.GroupContext.Epoch.AsUint64() {
-			return fmt.Errorf("epoch mismatch: commit has %d, group is at %d",
-				stagedCommit.AuthenticatedContent.Content.Epoch, g.GroupContext.Epoch.AsUint64())
+			return &ErrEpochMismatch{
+				Got:  stagedCommit.AuthenticatedContent.Content.Epoch,
+				Want: g.GroupContext.Epoch.AsUint64(),
+			}
 		}
 
-		// PHASE 1.1: Signature verification for member commits
+		// Signature verification for member commits
 		// (external commits are already verified when processing the UpdatePath)
 		senderType := stagedCommit.AuthenticatedContent.Content.Sender.Type
 		if senderType == framing.SenderTypeMember {
@@ -1027,10 +1066,12 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			if senderLeaf == nil || senderLeaf.LeafData == nil {
 				return fmt.Errorf("missing sender signature key for commit verification")
 			}
+
 			rawKey := senderLeaf.LeafData.SigKeyBytes()
 			if len(rawKey) == 0 {
 				return fmt.Errorf("missing sender signature key for commit verification")
 			}
+
 			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
 			ac := &framing.AuthenticatedContent{
 				WireFormat:   stagedCommit.AuthenticatedContent.WireFormat,
@@ -1039,7 +1080,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				GroupContext: g.GroupContext.Marshal(),
 			}
 			if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), stagedCommit.AuthenticatedContent.Auth.Signature); err != nil {
-				return fmt.Errorf("commit signature verification failed: %w", err)
+				return &ErrInvalidSignature{Context: "commit", Err: err}
 			}
 		}
 	}
@@ -2080,7 +2121,14 @@ func keyPackageLeafToTreeSync(leaf *keypackages.LeafNode) *treesync.LeafNodeData
 // Export derives an external key using MLS Exporter (RFC 9420 §8.5).
 // Useful for applications that need to derive session keys (e.g., DAVE media keys).
 // The label should be unique for the application. The context may be nil.
-func (g *Group) Export(label string, context []byte, length int) ([]byte, error) {
+//
+// Parameters:
+//   - label: Exporter label for domain separation
+//   - ctx: Context bytes for key derivation (may be nil)
+//   - length: Desired key length in bytes
+//
+// Returns the derived key bytes, or an error if exporter_secret is not available.
+func (g *Group) Export(label string, ctx []byte, length int) ([]byte, error) {
 	if g.EpochSecrets == nil || g.EpochSecrets.ExporterSecret == nil {
 		return nil, fmt.Errorf("exporter_secret not available")
 	}
@@ -2090,5 +2138,5 @@ func (g *Group) Export(label string, context []byte, length int) ([]byte, error)
 	}
 
 	// RFC 9420 §8.5 = HKDF-Expand-Label(exporter_secret, label, context, length)
-	return schedule.Exporter(g.EpochSecrets.ExporterSecret, g.CipherSuite, schedule.ExporterLabel(label), context, length)
+	return schedule.Exporter(g.EpochSecrets.ExporterSecret, g.CipherSuite, schedule.ExporterLabel(label), ctx, length)
 }

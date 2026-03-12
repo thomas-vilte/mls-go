@@ -2,6 +2,7 @@ package group
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -375,6 +376,11 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 
 // CreateWelcome generates a Welcome message for new members.
 // RFC 9420 §12.4.3.1
+// CreateWelcome creates a Welcome message for new members added in the commit.
+//
+// RFC 9420 §11.2.2
+// It encrypts the GroupInfo and GroupSecrets for each new member using their
+// KeyPackage's InitKey. The resulting Welcome message should be sent to the new members.
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
@@ -477,6 +483,23 @@ func JoinFromWelcome(
 	myPrivateKeys *keypackages.KeyPackagePrivateKeys,
 	externalPsks map[string][]byte,
 ) (*Group, error) {
+	return JoinFromWelcomeWithContext(context.Background(), welcome, myKeyPackage, myPrivateKeys, externalPsks)
+}
+
+// JoinFromWelcomeWithContext allows a new member to join using a Welcome, supporting context cancellation.
+func JoinFromWelcomeWithContext(
+	ctx context.Context,
+	welcome *Welcome,
+	myKeyPackage *keypackages.KeyPackage,
+	myPrivateKeys *keypackages.KeyPackagePrivateKeys,
+	externalPsks map[string][]byte,
+) (*Group, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	// 1. Compute my key_package_ref
 	myRef := keyPackageRef(myKeyPackage, welcome.CipherSuite)
 
@@ -503,7 +526,7 @@ func JoinFromWelcome(
 		welcome.CipherSuite,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting group secrets: %w", err)
+		return nil, &ErrDecryptionFailed{Reason: "group secrets", Err: err}
 	}
 
 	groupSecrets, err := UnmarshalGroupSecrets(secretsData)
@@ -567,7 +590,7 @@ func JoinFromWelcome(
 		welcome.CipherSuite,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting group info: %w", err)
+		return nil, &ErrDecryptionFailed{Reason: "group info", Err: err}
 	}
 
 	groupInfo, err := UnmarshalGroupInfo(groupInfoData)
