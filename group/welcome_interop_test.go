@@ -53,7 +53,7 @@ func TestWelcomeVectors(t *testing.T) {
 			initPrivBytes := mustDecodeHexBytes(t, v.InitPriv)
 			var initPrivKey *ecdh.PrivateKey
 			switch cs {
-			case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS256DHKEMX25519ChaCha20:
+			case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS128DHKEMX25519ChaCha20:
 				initPrivKey, err = ecdh.X25519().NewPrivateKey(initPrivBytes)
 			case ciphersuite.MLS128DHKEMP256:
 				initPrivKey, err = ecdh.P256().NewPrivateKey(initPrivBytes)

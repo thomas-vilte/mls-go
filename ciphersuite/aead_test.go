@@ -343,12 +343,12 @@ func TestEncryptWithCipherSuite_ChaCha20(t *testing.T) {
 		t.Fatalf("generating nonce: %v", err)
 	}
 
-	ciphertext, err := EncryptWithCipherSuite(key, nonce, plaintext, aad, MLS256DHKEMX25519ChaCha20)
+	ciphertext, err := EncryptWithCipherSuite(key, nonce, plaintext, aad, MLS128DHKEMX25519ChaCha20)
 	if err != nil {
 		t.Fatalf("EncryptWithCipherSuite(ChaCha20) error = %v", err)
 	}
 
-	decrypted, err := DecryptWithCipherSuite(key, nonce, ciphertext, aad, MLS256DHKEMX25519ChaCha20)
+	decrypted, err := DecryptWithCipherSuite(key, nonce, ciphertext, aad, MLS128DHKEMX25519ChaCha20)
 	if err != nil {
 		t.Fatalf("DecryptWithCipherSuite(ChaCha20) error = %v", err)
 	}

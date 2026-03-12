@@ -17,9 +17,9 @@ func TestCipherSuite_IsSupported(t *testing.T) {
 		t.Error("MLS128DHKEMP256 (cs=2) should be supported")
 	}
 
-	// MLS256DHKEMX25519ChaCha20 (cs=3) should be supported
-	if !MLS256DHKEMX25519ChaCha20.IsSupported() {
-		t.Error("MLS256DHKEMX25519ChaCha20 (cs=3) should be supported")
+	// MLS128DHKEMX25519ChaCha20 (cs=3) should be supported
+	if !MLS128DHKEMX25519ChaCha20.IsSupported() {
+		t.Error("MLS128DHKEMX25519ChaCha20 (cs=3) should be supported")
 	}
 
 	// Unsupported cipher suites (cs=4,5,6,7 are placeholders)

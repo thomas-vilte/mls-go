@@ -110,7 +110,7 @@ func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 // Per RFC 9420 §5.1.2:
 //   - CS1 (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519): Ed25519
 //   - CS2 (MLS_128_DHKEMP256_AES128GCM_SHA256_P256): ECDSA with P-256 and SHA-256 (mandatory)
-//   - CS3 (MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519): Ed25519
+//   - CS3 (MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519): Ed25519
 func GenerateSignaturePrivateKeyForCS(cs CipherSuite) (*SignaturePrivateKey, error) {
 	switch cs.SignatureScheme() {
 	case ED25519:
@@ -119,8 +119,10 @@ func GenerateSignaturePrivateKeyForCS(cs CipherSuite) (*SignaturePrivateKey, err
 			return nil, fmt.Errorf("generating Ed25519 key: %w", err)
 		}
 		return &SignaturePrivateKey{scheme: ED25519, ed25519Key: priv}, nil
-	default:
+	case ECDSA_SECP256R1_SHA256:
 		return GenerateSignaturePrivateKey()
+	default:
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
 }
 
@@ -276,137 +278,6 @@ func (sc *SignContent) Marshal() []byte {
 	w.WriteVLBytes(sc.Label)
 	w.WriteVLBytes(sc.Content)
 	return w.Bytes()
-}
-
-// ============================================================================
-// Signature Interfaces (based on other implementation pattern)
-// ============================================================================
-
-// SignedStruct represents a struct that contains a signature.
-// This is the type-safe pattern used in the other implementation implementation
-// for signature verification.
-//
-// Example usage:
-//
-//	type SignedKeyPackage struct {
-//	    KeyPackage
-//	    Signature
-//	}
-//
-//	func (s *SignedKeyPackage) FromPayload(payload, sig, serialized) interface{} {
-//	    return &SignedKeyPackage{KeyPackage: payload, Signature: sig}
-//	}
-type SignedStruct interface {
-	FromPayload(payload interface{}, signature *Signature, serializedPayload []byte) interface{}
-}
-
-// Signable represents a struct that can be signed.
-//
-// Types implementing this interface can be signed using the Sign() function.
-// The Label() method returns the RFC 9420 §5.1.2 label for domain separation.
-type Signable interface {
-	// UnsignedPayload returns the serialized payload that should be signed.
-	// This excludes the signature field itself.
-	UnsignedPayload() ([]byte, error)
-
-	// Label returns the string label used for labeled signing.
-	// Per RFC 9420 §5.1.2, labels prevent signature confusion attacks.
-	Label() string
-}
-
-// Sign signs a Signable object using the provided private key.
-//
-// Implements RFC 9420 §5.1.2 labeled signing:
-//  1. Serialize the unsigned payload
-//  2. Prepend "MLS 1.0 " + label
-//  3. Sign the result
-//
-// Returns:
-//   - signature: The digital signature
-//   - payload: The serialized payload (for convenience)
-//   - error: ErrSigningError if signing fails
-//
-// Example:
-//
-//	keyPackage := &KeyPackage{...}
-//	sig, payload, err := Sign(keyPackage, privKey)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func Sign(s Signable, signer *SignaturePrivateKey) (*Signature, []byte, error) {
-	payload, err := s.UnsignedPayload()
-	if err != nil {
-		return nil, nil, ErrSigningError
-	}
-
-	// Create SignContent with MLS prefix
-	signContent := NewSignContent(s.Label(), payload)
-	signContentBytes := signContent.Marshal()
-
-	// Sign
-	sig, err := signer.Sign(signContentBytes)
-	if err != nil {
-		return nil, nil, ErrSigningError
-	}
-
-	return sig, payload, nil
-}
-
-// Verifiable represents a struct that can be verified.
-//
-// Types implementing this interface can be verified using the Verify() function.
-type Verifiable interface {
-	// UnsignedPayload returns the serialized payload that should be verified.
-	UnsignedPayload() ([]byte, error)
-
-	// Signature returns the signature to be verified.
-	Signature() *Signature
-
-	// Label returns the string label used for labeled verification.
-	Label() string
-}
-
-// VerifiedStruct represents a verified struct (marker interface).
-//
-// This is a type-safe pattern: after verification, wrap the result in a
-// VerifiedStruct to indicate it has been validated. This prevents using
-// unverified data by mistake.
-type VerifiedStruct interface{}
-
-// Verify verifies a Verifiable object using the provided public key.
-//
-// Implements RFC 9420 §5.1.2 labeled verification:
-//  1. Serialize the unsigned payload
-//  2. Prepend "MLS 1.0 " + label
-//  3. Verify the signature
-//
-// Returns:
-//   - error: ErrVerificationError if verification fails
-//
-// Example:
-//
-//	signedKeyPackage := &SignedKeyPackage{...}
-//	err := Verify(signedKeyPackage, pubKey)
-//	if err != nil {
-//	    log.Fatal("invalid signature")
-//	}
-//	// Now safe to use signedKeyPackage
-func Verify(v Verifiable, pk *OpenMlsSignaturePublicKey) error {
-	payload, err := v.UnsignedPayload()
-	if err != nil {
-		return ErrVerificationError
-	}
-
-	// Create SignContent with MLS prefix
-	signContent := NewSignContent(v.Label(), payload)
-	signContentBytes := signContent.Marshal()
-
-	// Verify
-	if err := pk.Verify(signContentBytes, v.Signature()); err != nil {
-		return ErrVerificationError
-	}
-
-	return nil
 }
 
 // VerifyWithLabel verifies a signature with a specific label.
