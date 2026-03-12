@@ -7,7 +7,9 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// marshalAuthenticatedContentTBM serializa AuthenticatedContentTBM para membership_tag (RFC §6.2).
+// marshalAuthenticatedContentTBM serializes AuthenticatedContentTBM for membership_tag (RFC §6.2).
+//
+// Structure:
 //
 //	struct {
 //	    FramedContentTBS content_tbs;     // = MarshalTBS()
@@ -15,12 +17,12 @@ import (
 //	} AuthenticatedContentTBM;
 func marshalAuthenticatedContentTBM(ac *AuthenticatedContent) []byte {
 	w := tls.NewWriter()
-	w.WriteRaw(ac.MarshalTBS()) // RFC §6.2: TBM contiene FramedContentTBS, no solo wire_format+content
+	w.WriteRaw(ac.MarshalTBS()) // RFC §6.2: TBM contains FramedContentTBS, not just wire_format+content
 	w.WriteRaw(ac.Auth.Marshal(ac.Content.ContentType()))
 	return w.Bytes()
 }
 
-// MarshalSender serializa un Sender según RFC §6.
+// MarshalSender serializes a Sender according to RFC §6.
 func MarshalSender(s *Sender, w *tls.Writer) {
 	w.WriteUint8(uint8(s.Type))
 	switch s.Type {
@@ -31,7 +33,7 @@ func MarshalSender(s *Sender, w *tls.Writer) {
 	}
 }
 
-// UnmarshalSender parsea un Sender desde un TLS reader.
+// UnmarshalSender parses a Sender from a TLS reader.
 func UnmarshalSender(r *tls.Reader) (*Sender, error) {
 	st, err := r.ReadUint8()
 	if err != nil {
@@ -52,14 +54,14 @@ func UnmarshalSender(r *tls.Reader) (*Sender, error) {
 		}
 		s.SenderIndex = idx
 	case SenderTypeNewMemberProposal, SenderTypeNewMemberCommit:
-		// no additional fields
+		// No additional fields
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrInvalidSenderType, st)
 	}
 	return s, nil
 }
 
-// UnmarshalSenderData parsea bytes en un MLSSenderData.
+// UnmarshalSenderData parses bytes into an MLSSenderData.
 func UnmarshalSenderData(data []byte) (*MLSSenderData, error) {
 	r := tls.NewReader(data)
 	leafIndex, err := r.ReadUint32()

@@ -5,21 +5,32 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/internal/tls"
-	secret_tree "github.com/mls-go/secrettree"
+	"github.com/mls-go/secrettree"
 )
 
-// PrivateMessage implementa RFC 9420 §6.3.
-// Los primeros cuatro campos se transmiten en claro; únicamente los últimos dos están cifrados.
+// PrivateMessage implements RFC 9420 §6.3.
+// The first four fields are transmitted in cleartext; only the last two are encrypted.
+//
+// Structure:
+//
+//	struct {
+//	    opaque group_id<V>;
+//	    uint64 epoch;
+//	    ContentType content_type;
+//	    opaque authenticated_data<V>;
+//	    opaque encrypted_sender_data<V>;
+//	    opaque ciphertext<V>;
+//	} PrivateMessage;
 type PrivateMessage struct {
-	GroupID             []byte      // in clear
-	Epoch               uint64      // in clear
-	ContentType         ContentType // in clear
-	AuthenticatedData   []byte      // in clear
-	EncryptedSenderData []byte      // encrypted MLSSenderData
-	Ciphertext          []byte      // encrypted PrivateMessageContent
+	GroupID             []byte      // In cleartext
+	Epoch               uint64      // In cleartext
+	ContentType         ContentType // In cleartext
+	AuthenticatedData   []byte      // In cleartext
+	EncryptedSenderData []byte      // Encrypted MLSSenderData
+	Ciphertext          []byte      // Encrypted PrivateMessageContent
 }
 
-// Marshal serializa el PrivateMessage para transmisión.
+// Marshal serializes the PrivateMessage for transmission.
 func (pm *PrivateMessage) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(WireFormatPrivateMessage))
@@ -32,8 +43,8 @@ func (pm *PrivateMessage) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalPrivateMessage parsea un PrivateMessage desde su representación wire.
-// El wire_format uint16 inicial debe estar incluido en los datos.
+// UnmarshalPrivateMessage parses a PrivateMessage from its wire representation.
+// The initial wire_format uint16 must be included in the data.
 func UnmarshalPrivateMessage(data []byte) (*PrivateMessage, error) {
 	r := tls.NewReader(data)
 
@@ -80,15 +91,23 @@ func UnmarshalPrivateMessage(data []byte) (*PrivateMessage, error) {
 	}, nil
 }
 
-// MLSSenderData implementa RFC 9420 §6.3.2.
-// Se cifra para formar EncryptedSenderData.
+// MLSSenderData implements RFC 9420 §6.3.2.
+// Encrypted to form EncryptedSenderData.
+//
+// Structure:
+//
+//	struct {
+//	    uint32 leaf_index;
+//	    uint32 generation;
+//	    opaque reuse_guard[4];
+//	} MLSSenderData;
 type MLSSenderData struct {
 	LeafIndex  uint32
 	Generation uint32
 	ReuseGuard [ciphersuite.ReuseGuardBytes]byte
 }
 
-// Marshal serializa MLSSenderData.
+// Marshal serializes MLSSenderData.
 func (sd *MLSSenderData) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint32(sd.LeafIndex)
@@ -97,34 +116,34 @@ func (sd *MLSSenderData) Marshal() []byte {
 	return w.Bytes()
 }
 
-// EncryptParams contiene los parámetros requeridos para cifrar un PrivateMessage.
+// EncryptParams contains the parameters required to encrypt a PrivateMessage.
 type EncryptParams struct {
-	AuthContent      *AuthenticatedContent // Si se provee, ignora Content, SigKey, GroupContext y ConfirmationTag
+	AuthContent      *AuthenticatedContent // If provided, ignores Content, SigKey, GroupContext, and ConfirmationTag
 	Content          FramedContent
 	SenderLeafIndex  uint32
-	CipherSuite      ciphersuite.CipherSuite // para derivar ciphertext_sample y tamaños
-	PaddingSize      int                     // tamaño de bloque para padding (0 = sin padding)
-	SenderDataSecret *ciphersuite.Secret     // encripta MLSSenderData
-	SecretTree       *secret_tree.Tree       // deriva content key/nonce
+	CipherSuite      ciphersuite.CipherSuite // For deriving ciphertext_sample and sizes
+	PaddingSize      int                     // Block size for padding (0 = no padding)
+	SenderDataSecret *ciphersuite.Secret     // Encrypts MLSSenderData
+	SecretTree       *secrettree.Tree        // Derives content key/nonce
 	SigKey           *ciphersuite.SignaturePrivateKey
-	GroupContext     []byte // serialized GroupContext; incluido en FramedContentTBS
-	// ConfirmationTag es obligatorio para commits (ContentTypeCommit).
-	// RFC §6.1: el tag se incluye en PrivateMessageContent cifrado.
+	GroupContext     []byte // Serialized GroupContext; included in FramedContentTBS
+	// ConfirmationTag is required for commits (ContentTypeCommit).
+	// RFC §6.1: The tag is included in encrypted PrivateMessageContent.
 	ConfirmationTag []byte
 }
 
-// Encrypt implementa RFC 9420 §6.3.1.
+// Encrypt implements RFC 9420 §6.3.1.
 //
-// Flujo (RFC §6.3.2 requiere encriptar contenido PRIMERO para obtener ciphertext_sample):
-//  1. Validar que sender es member (RFC §6.3)
-//  2. Firmar FramedContent → FramedContentAuthData
-//  3. Generar ReuseGuard aleatorio
-//  4. Derivar content key/nonce del SecretTree
-//  5. XOR nonce[:4] con ReuseGuard (§6.3.1)
-//  6. Encriptar PrivateMessageContent → ciphertext
-//  7. Extraer ciphertext_sample = ciphertext[0..Nh-1]
-//  8. Derivar sender_data key/nonce con KdfExpandLabel(sender_data_secret, "key"/"nonce", ciphertext_sample)
-//  9. Encriptar MLSSenderData con SenderDataAAD
+// Flow (RFC §6.3.2 requires encrypting content FIRST to obtain ciphertext_sample):
+// Validate that sender is member (RFC §6.3)
+// Sign FramedContent → FramedContentAuthData
+// Generate random ReuseGuard
+// Derive content key/nonce from SecretTree
+// XOR nonce[:4] with ReuseGuard (§6.3.1)
+// Encrypt PrivateMessageContent → ciphertext
+// Extract ciphertext_sample = ciphertext[0..Nh-1]
+// Derive sender_data key/nonce with KdfExpandLabel(sender_data_secret, "key"/"nonce", ciphertext_sample)
+// Encrypt MLSSenderData with SenderDataAAD
 func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	var ac *AuthenticatedContent
 	if p.AuthContent != nil {
@@ -149,13 +168,13 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 		ac.Auth = FramedContentAuthData{Signature: sig, ConfirmationTag: p.ConfirmationTag}
 	}
 
-	// 3. Generar ReuseGuard aleatorio
+	// Generate random ReuseGuard
 	rg, err := ciphersuite.NewReuseGuardRandom()
 	if err != nil {
 		return nil, fmt.Errorf("framing: generating reuse_guard: %w", err)
 	}
 
-	// 4. Derivar content key/nonce del SecretTree
+	// Derive content key/nonce from SecretTree
 	leaf, err := p.SecretTree.LeafForIndex(p.SenderLeafIndex)
 	if err != nil {
 		return nil, fmt.Errorf("framing: getting leaf secret: %w", err)
@@ -184,13 +203,13 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 		}
 	}
 
-	// 5. XOR nonce[:4] con ReuseGuard (RFC §6.3.1)
+	// XOR nonce[:4] with ReuseGuard (RFC §6.3.1)
 	guard := rg.AsSlice()
 	for i := 0; i < ciphersuite.ReuseGuardBytes; i++ {
 		contentNonce[i] ^= guard[i]
 	}
 
-	// 6. Encriptar PrivateMessageContent PRIMERO (necesitamos el ciphertext para step 7)
+	// Encrypt PrivateMessageContent FIRST (we need ciphertext for step 7)
 	aad := buildPrivateContentAAD(
 		ac.Content.GroupID,
 		ac.Content.Epoch,
@@ -203,14 +222,14 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 		return nil, fmt.Errorf("framing: encrypting content: %w", err)
 	}
 
-	// 7. Extraer ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
+	// Extract ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
 	nh := p.CipherSuite.HashLength()
 	sample := ciphertext
 	if len(sample) > nh {
 		sample = sample[:nh]
 	}
 
-	// 8. Derivar sender_data key/nonce usando KdfExpandLabel con ciphertext_sample (RFC §6.3.2)
+	// Derive sender_data key/nonce using KdfExpandLabel with ciphertext_sample (RFC §6.3.2)
 	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AeadKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_key: %w", err)
@@ -223,7 +242,7 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	}
 	defer sdNonce.SecureZero()
 
-	// 9. Encriptar MLSSenderData con SenderDataAAD (RFC §6.3.2)
+	// Encrypt MLSSenderData with SenderDataAAD (RFC §6.3.2)
 	senderData := &MLSSenderData{
 		LeafIndex:  p.SenderLeafIndex,
 		Generation: uint32(seqNum),
@@ -253,25 +272,25 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 type DecryptParams struct {
 	CipherSuite      ciphersuite.CipherSuite
 	SenderDataSecret *ciphersuite.Secret
-	SecretTree       *secret_tree.Tree
-	// SigPubKey se utiliza para verificar la firma del remitente luego de descifrar.
-	// Si es nil, se omite la verificación (no recomendado en producción).
+	SecretTree       *secrettree.Tree
+	// SigPubKey is used to verify the sender's signature after decryption.
+	// If nil, verification is skipped (not recommended in production).
 	SigPubKey    *ciphersuite.OpenMlsSignaturePublicKey
-	GroupContext []byte // serialized GroupContext; requerido para verificación TBS
+	GroupContext []byte // Serialized GroupContext; required for TBS verification
 }
 
-// Decrypt descifra un PrivateMessage y retorna el AuthenticatedContent.
-// Verifica la firma del remitente si SigPubKey está presente.
+// Decrypt decrypts a PrivateMessage and returns the AuthenticatedContent.
+// Verifies the sender's signature if SigPubKey is present.
 func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error) {
-	// 1. Extraer ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
-	// Necesario para derivar sender_data key/nonce ANTES de descifrar sender_data
+	// Extract ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
+	// Needed to derive sender_data key/nonce BEFORE decrypting sender_data
 	nh := p.CipherSuite.HashLength()
 	sample := pm.Ciphertext
 	if len(sample) > nh {
 		sample = sample[:nh]
 	}
 
-	// 2. Derivar sender_data key/nonce con KdfExpandLabel (RFC §6.3.2)
+	// Derive sender_data key/nonce with KdfExpandLabel (RFC §6.3.2)
 	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AeadKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_key: %w", err)
@@ -284,7 +303,7 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	}
 	defer sdNonce.SecureZero()
 
-	// 3. Descifrar MLSSenderData
+	// Decrypt MLSSenderData
 	sdAAD := buildSenderDataAAD(pm.GroupID, pm.Epoch, pm.ContentType)
 	sdPlain, err := ciphersuite.AESDecrypt(
 		sdKey.AsSlice(), sdNonce.AsSlice(),
@@ -299,19 +318,20 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 		return nil, fmt.Errorf("framing: parsing sender_data: %w", err)
 	}
 
-	// 4. Derivar content key/nonce del SecretTree
+	// Derive content key/nonce from SecretTree
 	leaf, err := p.SecretTree.LeafForIndex(senderData.LeafIndex)
 	if err != nil {
 		return nil, fmt.Errorf("framing: getting leaf secret: %w", err)
 	}
 	leaf.SetSequenceNumber(uint64(senderData.Generation))
 
-	// 5. Reconstruir PrivateContentAAD y descifrar contenido
+	// Build PrivateContentAAD and decrypt content
 	aad := buildPrivateContentAAD(pm.GroupID, pm.Epoch, pm.ContentType, pm.AuthenticatedData)
 
 	decryptWithRatchet := func(handshake bool) ([]byte, error) {
 		var key []byte
 		var nonce []byte
+		var err error
 		if handshake {
 			key, err = leaf.HandshakeKey(senderData.Generation)
 			if err != nil {
@@ -339,33 +359,35 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 		return ciphersuite.AESDecrypt(key, nonce, pm.Ciphertext, aad)
 	}
 
-	plaintext, err := func() ([]byte, error) {
-		if pm.ContentType == ContentTypeApplication {
-			return decryptWithRatchet(false)
-		}
-
+	var plaintext []byte
+	if pm.ContentType == ContentTypeApplication {
+		plaintext, err = decryptWithRatchet(false)
+	} else {
+		var pt []byte
 		pt, hsErr := decryptWithRatchet(true)
 		if hsErr == nil {
-			return pt, nil
+			plaintext = pt
+		} else {
+			pt, appErr := decryptWithRatchet(false)
+			if appErr == nil {
+				plaintext = pt
+			} else {
+				err = hsErr
+			}
 		}
-		pt, appErr := decryptWithRatchet(false)
-		if appErr == nil {
-			return pt, nil
-		}
-		return nil, hsErr
-	}()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: content: %v", ErrDecryptionFailed, err)
 	}
 
-	// 7. Parsear body + auth del PrivateMessageContent
+	// Parse body + auth from PrivateMessageContent
 	pmc, err := unmarshalPrivateMessageContent(plaintext, pm.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("framing: parsing message content: %w", err)
 	}
 
-	// 8. Reconstruir FramedContent completo desde campos en claro + body descifrado.
-	// Sender siempre es Member en PrivateMessage (RFC §6.3).
+	// Rebuild complete FramedContent from cleartext fields + decrypted body.
+	// Sender is always Member in PrivateMessage (RFC §6.3).
 	content := FramedContent{
 		GroupID:           pm.GroupID,
 		Epoch:             pm.Epoch,
@@ -381,7 +403,7 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 		GroupContext: p.GroupContext,
 	}
 
-	// 9. Verificar firma si se provee clave pública
+	// Verify signature if public key is provided
 	if p.SigPubKey != nil {
 		tbs := ac.MarshalTBS()
 		if err := ciphersuite.VerifyWithLabel(p.SigPubKey, "FramedContentTBS", tbs, pmc.Auth.Signature); err != nil {
@@ -392,7 +414,9 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	return ac, nil
 }
 
-// buildPrivateContentAAD construye el AAD para el AEAD de PrivateMessageContent (RFC §6.3.1).
+// buildPrivateContentAAD builds the AAD for PrivateMessageContent AEAD (RFC §6.3.1).
+//
+// Structure:
 //
 //	struct {
 //	    opaque group_id<V>;
@@ -409,7 +433,9 @@ func buildPrivateContentAAD(groupID []byte, epoch uint64, ct ContentType, authDa
 	return w.Bytes()
 }
 
-// buildSenderDataAAD construye el AAD para el AEAD de MLSSenderData (RFC §6.3.2).
+// buildSenderDataAAD builds the AAD for MLSSenderData AEAD (RFC §6.3.2).
+//
+// Structure:
 //
 //	struct {
 //	    opaque group_id<V>;

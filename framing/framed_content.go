@@ -6,40 +6,60 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// FramedContentBody es la interface que representa el select(content_type) del RFC §6.1
-// Solo uno de los tres tipos concretos puede estar presente
+// FramedContentBody represents the select(content_type) body of FramedContent (RFC §6.1).
+// Only one of the three concrete types can be present at a time.
 type FramedContentBody interface {
 	ContentType() ContentType
 	marshal(w *tls.Writer)
 }
 
-// ApplicationData es el body para mensajes de aplicación
+// ApplicationData represents the body for application messages.
 type ApplicationData struct{ Data []byte }
 
-// ProposalBody es el body para propuestas (serializado)
+// ProposalBody represents the body for proposals (serialized).
 type ProposalBody struct{ Data []byte }
 
-// CommitBody es el body para commits (serializado)
+// CommitBody represents the body for commits (serialized).
 type CommitBody struct{ Data []byte }
 
+// ContentType returns ContentTypeApplication for ApplicationData.
 func (a ApplicationData) ContentType() ContentType { return ContentTypeApplication }
-func (p ProposalBody) ContentType() ContentType    { return ContentTypeProposal }
-func (c CommitBody) ContentType() ContentType      { return ContentTypeCommit }
-func (a ApplicationData) marshal(w *tls.Writer)    { w.WriteVLBytes(a.Data) }
-func (p ProposalBody) marshal(w *tls.Writer)       { w.WriteRaw(p.Data) }
-func (c CommitBody) marshal(w *tls.Writer)         { w.WriteRaw(c.Data) }
 
-// FramedContent implementa RFC 9420 §6.1 completo
-// Es el núcleo de todo mensaje MLS
+// ContentType returns ContentTypeProposal for ProposalBody.
+func (p ProposalBody) ContentType() ContentType { return ContentTypeProposal }
+
+// ContentType returns ContentTypeCommit for CommitBody.
+func (c CommitBody) ContentType() ContentType { return ContentTypeCommit }
+
+func (a ApplicationData) marshal(w *tls.Writer) { w.WriteVLBytes(a.Data) }
+func (p ProposalBody) marshal(w *tls.Writer)    { w.WriteRaw(p.Data) }
+func (c CommitBody) marshal(w *tls.Writer)      { w.WriteRaw(c.Data) }
+
+// FramedContent implements the core framed content structure (RFC 9420 §6.1).
+//
+// Structure:
+//
+//	struct {
+//	    opaque group_id<V>;
+//	    uint64 epoch;
+//	    Sender sender;
+//	    opaque authenticated_data<V>;
+//	    ContentType content_type;
+//	    select (FramedContent.content_type) {
+//	        case application:  opaque application_data<V>;
+//	        case proposal:     Proposal proposal;
+//	        case commit:       Commit commit;
+//	    };
+//	} FramedContent;
 type FramedContent struct {
-	GroupID           []byte            // ID del grupo, variable length
-	Epoch             uint64            // Época actual del grupo
-	Sender            Sender            // Quién manda el mensaje
-	AuthenticatedData []byte            // Datos autenticados adicionales
-	Body              FramedContentBody // El contenido posta (app/proposal/commit)
+	GroupID           []byte            // Group identifier, variable length
+	Epoch             uint64            // Current epoch of the group
+	Sender            Sender            // Message sender
+	AuthenticatedData []byte            // Additional authenticated data
+	Body              FramedContentBody // The actual content (app/proposal/commit)
 }
 
-// ContentType devuelve el tipo de contenido del body
+// ContentType returns the content type of the body.
 func (fc *FramedContent) ContentType() ContentType {
 	return fc.Body.ContentType()
 }
@@ -53,7 +73,7 @@ func (fc *FramedContent) ApplicationData() ([]byte, bool) {
 	return app.Data, true
 }
 
-// Marshal serializa FramedContent según TLS encoding del RFC
+// Marshal serializes FramedContent according to TLS encoding in the RFC.
 func (fc *FramedContent) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteVLBytes(fc.GroupID)
@@ -65,19 +85,19 @@ func (fc *FramedContent) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalFramedContent parsea bytes en un FramedContent.
+// UnmarshalFramedContent parses bytes into a FramedContent.
 func UnmarshalFramedContent(data []byte) (*FramedContent, error) {
 	r := tls.NewReader(data)
 	return unmarshalFramedContentFromReader(r)
 }
 
-// unmarshalFramedContentFromReader parsea un FramedContent desde un reader existente.
-// Utilizado internamente al parsear formatos wire compuestos (PublicMessage).
+// unmarshalFramedContentFromReader parses a FramedContent from an existing reader.
+// Used internally when parsing composite wire formats (PublicMessage).
 func unmarshalFramedContentFromReader(r *tls.Reader) (*FramedContent, error) {
 	return unmarshalFramedContentFromReaderWithMode(r, false, false)
 }
 
-func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth bool, withMembershipTag bool) (*FramedContent, error) {
+func unmarshalFramedContentFromReaderWithMode(r *tls.Reader, expectsTrailingAuth, withMembershipTag bool) (*FramedContent, error) {
 	groupID, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading group_id: %w", err)

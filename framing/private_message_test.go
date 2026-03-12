@@ -95,7 +95,7 @@ func TestMLSSenderData_MarshalUnmarshal(t *testing.T) {
 }
 
 // ============================================================================
-// Encrypt — error paths
+// Encrypt Error Paths
 // ============================================================================
 
 func TestEncrypt_NonMemberSender(t *testing.T) {
@@ -116,7 +116,7 @@ func TestEncrypt_NonMemberSender(t *testing.T) {
 }
 
 // ============================================================================
-// Encrypt / Decrypt — RFC 9420 §6.3 roundtrip
+// Encrypt / Decrypt RFC 9420 §6.3 Roundtrip
 // ============================================================================
 
 // makeEncDecTrees builds two secret trees from the same root bytes.
@@ -135,15 +135,12 @@ func makeEncDecTrees(t *testing.T, cs ciphersuite.CipherSuite, leafCount uint32)
 	return encTree, decTree
 }
 
-// TestEncryptDecrypt_Application verifica el flujo completo de cifrado/descifrado
-// de mensajes de Application (RFC §6.3).
+// TestEncryptDecrypt_Application verifies the full encryption/decryption flow
+// for Application messages (RFC §6.3).
 func TestEncryptDecrypt_Application(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	encTree, decTree := makeEncDecTrees(t, cs, 2)
 
-	// Firma
-	privKey, err := ciphersuite.NewSecretRandomCS(cs)
-	_ = privKey
 	sigPriv, sigPub := makeSigKeyPair(t, cs)
 
 	groupID := []byte("test-group-id")
@@ -213,8 +210,8 @@ func TestEncryptDecrypt_Application(t *testing.T) {
 	}
 }
 
-// TestEncryptDecrypt_Proposal verifica el flujo con ContentType=Proposal
-// que usa el ratchet de handshake (RFC §9.1).
+// TestEncryptDecrypt_Proposal verifies the flow with ContentType=Proposal
+// using the handshake ratchet (RFC §9.1).
 func TestEncryptDecrypt_Proposal(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	encTree, decTree := makeEncDecTrees(t, cs, 2)
@@ -223,8 +220,8 @@ func TestEncryptDecrypt_Proposal(t *testing.T) {
 	sdSecretBytes := bytes.Repeat([]byte{0x77}, 32)
 	gcBytes := []byte("gc")
 
-	// Un body de tipo Proposal (body tipo genérico para este test)
-	proposalData := []byte{0x02, 0x00, 0x01, 0x02, 0x03, 0x04} // raw proposal bytes
+	// Generic Proposal body for this test
+	proposalData := []byte{0x02, 0x00, 0x01, 0x02, 0x03, 0x04} // Raw proposal bytes
 	content := framing.FramedContent{
 		GroupID: []byte("grp"),
 		Epoch:   5,
@@ -248,7 +245,7 @@ func TestEncryptDecrypt_Proposal(t *testing.T) {
 		t.Errorf("ContentType = %d, want ContentTypeProposal", pm.ContentType)
 	}
 
-	ac, err := framing.Decrypt(pm, framing.DecryptParams{
+	_, err = framing.Decrypt(pm, framing.DecryptParams{
 		CipherSuite:      cs,
 		SenderDataSecret: ciphersuite.NewSecret(sdSecretBytes),
 		SecretTree:       decTree,
@@ -258,10 +255,9 @@ func TestEncryptDecrypt_Proposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt (Proposal): %v", err)
 	}
-	_ = ac
 }
 
-// TestEncrypt_TamperedCiphertext verifica que Decrypt falla con ciphertext corrupto.
+// TestDecrypt_TamperedCiphertext verifies that Decrypt fails with corrupted ciphertext.
 func TestDecrypt_TamperedCiphertext(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	encTree, decTree := makeEncDecTrees(t, cs, 2)
@@ -288,7 +284,7 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	// Corromper el ciphertext
+	// Corrupt the ciphertext
 	pm.Ciphertext[0] ^= 0xFF
 
 	_, err = framing.Decrypt(pm, framing.DecryptParams{
@@ -301,7 +297,7 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 	}
 }
 
-// TestDecrypt_TamperedSenderData verifica que Decrypt falla con sender data corrupto.
+// TestDecrypt_TamperedSenderData verifies that Decrypt fails with corrupted sender data.
 func TestDecrypt_TamperedSenderData(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	encTree, decTree := makeEncDecTrees(t, cs, 2)
@@ -390,7 +386,7 @@ func TestMLSMessage_AsPublic(t *testing.T) {
 }
 
 // ============================================================================
-// buildPrivateContentAAD — determinism (documentado vía wire format directo)
+// buildPrivateContentAAD Determinism
 // ============================================================================
 
 func TestBuildPrivateContentAAD_Deterministic(t *testing.T) {
@@ -419,7 +415,7 @@ func TestBuildPrivateContentAAD_Deterministic(t *testing.T) {
 }
 
 // ============================================================================
-// helper
+// Helper
 // ============================================================================
 
 // makeSigKeyPair returns a SignaturePrivateKey + matching OpenMlsSignaturePublicKey.

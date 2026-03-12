@@ -1,34 +1,37 @@
-// Package framing implementa el Message Framing de MLS según RFC 9420 §6.
+// Package framing implements Message Layer Security (MLS) message framing.
 //
-// # ¿Qué es Message Framing?
+// This package provides the core message framing layer for MLS as defined in
+// RFC 9420 §6. It handles the packaging of MLS content (application data,
+// proposals, commits) into messages that can be transmitted over the wire.
 //
-// Message Framing es el proceso de empaquetar contenido MLS (aplicaciones,
-// proposals, commits) en mensajes que pueden ser transmitidos por la red.
-// El framing provee:
+// The framing layer provides:
+//   - Sender authentication (signatures)
+//   - Membership verification (membership_tag)
+//   - Encryption for privacy (PrivateMessage)
+//   - Uniform structure for all messages
 //
-//   - Autenticación del remitente (firmas)
-//   - Verificación de membresía (membership_tag)
-//   - Cifrado para privacidad (PrivateMessage)
-//   - Estructura uniforme para todos los mensajes
+// # MLS Message Types
 //
-// # Estructuras Principales (RFC 9420 §6)
+// MLS defines several wire formats (RFC 9420 §6):
 //
 //	┌─────────────────────────────────────────────────────────────────┐
 //	│                    MLS Message Hierarchy                        │
 //	├─────────────────────────────────────────────────────────────────┤
 //	│  MLSMessage (wrapper)                                           │
-//	│  ├─ PublicMessage  (§6.2)  → Mensajes en claro, firmados       │
-//	│  ├─ PrivateMessage (§6.3)  → Mensajes cifrados                 │
-//	│  ├─ Welcome        (§11.2) → Mensajes de bienvenida            │
-//	│  └─ GroupInfo      (§11.5) → Información del grupo             │
+//	│  ├─ PublicMessage  (§6.2)  → Cleartext, signed                  │
+//	│  ├─ PrivateMessage (§6.3)  → Encrypted                          │
+//	│  ├─ Welcome        (§11.2) → Welcome messages                   │
+//	│  └─ GroupInfo      (§11.5) → Group information                  │
 //	└─────────────────────────────────────────────────────────────────┘
 //
-// # PublicMessage (§6.2) - Mensajes en Claro
+// # PublicMessage Structure (RFC 9420 §6.2)
+//
+// Public messages are transmitted in cleartext with signatures:
 //
 //	struct {
-//	    FramedContent content;           // Contenido enmarcado
-//	    FramedContentAuthData auth;      // Firma + confirmation
-//	    select (sender.sender_type) {    // Tag condicional
+//	    FramedContent content;           // Framed content
+//	    FramedContentAuthData auth;      // Signature + confirmation
+//	    select (sender.sender_type) {    // Conditional tag
 //	        case member:  MAC membership_tag;
 //	        case external:
 //	        case new_member_commit:
@@ -38,39 +41,45 @@
 //
 // Wire format: [wire_format][content][auth][membership_tag?]
 //
-// # PrivateMessage (§6.3) - Mensajes Cifrados
+// # PrivateMessage Structure (RFC 9420 §6.3)
+//
+// Private messages encrypt their content:
 //
 //	struct {
-//	    opaque group_id<V>;              // EN CLARO
-//	    uint64 epoch;                    // EN CLARO
-//	    ContentType content_type;        // EN CLARO
-//	    opaque authenticated_data<V>;    // EN CLARO
-//	    opaque encrypted_sender_data<V>; // CIFRADO
-//	    opaque ciphertext<V>;            // CIFRADO
+//	    opaque group_id<V>;              // IN CLEAR
+//	    uint64 epoch;                    // IN CLEAR
+//	    ContentType content_type;        // IN CLEAR
+//	    opaque authenticated_data<V>;    // IN CLEAR
+//	    opaque encrypted_sender_data<V>; // ENCRYPTED
+//	    opaque ciphertext<V>;            // ENCRYPTED
 //	} PrivateMessage;
 //
 // Wire format: [group_id][epoch][type][auth_data][enc_sd][ct]
 //
-//	←─── EN CLARO ───→←──── CIFRADO ────→
+//	←─── IN CLEAR ───→←──── ENCRYPTED ────→
 //
-// # SenderData (§6.3.2) - Datos del Remitente Cifrados
+// # SenderData Structure (RFC 9420 §6.3.2)
+//
+// Encrypted sender information:
 //
 //	struct {
-//	    uint32 leaf_index;       // Índice de hoja
-//	    uint32 generation;       // Número de secuencia
-//	    opaque reuse_guard[4];   // Protección nonce reuse
+//	    uint32 leaf_index;       // Leaf index in ratchet tree
+//	    uint32 generation;       // Sequence number for ratchet
+//	    opaque reuse_guard[4];   // Nonce reuse protection
 //	} MLSSenderData;
 //
-// Se cifra con sender_data_secret para formar encrypted_sender_data
+// Encrypted with sender_data_secret to form encrypted_sender_data
 //
-// # FramedContent (§6.1) - Contenido Enmarcado
+// # FramedContent Structure (RFC 9420 §6.1)
+//
+// The core content structure common to all message types:
 //
 //	struct {
-//	    opaque group_id<V>;            // ID del grupo
-//	    uint64 epoch;                  // Época actual
-//	    Sender sender;                 // Remitente
-//	    opaque authenticated_data<V>;  // Datos extra
-//	    ContentType content_type;      // Tipo de contenido
+//	    opaque group_id<V>;            // Group identifier
+//	    uint64 epoch;                  // Current epoch
+//	    Sender sender;                 // Message sender
+//	    opaque authenticated_data<V>;  // Additional authenticated data
+//	    ContentType content_type;      // Content type
 //	    select (content_type) {
 //	        case application:  opaque application_data<V>;
 //	        case proposal:     Proposal proposal;
@@ -78,42 +87,42 @@
 //	    };
 //	} FramedContent;
 //
-// # Flujo de Cifrado (§6.3.1)
+// # Encryption Flow (RFC 9420 §6.3.1)
 //
-//  1. Firmar FramedContent → AuthenticatedContent
-//  2. Generar ReuseGuard aleatorio (4 bytes)
-//  3. Derivar key/nonce del SecretTree
-//     └─ XOR nonce[:4] con ReuseGuard
-//  4. Construir MLSSenderData
-//     └─ Cifrar con sender_data_secret
-//  5. Construir AAD completo
+//  1. Sign FramedContent → AuthenticatedContent
+//  2. Generate random ReuseGuard (4 bytes)
+//  3. Derive key/nonce from SecretTree
+//     └─ XOR nonce[:4] with ReuseGuard
+//  4. Construct MLSSenderData
+//     └─ Encrypt with sender_data_secret
+//  5. Build complete AAD
 //     [group_id][epoch][content_type][auth_data][enc_sender]
-//  6. Cifrar AuthenticatedContent
-//     └─ key/nonce del SecretTree + AAD
-//  7. Retornar PrivateMessage
+//  6. Encrypt AuthenticatedContent
+//     └─ key/nonce from SecretTree + AAD
+//  7. Return PrivateMessage
 //     [group_id][epoch][type][auth_data][enc_sd][ciphertext]
 //
-// # Membership Tag (§6.2)
+// # Membership Tag (RFC 9420 §6.2)
 //
 //	membership_tag = MAC(membership_key, AuthenticatedContentTBM)
 //
-//	donde:
-//	  - membership_key: derivada del key schedule
-//	  - TBM = "ToBeMAC'd": contenido serializado para MAC
-//	  - Solo para sender_type == member
+// Where:
+//   - membership_key: Derived from key schedule
+//   - TBM = "ToBeMAC'd": Serialized content for MAC
+//   - Only for sender_type == member
 //
-// # Confirmation Tag (§6.1)
+// # Confirmation Tag (RFC 9420 §6.1)
 //
 //	confirmation_tag = MAC(confirmation_key, confirmed_transcript)
 //
-//	donde:
-//	  - confirmation_key: derivada del key schedule
-//	  - confirmed_transcript: hash del transcript confirmado
-//	  - Solo para ContentType == commit
+// Where:
+//   - confirmation_key: Derived from key schedule
+//   - confirmed_transcript: Hash of confirmed transcript
+//   - Only for ContentType == commit
 //
-// # Ejemplo de Uso
+// # Usage Example
 //
-//	// Crear FramedContent
+//	// Create FramedContent
 //	content := framing.FramedContent{
 //	    GroupID:           []byte("my-group"),
 //	    Epoch:             1,
@@ -122,16 +131,16 @@
 //	    Body:              framing.ApplicationData{Data: []byte("Hello, MLS!")},
 //	}
 //
-//	// Crear PublicMessage (en claro, firmado)
-//	pubMsg, err := framing.NewPublicMessage(content, sigKey, membershipKey)
+//	// Create PublicMessage (cleartext, signed)
+//	pubMsg, err := framing.NewPublicMessage(content, sigKey, gc, membershipKey, cs)
 //	if err != nil {
 //	    return err
 //	}
 //
-//	// Serializar para enviar
+//	// Serialize for transmission
 //	data := pubMsg.Marshal()
 //
-//	// O crear PrivateMessage (cifrado)
+//	// Or create PrivateMessage (encrypted)
 //	privMsg, err := framing.Encrypt(framing.EncryptParams{
 //	    Content:          content,
 //	    SenderLeafIndex:  0,
@@ -143,34 +152,24 @@
 //
 // # RFC Compliance
 //
-// Este package implementa:
-//   - RFC 9420 §6.1: FramedContent y AuthenticatedContent
-//   - RFC 9420 §6.2: PublicMessage y membership_tag
-//   - RFC 9420 §6.3: PrivateMessage y cifrado
-//   - RFC 9420 §6.3.1: Content encryption con ReuseGuard
+// This package implements:
+//   - RFC 9420 §6.1: FramedContent and AuthenticatedContent
+//   - RFC 9420 §6.2: PublicMessage and membership_tag
+//   - RFC 9420 §6.3: PrivateMessage and encryption
+//   - RFC 9420 §6.3.1: Content encryption with ReuseGuard
 //   - RFC 9420 §6.3.2: SenderData encryption
 //
-// # Seguridad
+// # Security Considerations
 //
-//   - ReuseGuard previene nonce reuse (§6.3.1)
-//   - membership_tag verifica membresía (§6.2)
-//   - confirmation_tag verifica commits (§6.1)
-//   - Firmas ECDSA-SHA256 autentican remitente
+//   - ReuseGuard prevents nonce reuse (§6.3.1)
+//   - membership_tag verifies membership (§6.2)
+//   - confirmation_tag verifies commits (§6.1)
+//   - ECDSA-SHA256 signatures authenticate sender
 //
-// # Referencias
+// # References
 //
 //   - RFC 9420 §6: https://www.rfc-editor.org/rfc/rfc9420.html#section-6
 //   - RFC 9420 §6.1: FramedContent
 //   - RFC 9420 §6.2: PublicMessage
 //   - RFC 9420 §6.3: PrivateMessage
 package framing
-
-// Este archivo está vacío pero el package doc arriba provee
-// documentación completa. Las implementaciones están en:
-//   - framed_content.go: FramedContent y FramedContentBody
-//   - auth.go: FramedContentAuthData y AuthenticatedContent
-//   - public_message.go: PublicMessage
-//   - private_message.go: PrivateMessage, Encrypt, Decrypt
-//   - types.go: ContentType, WireFormat, Sender, SenderType
-//   - helpers.go: Funciones helper
-//   - errors.go: Errores del package

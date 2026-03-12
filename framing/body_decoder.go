@@ -19,7 +19,7 @@ func RegisterRawBodyDecoders(proposalDecoder, commitDecoder rawBodyDecoder) {
 	commitBodyDecoder = commitDecoder
 }
 
-func readFramedContentBody(r *tls.Reader, ct ContentType, hasMembershipTag bool, expectsTrailingAuth bool) (FramedContentBody, error) {
+func readFramedContentBody(r *tls.Reader, ct ContentType, hasMembershipTag, expectsTrailingAuth bool) (FramedContentBody, error) {
 	switch ct {
 	case ContentTypeApplication:
 		bodyData, err := r.ReadVLBytes()
@@ -44,13 +44,7 @@ func readFramedContentBody(r *tls.Reader, ct ContentType, hasMembershipTag bool,
 	}
 }
 
-func readRawBody(
-	r *tls.Reader,
-	decoder rawBodyDecoder,
-	ct ContentType,
-	hasMembershipTag bool,
-	expectsTrailingAuth bool,
-) ([]byte, error) {
+func readRawBody(r *tls.Reader, decoder rawBodyDecoder, ct ContentType, hasMembershipTag, expectsTrailingAuth bool) ([]byte, error) {
 	remaining := r.BytesAfterPosition()
 	if len(remaining) == 0 {
 		return nil, fmt.Errorf("empty raw body")

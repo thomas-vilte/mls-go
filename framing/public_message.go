@@ -8,18 +8,31 @@ import (
 	"github.com/mls-go/schedule"
 )
 
-// PublicMessage implementa RFC 9420 §6.2.
-// Es un mensaje MLS sin cifrar y firmado.
+// PublicMessage implements RFC 9420 §6.2.
+// A PublicMessage is an MLS message transmitted in cleartext with signatures.
+//
+// Structure:
+//
+//	struct {
+//	    FramedContent content;
+//	    FramedContentAuthData auth;
+//	    select (sender.sender_type) {
+//	        case member:  MAC membership_tag;
+//	        case external:
+//	        case new_member_proposal:
+//	        case new_member_commit:  struct{};
+//	    };
+//	} PublicMessage;
 type PublicMessage struct {
 	Content       FramedContent
 	Auth          FramedContentAuthData
 	MembershipTag []byte // only for sender_type == member
 }
 
-// NewPublicMessage crea y firma un PublicMessage.
+// NewPublicMessage creates and signs a PublicMessage.
 //
-// gc es requerido para firmar (incluido en FramedContentTBS según RFC §6.1).
-// membershipKey es nil para remitentes que no son miembros.
+// gc is required for signing (included in FramedContentTBS per RFC §6.1).
+// membershipKey is nil for non-member senders.
 func NewPublicMessage(
 	content FramedContent,
 	sigKey *ciphersuite.SignaturePrivateKey,
@@ -39,7 +52,7 @@ func NewPublicMessage(
 	auth := FramedContentAuthData{Signature: sig}
 	pm := &PublicMessage{Content: content, Auth: auth}
 
-	// membership_tag únicamente para remitentes miembro (RFC §6.2)
+	// membership_tag only for member senders (RFC §6.2)
 	if content.Sender.Type == SenderTypeMember && membershipKey != nil {
 		ac.Auth = auth
 		tbm := marshalAuthenticatedContentTBM(ac)
@@ -49,7 +62,7 @@ func NewPublicMessage(
 	return pm, nil
 }
 
-// VerifyMembershipTag verifica el membership_tag utilizando schedule.VerifyMembershipTag.
+// VerifyMembershipTag verifies the membership_tag using schedule.VerifyMembershipTag.
 func (pm *PublicMessage) VerifyMembershipTag(cs ciphersuite.CipherSuite, membershipKey *ciphersuite.Secret) error {
 	return pm.VerifyMembershipTagWithContext(cs, membershipKey, nil)
 }
@@ -61,7 +74,7 @@ func (pm *PublicMessage) VerifyMembershipTagWithContext(
 	gc []byte,
 ) error {
 	if pm.Content.Sender.Type != SenderTypeMember {
-		return nil // no aplica para remitentes que no son miembros
+		return nil // Not applicable for non-member senders
 	}
 	ac := &AuthenticatedContent{
 		WireFormat:   WireFormatPublicMessage,
@@ -76,7 +89,7 @@ func (pm *PublicMessage) VerifyMembershipTagWithContext(
 	return nil
 }
 
-// Marshal serializa el PublicMessage para transmisión.
+// Marshal serializes the PublicMessage for transmission.
 func (pm *PublicMessage) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(WireFormatPublicMessage))
@@ -88,8 +101,8 @@ func (pm *PublicMessage) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalPublicMessage parsea un PublicMessage desde su representación wire.
-// El wire_format uint16 inicial debe estar incluido en los datos.
+// UnmarshalPublicMessage parses a PublicMessage from its wire representation.
+// The initial wire_format uint16 must be included in the data.
 func UnmarshalPublicMessage(data []byte) (*PublicMessage, error) {
 	r := tls.NewReader(data)
 
@@ -106,7 +119,7 @@ func UnmarshalPublicMessage(data []byte) (*PublicMessage, error) {
 		return nil, err
 	}
 
-	// Auth: signature<V> [ + confirmation_tag<V> si es Commit ]
+	// Auth: signature<V> [ + confirmation_tag<V> if Commit ]
 	sigBytes, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("framing: reading signature: %w", err)
@@ -121,7 +134,7 @@ func UnmarshalPublicMessage(data []byte) (*PublicMessage, error) {
 
 	pm := &PublicMessage{Content: *content, Auth: auth}
 
-	// membership_tag presente únicamente para remitente miembro
+	// membership_tag present only for member sender
 	if content.Sender.Type == SenderTypeMember && r.Remaining() > 0 {
 		tag, err := r.ReadVLBytes()
 		if err != nil {

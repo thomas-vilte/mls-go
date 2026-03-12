@@ -10,10 +10,10 @@ import (
 )
 
 // ============================================================================
-// Tests de FramedContent
+// FramedContent Tests
 // ============================================================================
 
-// TestFramedContent_ApplicationData_RoundTrip prueba serialización de ApplicationData
+// TestFramedContent_ApplicationData_RoundTrip tests ApplicationData serialization.
 func TestFramedContent_ApplicationData_RoundTrip(t *testing.T) {
 	fc := &framing.FramedContent{
 		GroupID:           []byte("test-group"),
@@ -35,7 +35,7 @@ func TestFramedContent_ApplicationData_RoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalFramedContent failed: %v", err)
 	}
 
-	// Verificar campos
+	// Verify fields
 	if !bytes.Equal(fc.GroupID, fc2.GroupID) {
 		t.Errorf("GroupID mismatch: got %v, want %v", fc2.GroupID, fc.GroupID)
 	}
@@ -49,7 +49,7 @@ func TestFramedContent_ApplicationData_RoundTrip(t *testing.T) {
 		t.Errorf("AuthenticatedData mismatch: got %v, want %v", fc2.AuthenticatedData, fc.AuthenticatedData)
 	}
 
-	// Verificar body
+	// Verify body
 	appData2, ok := fc2.Body.(framing.ApplicationData)
 	if !ok {
 		t.Fatal("Body is not ApplicationData")
@@ -59,7 +59,7 @@ func TestFramedContent_ApplicationData_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestFramedContent_Proposal_RoundTrip prueba serialización de Proposal
+// TestFramedContent_Proposal_RoundTrip tests Proposal serialization.
 func TestFramedContent_Proposal_RoundTrip(t *testing.T) {
 	fc := &framing.FramedContent{
 		GroupID: []byte("test-group"),
@@ -83,7 +83,7 @@ func TestFramedContent_Proposal_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestFramedContent_Commit_RoundTrip prueba serialización de Commit
+// TestFramedContent_Commit_RoundTrip tests Commit serialization.
 func TestFramedContent_Commit_RoundTrip(t *testing.T) {
 	fc := &framing.FramedContent{
 		GroupID: []byte("test-group"),
@@ -107,7 +107,7 @@ func TestFramedContent_Commit_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestFramedContent_ContentType prueba que ContentType se deriva correctamente
+// TestFramedContent_ContentType tests that ContentType is derived correctly.
 func TestFramedContent_ContentType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -129,16 +129,16 @@ func TestFramedContent_ContentType(t *testing.T) {
 	}
 }
 
-// TestFramedContent_InvalidContentType prueba error con content_type desconocido
+// TestFramedContent_InvalidContentType tests error with unknown content_type.
 func TestFramedContent_InvalidContentType(t *testing.T) {
-	// Crear datos manualmente con content_type inválido
+	// Create data manually with invalid content_type
 	w := tls.NewWriter()
 	w.WriteVLBytes([]byte("group-id"))
 	w.WriteUint64(1)
 	w.WriteUint8(1) // SenderTypeMember
 	w.WriteUint32(0)
 	w.WriteVLBytes([]byte{})
-	w.WriteUint8(0xFF) // Content type inválido
+	w.WriteUint8(0xFF) // Invalid content type
 	w.WriteVLBytes([]byte("body"))
 
 	data := w.Bytes()
@@ -149,10 +149,10 @@ func TestFramedContent_InvalidContentType(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de MLSSenderData
+// MLSSenderData Tests
 // ============================================================================
 
-// TestMLSSenderData_RoundTrip prueba serialización de MLSSenderData
+// TestMLSSenderData_RoundTrip tests MLSSenderData serialization.
 func TestMLSSenderData_RoundTrip(t *testing.T) {
 	sd := &framing.MLSSenderData{
 		LeafIndex:  42,
@@ -178,10 +178,10 @@ func TestMLSSenderData_RoundTrip(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de FramedContentAuthData
+// FramedContentAuthData Tests
 // ============================================================================
 
-// TestFramedContentAuthData_Marshal prueba serialización de auth data
+// TestFramedContentAuthData_Marshal tests auth data serialization.
 func TestFramedContentAuthData_Marshal(t *testing.T) {
 	sig := &ciphersuite.Signature{}
 	auth := framing.FramedContentAuthData{
@@ -189,29 +189,29 @@ func TestFramedContentAuthData_Marshal(t *testing.T) {
 		ConfirmationTag: []byte{0x01, 0x02, 0x03},
 	}
 
-	// Sin confirmation tag
+	// Without confirmation tag
 	data1 := auth.Marshal(framing.ContentTypeApplication)
 	if len(data1) == 0 {
 		t.Error("Marshal returned empty data for Application")
 	}
 
-	// Con confirmation tag (Commit)
+	// With confirmation tag (Commit)
 	data2 := auth.Marshal(framing.ContentTypeCommit)
 	if len(data2) == 0 {
 		t.Error("Marshal returned empty data for Commit")
 	}
 
-	// Deberían ser diferentes
+	// Should be different
 	if bytes.Equal(data1, data2) {
 		t.Error("Marshal should produce different output for different content types")
 	}
 }
 
 // ============================================================================
-// Tests de AuthenticatedContent
+// AuthenticatedContent Tests
 // ============================================================================
 
-// TestAuthenticatedContent_MarshalForSigning prueba serialización para firma
+// TestAuthenticatedContent_MarshalForSigning tests serialization for signing.
 func TestAuthenticatedContent_MarshalForSigning(t *testing.T) {
 	ac := &framing.AuthenticatedContent{
 		WireFormat: framing.WireFormatPublicMessage,
@@ -231,17 +231,17 @@ func TestAuthenticatedContent_MarshalForSigning(t *testing.T) {
 		t.Error("MarshalForSigning returned empty data")
 	}
 
-	// Debería empezar con wire format
+	// Should start with wire format
 	if data[0] != 0x00 || data[1] != 0x01 {
 		t.Errorf("Wire format should be at start: got %02x%02x", data[0], data[1])
 	}
 }
 
 // ============================================================================
-// Tests de PublicMessage
+// PublicMessage Tests
 // ============================================================================
 
-// TestPublicMessage_Marshal prueba serialización de PublicMessage
+// TestPublicMessage_Marshal tests PublicMessage serialization.
 func TestPublicMessage_Marshal(t *testing.T) {
 	pm := &framing.PublicMessage{
 		Content: framing.FramedContent{
@@ -261,17 +261,17 @@ func TestPublicMessage_Marshal(t *testing.T) {
 		t.Fatal("Marshal returned empty data")
 	}
 
-	// Verificar que empieza con wire format
+	// Verify wire format is at start
 	if data[0] != 0x00 || data[1] != 0x01 {
 		t.Errorf("Wire format should be at start: got %02x%02x", data[0], data[1])
 	}
 }
 
 // ============================================================================
-// Tests de PrivateMessage
+// PrivateMessage Tests
 // ============================================================================
 
-// TestPrivateMessage_Marshal prueba serialización de PrivateMessage
+// TestPrivateMessage_Marshal tests PrivateMessage serialization.
 func TestPrivateMessage_Marshal(t *testing.T) {
 	pm := &framing.PrivateMessage{
 		GroupID:             []byte("test-group"),
@@ -287,14 +287,14 @@ func TestPrivateMessage_Marshal(t *testing.T) {
 		t.Fatal("Marshal returned empty data")
 	}
 
-	// Verificar wire format
+	// Verify wire format
 	if data[0] != 0x00 || data[1] != 0x02 {
 		t.Errorf("Wire format should be PrivateMessage: got %02x%02x", data[0], data[1])
 	}
 }
 
-// TestPrivateMessage_FieldsEnClaro verifica que los primeros 4 campos están en claro
-func TestPrivateMessage_FieldsEnClaro(t *testing.T) {
+// TestPrivateMessage_ClearTextFields verifies the first 4 fields are in cleartext.
+func TestPrivateMessage_ClearTextFields(t *testing.T) {
 	groupID := []byte("my-test-group")
 	epoch := uint64(12345)
 	ct := framing.ContentTypeApplication
@@ -311,18 +311,18 @@ func TestPrivateMessage_FieldsEnClaro(t *testing.T) {
 
 	data := pm.Marshal()
 
-	// Los campos en claro deberían ser legibles en el data serializado
-	// Esto es una verificación básica - en un test completo verificaríamos offsets
+	// Cleartext fields should be visible in serialized data
+	// This is a basic verification - a complete test would verify offsets
 	if !bytes.Contains(data, groupID) {
 		t.Error("GroupID should be visible in marshaled data")
 	}
 }
 
 // ============================================================================
-// Tests de errores
+// Error Tests
 // ============================================================================
 
-// TestErrors_Is verifica que errors.Is funciona correctamente
+// TestErrors_Is verifies that errors.Is works correctly.
 func TestErrors_Is(t *testing.T) {
 	err := framing.ErrDecryptionFailed
 
@@ -331,16 +331,16 @@ func TestErrors_Is(t *testing.T) {
 	}
 }
 
-// isError es un helper para testear errors.Is
+// isError is a helper for testing errors.Is.
 func isError(got, want error) bool {
 	return got == want
 }
 
 // ============================================================================
-// Tests de helpers
+// Helper Tests
 // ============================================================================
 
-// TestMarshalSender_RoundTrip prueba serialización de Sender
+// TestMarshalSender_RoundTrip tests Sender serialization.
 func TestMarshalSender_RoundTrip(t *testing.T) {
 	sender := framing.Sender{
 		Type:      framing.SenderTypeMember,
@@ -365,7 +365,7 @@ func TestMarshalSender_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestMarshalSender_External prueba serialización de External sender
+// TestMarshalSender_External tests External sender serialization.
 func TestMarshalSender_External(t *testing.T) {
 	sender := framing.Sender{
 		Type:        framing.SenderTypeExternal,
@@ -390,9 +390,9 @@ func TestMarshalSender_External(t *testing.T) {
 	}
 }
 
-// TestMarshalSender_Invalid prueba error con sender type inválido
+// TestMarshalSender_Invalid tests error with invalid sender type.
 func TestMarshalSender_Invalid(t *testing.T) {
-	data := []byte{0xFF} // Sender type inválido
+	data := []byte{0xFF} // Invalid sender type
 	r := tls.NewReader(data)
 	_, err := framing.UnmarshalSender(r)
 	if err == nil {

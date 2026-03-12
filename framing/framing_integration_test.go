@@ -10,10 +10,10 @@ import (
 )
 
 // ============================================================================
-// Tests de Integración - Encrypt/Decrypt Round-Trip
+// Integration Tests - Encrypt/Decrypt Round-Trip
 // ============================================================================
 
-// TestFramedContent_BodyTypes prueba todos los tipos de body
+// TestFramedContent_BodyTypes tests all body types.
 func TestFramedContent_BodyTypes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -46,7 +46,7 @@ func TestFramedContent_BodyTypes(t *testing.T) {
 	}
 }
 
-// TestFramedContent_EmptyFields prueba campos vacíos
+// TestFramedContent_EmptyFields tests empty fields.
 func TestFramedContent_EmptyFields(t *testing.T) {
 	fc := &framing.FramedContent{
 		GroupID:           []byte{},
@@ -73,7 +73,7 @@ func TestFramedContent_EmptyFields(t *testing.T) {
 	}
 }
 
-// TestFramedContent_LargeFields prueba campos grandes
+// TestFramedContent_LargeFields tests large fields.
 func TestFramedContent_LargeFields(t *testing.T) {
 	largeData := make([]byte, 10000)
 	for i := range largeData {
@@ -107,10 +107,10 @@ func TestFramedContent_LargeFields(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de MLSSenderData
+// MLSSenderData Tests
 // ============================================================================
 
-// TestMLSSenderData_ZeroValues prueba valores en cero
+// TestMLSSenderData_ZeroValues tests zero values.
 func TestMLSSenderData_ZeroValues(t *testing.T) {
 	sd := &framing.MLSSenderData{
 		LeafIndex:  0,
@@ -135,7 +135,7 @@ func TestMLSSenderData_ZeroValues(t *testing.T) {
 	}
 }
 
-// TestMLSSenderData_MaxValues prueba valores máximos
+// TestMLSSenderData_MaxValues tests maximum values.
 func TestMLSSenderData_MaxValues(t *testing.T) {
 	sd := &framing.MLSSenderData{
 		LeafIndex:  0xFFFFFFFF,
@@ -160,16 +160,16 @@ func TestMLSSenderData_MaxValues(t *testing.T) {
 	}
 }
 
-// TestMLSSenderData_InvalidData prueba datos inválidos
+// TestMLSSenderData_InvalidData tests invalid data.
 func TestMLSSenderData_InvalidData(t *testing.T) {
-	// Datos truncados (menos de 12 bytes)
+	// Truncated data (less than 12 bytes)
 	invalidData := []byte{0x01, 0x02, 0x03}
 	_, err := framing.UnmarshalSenderData(invalidData)
 	if err == nil {
 		t.Error("UnmarshalSenderData should fail with truncated data")
 	}
 
-	// Datos vacíos
+	// Empty data
 	_, err = framing.UnmarshalSenderData([]byte{})
 	if err == nil {
 		t.Error("UnmarshalSenderData should fail with empty data")
@@ -177,10 +177,10 @@ func TestMLSSenderData_InvalidData(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de FramedContentAuthData
+// FramedContentAuthData Tests
 // ============================================================================
 
-// TestFramedContentAuthData_EmptySignature prueba firma vacía
+// TestFramedContentAuthData_EmptySignature tests empty signature.
 func TestFramedContentAuthData_EmptySignature(t *testing.T) {
 	auth := framing.FramedContentAuthData{
 		Signature:       &ciphersuite.Signature{},
@@ -193,16 +193,16 @@ func TestFramedContentAuthData_EmptySignature(t *testing.T) {
 	}
 }
 
-// TestFramedContentAuthData_WithConfirmationTag prueba con confirmation tag
+// TestFramedContentAuthData_WithConfirmationTag tests with confirmation tag.
 func TestFramedContentAuthData_WithConfirmationTag(t *testing.T) {
 	auth := framing.FramedContentAuthData{
 		Signature:       &ciphersuite.Signature{},
 		ConfirmationTag: []byte{0x01, 0x02, 0x03, 0x04},
 	}
 
-	// Para Commit debería incluir confirmation tag
+	// For Commit should include confirmation tag
 	data1 := auth.Marshal(framing.ContentTypeCommit)
-	// Para Application no debería incluirlo
+	// For Application should not include it
 	data2 := auth.Marshal(framing.ContentTypeApplication)
 
 	if len(data1) <= len(data2) {
@@ -210,12 +210,12 @@ func TestFramedContentAuthData_WithConfirmationTag(t *testing.T) {
 	}
 }
 
-// TestFramedContentAuthData_NilSignature prueba con signature nil
+// TestFramedContentAuthData_NilSignature tests with nil signature.
 func TestFramedContentAuthData_NilSignature(t *testing.T) {
-	// Debería panickear o manejar gracefully
+	// Should panic or handle gracefully
 	defer func() {
 		if r := recover(); r != nil {
-			// Es esperado que panickee con nil signature
+			// Expected panic with nil signature
 			t.Logf("Expected panic with nil signature: %v", r)
 		}
 	}()
@@ -224,16 +224,16 @@ func TestFramedContentAuthData_NilSignature(t *testing.T) {
 		Signature: nil,
 	}
 
-	// Esto probablemente panickee
+	// This might panic
 	_ = auth.Marshal(framing.ContentTypeApplication)
-	// Si llegamos acá, no panickeó (lo cual también está bien)
+	// If we reach here, it didn't panic (which is also fine)
 }
 
 // ============================================================================
-// Tests de AuthenticatedContent
+// AuthenticatedContent Tests
 // ============================================================================
 
-// TestAuthenticatedContent_AllWireFormats prueba todos los wire formats
+// TestAuthenticatedContent_AllWireFormats tests all wire formats.
 func TestAuthenticatedContent_AllWireFormats(t *testing.T) {
 	formats := []framing.WireFormat{
 		framing.WireFormatPublicMessage,
@@ -260,7 +260,7 @@ func TestAuthenticatedContent_AllWireFormats(t *testing.T) {
 				t.Error("MarshalForSigning returned empty data")
 			}
 
-			// Verificar que empieza con wire format
+			// Verify wire format is at start
 			if data[0] != 0x00 || data[1] != byte(wf) {
 				t.Errorf("Wire format should be at start: got %02x%02x", data[0], data[1])
 			}
@@ -305,10 +305,10 @@ func TestAuthenticatedContent_MarshalTBS(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de PublicMessage
+// PublicMessage Tests
 // ============================================================================
 
-// TestPublicMessage_NonMemberSender prueba que non-member no tiene membership tag
+// TestPublicMessage_NonMemberSender tests that non-member has no membership tag.
 func TestPublicMessage_NonMemberSender(t *testing.T) {
 	pm := &framing.PublicMessage{
 		Content: framing.FramedContent{
@@ -320,7 +320,7 @@ func TestPublicMessage_NonMemberSender(t *testing.T) {
 		Auth: framing.FramedContentAuthData{
 			Signature: &ciphersuite.Signature{},
 		},
-		MembershipTag: nil, // External senders no tienen membership tag
+		MembershipTag: nil, // External senders do not have membership tag
 	}
 
 	data := pm.Marshal()
@@ -328,14 +328,14 @@ func TestPublicMessage_NonMemberSender(t *testing.T) {
 		t.Fatal("Marshal returned empty data")
 	}
 
-	// VerifyMembershipTag debería retornar nil para non-member
+	// VerifyMembershipTag should return nil for non-member
 	err := pm.VerifyMembershipTag(ciphersuite.MLS128DHKEMP256, nil)
 	if err != nil {
 		t.Errorf("VerifyMembershipTag should return nil for non-member: %v", err)
 	}
 }
 
-// TestPublicMessage_MemberSenderNilKey prueba member con membership key nil
+// TestPublicMessage_MemberSenderNilKey tests member with nil membership key.
 func TestPublicMessage_MemberSenderNilKey(t *testing.T) {
 	pm := &framing.PublicMessage{
 		Content: framing.FramedContent{
@@ -350,7 +350,7 @@ func TestPublicMessage_MemberSenderNilKey(t *testing.T) {
 		MembershipTag: nil,
 	}
 
-	// Debería poder hacer marshal sin membership tag
+	// Should be able to marshal without membership tag
 	data := pm.Marshal()
 	if len(data) == 0 {
 		t.Fatal("Marshal returned empty data")
@@ -398,10 +398,10 @@ func TestPublicMessage_MarshalIncludesMembershipTagForMember(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de PrivateMessage
+// PrivateMessage Tests
 // ============================================================================
 
-// TestPrivateMessage_EmptyFields prueba campos vacíos
+// TestPrivateMessage_EmptyFields tests empty fields.
 func TestPrivateMessage_EmptyFields(t *testing.T) {
 	pm := &framing.PrivateMessage{
 		GroupID:             []byte{},
@@ -418,7 +418,7 @@ func TestPrivateMessage_EmptyFields(t *testing.T) {
 	}
 }
 
-// TestPrivateMessage_LargeFields prueba campos grandes
+// TestPrivateMessage_LargeFields tests large fields.
 func TestPrivateMessage_LargeFields(t *testing.T) {
 	largeData := make([]byte, 10000)
 	for i := range largeData {
@@ -440,7 +440,7 @@ func TestPrivateMessage_LargeFields(t *testing.T) {
 	}
 }
 
-// TestPrivateMessage_AllContentTypes prueba todos los content types
+// TestPrivateMessage_AllContentTypes tests all content types.
 func TestPrivateMessage_AllContentTypes(t *testing.T) {
 	contentTypes := []framing.ContentType{
 		framing.ContentTypeApplication,
@@ -464,10 +464,10 @@ func TestPrivateMessage_AllContentTypes(t *testing.T) {
 				t.Fatal("Marshal returned empty data")
 			}
 
-			// Verificar que content type está en el data
+			// Verify content type is in the data
 			// Wire format (2 bytes) + GroupID length (1 byte) + GroupID + Epoch (8 bytes) + ContentType (1 byte)
-			// El offset depende del largo del GroupID
-			// Mejor verificar que el ContentType se serializa correctamente
+			// The offset depends on the length of GroupID
+			// Better to verify that ContentType is serialized correctly
 			if data[0] != 0x00 || data[1] != 0x02 {
 				t.Errorf("Wire format should be PrivateMessage: got %02x%02x", data[0], data[1])
 			}
@@ -476,10 +476,10 @@ func TestPrivateMessage_AllContentTypes(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de Sender
+// Sender Tests
 // ============================================================================
 
-// TestSender_AllTypes prueba todos los tipos de sender
+// TestSender_AllTypes tests all sender types.
 func TestSender_AllTypes(t *testing.T) {
 	senders := []framing.Sender{
 		{Type: framing.SenderTypeMember, LeafIndex: 42},
@@ -498,7 +498,7 @@ func TestSender_AllTypes(t *testing.T) {
 				t.Fatal("MarshalSender returned empty data")
 			}
 
-			// Unmarshal y verificar
+			// Unmarshal and verify
 			r := tls.NewReader(data)
 			sender2, err := framing.UnmarshalSender(r)
 			if err != nil {
@@ -513,10 +513,10 @@ func TestSender_AllTypes(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de ContentType
+// ContentType Tests
 // ============================================================================
 
-// TestContentType_Values prueba los valores de ContentType
+// TestContentType_Values tests ContentType values.
 func TestContentType_Values(t *testing.T) {
 	if framing.ContentTypeApplication != 1 {
 		t.Errorf("ContentTypeApplication should be 1, got %d", framing.ContentTypeApplication)
@@ -530,10 +530,10 @@ func TestContentType_Values(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de WireFormat
+// WireFormat Tests
 // ============================================================================
 
-// TestWireFormat_Values prueba los valores de WireFormat
+// TestWireFormat_Values tests WireFormat values.
 func TestWireFormat_Values(t *testing.T) {
 	if framing.WireFormatPublicMessage != 1 {
 		t.Errorf("WireFormatPublicMessage should be 1, got %d", framing.WireFormatPublicMessage)
@@ -544,10 +544,10 @@ func TestWireFormat_Values(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de Errors
+// Error Tests
 // ============================================================================
 
-// TestErrors_NotNil prueba que los errores no son nil
+// TestErrors_NotNil tests that errors are not nil.
 func TestErrors_NotNil(t *testing.T) {
 	errors := []error{
 		framing.ErrInvalidWireFormat,
@@ -566,7 +566,7 @@ func TestErrors_NotNil(t *testing.T) {
 	}
 }
 
-// TestErrors_ErrorMessages prueba que los errores tienen mensajes descriptivos
+// TestErrors_ErrorMessages tests that errors have descriptive messages.
 func TestErrors_ErrorMessages(t *testing.T) {
 	tests := []struct {
 		err         error
@@ -576,10 +576,10 @@ func TestErrors_ErrorMessages(t *testing.T) {
 		{framing.ErrInvalidWireFormat, "wire format", "ErrInvalidWireFormat"},
 		{framing.ErrInvalidContentType, "content type", "ErrInvalidContentType"},
 		{framing.ErrInvalidSenderType, "sender type", "ErrInvalidSenderType"},
-		{framing.ErrDecryptionFailed, "descifrado", "ErrDecryptionFailed"},
-		{framing.ErrVerificationFailed, "verificación", "ErrVerificationFailed"},
+		{framing.ErrDecryptionFailed, "decryption", "ErrDecryptionFailed"},
+		{framing.ErrVerificationFailed, "verification", "ErrVerificationFailed"},
 		{framing.ErrInvalidMembershipTag, "membership", "ErrInvalidMembershipTag"},
-		{framing.ErrInvalidMessage, "mensaje", "ErrInvalidMessage"},
+		{framing.ErrInvalidMessage, "message", "ErrInvalidMessage"},
 	}
 
 	for _, tt := range tests {
@@ -593,12 +593,12 @@ func TestErrors_ErrorMessages(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de Helpers
+// Helper Tests
 // ============================================================================
 
-// TestUnmarshalSender_TruncatedData prueba unmarshal con datos truncados
+// TestUnmarshalSender_TruncatedData tests unmarshal with truncated data.
 func TestUnmarshalSender_TruncatedData(t *testing.T) {
-	// Solo type, sin datos adicionales
+	// Only type, no additional data
 	data := []byte{0x01} // SenderTypeMember
 	r := tls.NewReader(data)
 	_, err := framing.UnmarshalSender(r)
@@ -607,10 +607,10 @@ func TestUnmarshalSender_TruncatedData(t *testing.T) {
 	}
 }
 
-// TestBuildPrivateContentAAD prueba construcción de AAD
+// TestBuildPrivateContentAAD tests AAD construction.
 func TestBuildPrivateContentAAD(t *testing.T) {
-	// Esta función es interna, pero la podemos testear indirectamente
-	// a través de la estructura de PrivateMessage
+	// This function is internal, but we can test it indirectly
+	// through the PrivateMessage structure
 	pm := &framing.PrivateMessage{
 		GroupID:           []byte("test-group"),
 		Epoch:             42,
@@ -618,7 +618,7 @@ func TestBuildPrivateContentAAD(t *testing.T) {
 		AuthenticatedData: []byte("auth-data"),
 	}
 
-	// Verificar que los campos están presentes
+	// Verify fields are present
 	if len(pm.GroupID) == 0 {
 		t.Error("GroupID should not be empty")
 	}

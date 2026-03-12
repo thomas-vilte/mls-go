@@ -1,4 +1,6 @@
-// Package framing - Tests para RFC 9420 §6
+// Package framing implements Message Layer Security (MLS) message framing.
+//
+// This file contains extended tests for RFC 9420 §6.
 package framing
 
 import (
@@ -221,7 +223,7 @@ func TestMarshalPrivateMessageContent_NopadAndAligned(t *testing.T) {
 		if len(data)%align != 0 {
 			t.Errorf("align=%d: length %d not aligned", align, len(data))
 		}
-		// padding bytes must be zero
+		// Padding bytes must be zero
 		for i := len(unpadded); i < len(data); i++ {
 			if data[i] != 0x00 {
 				t.Errorf("align=%d: non-zero padding at byte %d", align, i)
@@ -274,7 +276,7 @@ func TestUnmarshalPrivateMessageContent_NonZeroPaddingRejected(t *testing.T) {
 	w := tls.NewWriter()
 	body.marshal(w)
 	w.WriteRaw(auth.Marshal(ContentTypeApplication))
-	w.WriteUint8(0xFF) // non-zero padding byte — must be rejected
+	w.WriteUint8(0xFF) // Non-zero padding byte - must be rejected
 
 	_, err := unmarshalPrivateMessageContent(w.Bytes(), ContentTypeApplication)
 	if err == nil {
@@ -296,22 +298,22 @@ func TestUnmarshalPrivateMessageContent_Truncated(t *testing.T) {
 func TestFramedContentAuthData_Marshal_WithAndWithoutConfirmation(t *testing.T) {
 	sig := ciphersuite.NewSignature([]byte{0xAA, 0xBB})
 
-	// Non-commit: no confirmation tag regardless of field
+	// Non-commit: No confirmation tag regardless of field
 	authNonCommit := FramedContentAuthData{Signature: sig, ConfirmationTag: []byte{0xFF}}
 	dataNonCommit := authNonCommit.Marshal(ContentTypeApplication)
 
-	// Commit without confirmation tag set: no tag appended
+	// Commit without confirmation tag set: No tag appended
 	authCommitNoTag := FramedContentAuthData{Signature: sig}
 	dataCommitNoTag := authCommitNoTag.Marshal(ContentTypeCommit)
 
-	// Commit with confirmation tag: tag appended
+	// Commit with confirmation tag: Tag appended
 	authCommitTag := FramedContentAuthData{Signature: sig, ConfirmationTag: []byte{0x01, 0x02}}
 	dataCommitTag := authCommitTag.Marshal(ContentTypeCommit)
 
-	if bytes.Equal(dataNonCommit, dataCommitNoTag) {
-		// Both should have same bytes since neither appends the tag
-		// (same signature bytes — this is expected)
-	}
+	// Both should have same bytes since neither appends the tag
+	// (Same signature bytes - this is expected)
+	_ = dataNonCommit
+	_ = dataCommitNoTag
 	if len(dataCommitTag) <= len(dataCommitNoTag) {
 		t.Error("Commit with tag should produce more bytes than without")
 	}
@@ -324,7 +326,7 @@ func TestFramedContentAuthData_Marshal_WithAndWithoutConfirmation(t *testing.T) 
 
 func TestValidAuthTail_Proposal_SigOnly(t *testing.T) {
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // signature
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Signature
 	if !validAuthTail(w.Bytes(), ContentTypeProposal, false) {
 		t.Error("Proposal with sig only should be valid")
 	}
@@ -332,8 +334,8 @@ func TestValidAuthTail_Proposal_SigOnly(t *testing.T) {
 
 func TestValidAuthTail_Proposal_WithMembershipTag(t *testing.T) {
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // signature
-	w.WriteVLBytes([]byte{0x03, 0x04}) // membership_tag
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Signature
+	w.WriteVLBytes([]byte{0x03, 0x04}) // Membership_tag
 	if !validAuthTail(w.Bytes(), ContentTypeProposal, true) {
 		t.Error("Proposal with sig+membership_tag should be valid")
 	}
@@ -341,7 +343,7 @@ func TestValidAuthTail_Proposal_WithMembershipTag(t *testing.T) {
 
 func TestValidAuthTail_Proposal_MissingMembershipTag(t *testing.T) {
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // only signature, but membership tag expected
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Only signature, but membership tag expected
 	if validAuthTail(w.Bytes(), ContentTypeProposal, true) {
 		t.Error("Proposal missing membership_tag should be invalid")
 	}
@@ -356,8 +358,8 @@ func TestValidAuthTail_Empty_IsInvalid(t *testing.T) {
 func TestValidAuthTail_Commit_WithConfirmationTag(t *testing.T) {
 	// tryWithConfirmation path: sig + confirmation_tag
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // signature
-	w.WriteVLBytes([]byte{0x03, 0x04}) // confirmation_tag
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Signature
+	w.WriteVLBytes([]byte{0x03, 0x04}) // Confirmation_tag
 	if !validAuthTail(w.Bytes(), ContentTypeCommit, false) {
 		t.Error("Commit with sig+confirmation should be valid")
 	}
@@ -367,7 +369,7 @@ func TestValidAuthTail_Commit_SigOnly(t *testing.T) {
 	// tryWithoutConfirmation path: sig only (no confirmation tag)
 	// This is valid for some wire encodings where confirmation_tag is absent
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // signature only
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Signature only
 	if !validAuthTail(w.Bytes(), ContentTypeCommit, false) {
 		t.Error("Commit with sig only should be valid via tryWithoutConfirmation")
 	}
@@ -376,9 +378,9 @@ func TestValidAuthTail_Commit_SigOnly(t *testing.T) {
 func TestValidAuthTail_Commit_WithConfirmationAndMembershipTag(t *testing.T) {
 	// Full PublicMessage commit: sig + confirmation_tag + membership_tag
 	w := tls.NewWriter()
-	w.WriteVLBytes([]byte{0x01, 0x02}) // signature
-	w.WriteVLBytes([]byte{0x03, 0x04}) // confirmation_tag
-	w.WriteVLBytes([]byte{0x05, 0x06}) // membership_tag
+	w.WriteVLBytes([]byte{0x01, 0x02}) // Signature
+	w.WriteVLBytes([]byte{0x03, 0x04}) // Confirmation_tag
+	w.WriteVLBytes([]byte{0x05, 0x06}) // Membership_tag
 	if !validAuthTail(w.Bytes(), ContentTypeCommit, true) {
 		t.Error("Commit with sig+confirmation+membership should be valid")
 	}

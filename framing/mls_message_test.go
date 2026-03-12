@@ -9,10 +9,10 @@ import (
 )
 
 // ============================================================================
-// Tests de MLSMessage
+// MLSMessage Tests
 // ============================================================================
 
-// TestMLSMessage_PublicMessage_RoundTrip prueba Marshal/Unmarshal de MLSMessage con PublicMessage.
+// TestMLSMessage_PublicMessage_RoundTrip tests Marshal/Unmarshal of MLSMessage with PublicMessage.
 func TestMLSMessage_PublicMessage_RoundTrip(t *testing.T) {
 	pm := &framing.PublicMessage{
 		Content: framing.FramedContent{
@@ -34,12 +34,12 @@ func TestMLSMessage_PublicMessage_RoundTrip(t *testing.T) {
 		t.Fatal("Marshal returned empty data")
 	}
 
-	// Debe comenzar con version = mls10 = 0x0001
+	// Must start with version = mls10 = 0x0001
 	if data[0] != 0x00 || data[1] != 0x01 {
 		t.Errorf("Version should be mls10 (0x0001), got %02x%02x", data[0], data[1])
 	}
 
-	// Debe seguir con wire_format = PublicMessage = 0x0001
+	// Must follow with wire_format = PublicMessage = 0x0001
 	if data[2] != 0x00 || data[3] != 0x01 {
 		t.Errorf("WireFormat should be PublicMessage (0x0001), got %02x%02x", data[2], data[3])
 	}
@@ -57,7 +57,7 @@ func TestMLSMessage_PublicMessage_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestMLSMessage_PrivateMessage_RoundTrip prueba Marshal/Unmarshal con PrivateMessage.
+// TestMLSMessage_PrivateMessage_RoundTrip tests Marshal/Unmarshal with PrivateMessage.
 func TestMLSMessage_PrivateMessage_RoundTrip(t *testing.T) {
 	pm := &framing.PrivateMessage{
 		GroupID:             []byte("test-group"),
@@ -75,7 +75,7 @@ func TestMLSMessage_PrivateMessage_RoundTrip(t *testing.T) {
 		t.Fatal("Marshal returned empty data")
 	}
 
-	// Versión = 0x0001
+	// First two bytes should be the version (mls10 = 0x0001)
 	if data[0] != 0x00 || data[1] != 0x01 {
 		t.Errorf("Version should be mls10 (0x0001), got %02x%02x", data[0], data[1])
 	}
@@ -98,7 +98,7 @@ func TestMLSMessage_PrivateMessage_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestMLSMessage_OpaquePayloads prueba Welcome/GroupInfo/KeyPackage como opacos.
+// TestMLSMessage_OpaquePayloads tests Welcome/GroupInfo/KeyPackage as opaque payloads.
 func TestMLSMessage_OpaquePayloads(t *testing.T) {
 	payload := []byte{0xDE, 0xAD, 0xBE, 0xEF}
 
@@ -130,9 +130,9 @@ func TestMLSMessage_OpaquePayloads(t *testing.T) {
 	}
 }
 
-// TestMLSMessage_InvalidVersion verifica que una versión inválida retorna error.
+// TestMLSMessage_InvalidVersion verifies that an invalid version returns an error.
 func TestMLSMessage_InvalidVersion(t *testing.T) {
-	// version = 0x0002 (inválida), wire_format = 0x0001
+	// version = 0x0002 (invalid), wire_format = 0x0001
 	data := []byte{0x00, 0x02, 0x00, 0x01}
 	_, err := framing.UnmarshalMLSMessage(data)
 	if err == nil {
@@ -140,9 +140,9 @@ func TestMLSMessage_InvalidVersion(t *testing.T) {
 	}
 }
 
-// TestMLSMessage_InvalidWireFormat verifica que un wire_format desconocido retorna error.
+// TestMLSMessage_InvalidWireFormat verifies that an unknown wire_format returns an error.
 func TestMLSMessage_InvalidWireFormat(t *testing.T) {
-	// version = 0x0001, wire_format = 0x00FF (inválido)
+	// version = 0x0001, wire_format = 0x00FF (invalid)
 	data := []byte{0x00, 0x01, 0x00, 0xFF}
 	_, err := framing.UnmarshalMLSMessage(data)
 	if err == nil {
@@ -150,7 +150,7 @@ func TestMLSMessage_InvalidWireFormat(t *testing.T) {
 	}
 }
 
-// TestMLSMessage_WireFormat_Empty verifica WireFormat() en mensaje vacío.
+// TestMLSMessage_WireFormat_Empty verifies WireFormat() on empty message.
 func TestMLSMessage_WireFormat_Empty(t *testing.T) {
 	msg := &framing.MLSMessage{}
 	if msg.WireFormat() != 0 {
@@ -159,10 +159,10 @@ func TestMLSMessage_WireFormat_Empty(t *testing.T) {
 }
 
 // ============================================================================
-// Tests de Transcript Hash
+// Transcript Hash Tests
 // ============================================================================
 
-// TestConfirmedTranscriptHashInput_NonCommit verifica que falla si no es commit.
+// TestConfirmedTranscriptHashInput_NonCommit verifies that it fails if not a commit.
 func TestConfirmedTranscriptHashInput_NonCommit(t *testing.T) {
 	ac := &framing.AuthenticatedContent{
 		WireFormat: framing.WireFormatPublicMessage,
@@ -181,7 +181,7 @@ func TestConfirmedTranscriptHashInput_NonCommit(t *testing.T) {
 	}
 }
 
-// TestConfirmedTranscriptHashInput_Compute prueba el cálculo del hash.
+// TestConfirmedTranscriptHashInput_Compute tests hash computation.
 func TestConfirmedTranscriptHashInput_Compute(t *testing.T) {
 	ac := &framing.AuthenticatedContent{
 		WireFormat: framing.WireFormatPublicMessage,
@@ -202,7 +202,7 @@ func TestConfirmedTranscriptHashInput_Compute(t *testing.T) {
 		t.Fatalf("NewConfirmedTranscriptHashInput failed: %v", err)
 	}
 
-	interimHash := make([]byte, 32) // hash previo (epoch 0 = zeros)
+	interimHash := make([]byte, 32) // Previous hash (epoch 0 = zeros)
 	hash, err := input.Compute(ciphersuite.MLS128DHKEMP256, interimHash)
 	if err != nil {
 		t.Fatalf("Compute failed: %v", err)
@@ -212,13 +212,13 @@ func TestConfirmedTranscriptHashInput_Compute(t *testing.T) {
 		t.Errorf("Hash should be 32 bytes (SHA-256), got %d", len(hash))
 	}
 
-	// Mismo input → mismo hash (determinístico)
+	// Same input produces same hash (deterministic)
 	hash2, _ := input.Compute(ciphersuite.MLS128DHKEMP256, interimHash)
 	if !bytes.Equal(hash, hash2) {
 		t.Error("Same input should produce same hash")
 	}
 
-	// Diferente interimHash → diferente resultado
+	// Different interimHash produces different result
 	interimHash2 := make([]byte, 32)
 	interimHash2[0] = 0xFF
 	hash3, _ := input.Compute(ciphersuite.MLS128DHKEMP256, interimHash2)
@@ -227,7 +227,7 @@ func TestConfirmedTranscriptHashInput_Compute(t *testing.T) {
 	}
 }
 
-// TestInterimTranscriptHashInput_Compute prueba el cálculo del interim hash.
+// TestInterimTranscriptHashInput_Compute tests interim hash computation.
 func TestInterimTranscriptHashInput_Compute(t *testing.T) {
 	input := &framing.InterimTranscriptHashInput{
 		ConfirmationTag: []byte{0xAA, 0xBB, 0xCC},
@@ -240,13 +240,13 @@ func TestInterimTranscriptHashInput_Compute(t *testing.T) {
 		t.Errorf("Hash should be 32 bytes (SHA-256), got %d", len(hash))
 	}
 
-	// Determinístico
+	// Deterministic
 	hash2 := input.Compute(ciphersuite.MLS128DHKEMP256, confirmedHash)
 	if !bytes.Equal(hash, hash2) {
 		t.Error("Same input should produce same hash")
 	}
 
-	// Diferente confirmedHash → diferente resultado
+	// Different confirmedHash produces different result
 	confirmedHash2 := make([]byte, 32)
 	confirmedHash2[0] = 0x01
 	hash3 := input.Compute(ciphersuite.MLS128DHKEMP256, confirmedHash2)
@@ -255,14 +255,14 @@ func TestInterimTranscriptHashInput_Compute(t *testing.T) {
 	}
 }
 
-// TestTranscriptHash_Chain prueba la cadena completa confirmed→interim.
+// TestTranscriptHash_Chain tests the complete confirmed→interim chain.
 func TestTranscriptHash_Chain(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 
-	// Epoch 0: hashes iniciales = "" (vacíos)
+	// Epoch 0: Initial hashes = "" (empty)
 	interim0 := []byte{}
 
-	// Epoch 1: un commit llega
+	// Epoch 1: A commit arrives
 	ac := &framing.AuthenticatedContent{
 		WireFormat: framing.WireFormatPublicMessage,
 		Content: framing.FramedContent{
@@ -291,23 +291,23 @@ func TestTranscriptHash_Chain(t *testing.T) {
 	}
 	interim1 := interimInput.Compute(cs, confirmed1)
 
-	// Ambos hashes deben ser de 32 bytes y distintos entre sí
+	// Both hashes should be 32 bytes and different from each other
 	if len(confirmed1) != 32 || len(interim1) != 32 {
-		t.Errorf("Hashes deben ser 32 bytes: confirmed=%d, interim=%d", len(confirmed1), len(interim1))
+		t.Errorf("Hashes should be 32 bytes: confirmed=%d, interim=%d", len(confirmed1), len(interim1))
 	}
 	if bytes.Equal(confirmed1, interim1) {
-		t.Error("confirmed y interim hash deben ser distintos")
+		t.Error("confirmed and interim hash should be different")
 	}
 }
 
 // ============================================================================
-// Tests de Padding configurable en Encrypt (smoke test con campo PaddingSize)
+// Configurable Padding in Encrypt Tests
 // ============================================================================
 
-// TestEncryptParams_PaddingSize verifica que EncryptParams acepta PaddingSize.
+// TestEncryptParams_PaddingSize verifies that EncryptParams accepts PaddingSize.
 func TestEncryptParams_PaddingSize(t *testing.T) {
-	// Solo verificamos que el campo existe y puede ser seteado sin compilar problemas.
-	// El test real de encrypt/decrypt requiere un SecretTree completo.
+	// Only verify that the field exists and can be set without compile issues.
+	// Real encrypt/decrypt test requires a complete SecretTree.
 	p := framing.EncryptParams{
 		PaddingSize: 16,
 		CipherSuite: ciphersuite.MLS128DHKEMP256,

@@ -8,8 +8,10 @@ import (
 	"github.com/mls-go/internal/tls"
 )
 
-// ConfirmedTranscriptHashInput serializa el input para calcular el confirmed_transcript_hash
-// de una época (RFC 9420 §6.2).
+// ConfirmedTranscriptHashInput serializes the input for computing confirmed_transcript_hash
+// for an epoch (RFC 9420 §6.2).
+//
+// Structure:
 //
 //	struct {
 //	    WireFormat wire_format;
@@ -20,15 +22,15 @@ import (
 // Hash: confirmed_transcript_hash[n] = Hash(interim_transcript_hash[n-1] || serialize(input))
 type ConfirmedTranscriptHashInput struct {
 	WireFormat WireFormat
-	Content    FramedContent // debe ser ContentTypeCommit
+	Content    FramedContent // Must be ContentTypeCommit
 	Signature  []byte
-	RawInput   []byte // alternative: raw wire bytes (WireFormat+FramedContent+signature) for interop use
+	RawInput   []byte // Alternative: raw wire bytes for interop use
 }
 
-// NewConfirmedTranscriptHashInput construye el input a partir de un AuthenticatedContent de commit.
+// NewConfirmedTranscriptHashInput builds the input from an AuthenticatedContent of type commit.
 func NewConfirmedTranscriptHashInput(ac *AuthenticatedContent) (*ConfirmedTranscriptHashInput, error) {
 	if ac.Content.ContentType() != ContentTypeCommit {
-		return nil, fmt.Errorf("%w: ConfirmedTranscriptHashInput requiere un commit", ErrInvalidContentType)
+		return nil, fmt.Errorf("%w: ConfirmedTranscriptHashInput requires a commit", ErrInvalidContentType)
 	}
 	var sig []byte
 	if ac.Auth.Signature != nil {
@@ -41,7 +43,7 @@ func NewConfirmedTranscriptHashInput(ac *AuthenticatedContent) (*ConfirmedTransc
 	}, nil
 }
 
-// Marshal serializa el input para el hash.
+// Marshal serializes the input for hashing.
 func (i *ConfirmedTranscriptHashInput) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(i.WireFormat))
@@ -50,24 +52,30 @@ func (i *ConfirmedTranscriptHashInput) Marshal() []byte {
 	return w.Bytes()
 }
 
-// Compute calcula confirmed_transcript_hash[n] = Hash(interimHash || serialize(i)).
+// Compute calculates confirmed_transcript_hash[n] = Hash(interimHash || serialize(i)).
 func (i *ConfirmedTranscriptHashInput) Compute(cs ciphersuite.CipherSuite, interimHash []byte) ([]byte, error) {
 	if i.Content.ContentType() != ContentTypeCommit {
-		return nil, fmt.Errorf("%w: ConfirmedTranscriptHashInput requiere un commit", ErrInvalidContentType)
+		return nil, fmt.Errorf("%w: ConfirmedTranscriptHashInput requires a commit", ErrInvalidContentType)
 	}
-	data := append(interimHash, i.Marshal()...)
+	data := make([]byte, 0, len(interimHash)+len(i.Marshal()))
+	data = append(data, interimHash...)
+	data = append(data, i.Marshal()...)
 	return hashByCipherSuite(cs, data), nil
 }
 
-// ComputeRaw calcula confirmed_transcript_hash[n] = Hash(interimHash || RawInput)
-// usando los bytes crudos del wire en lugar de re-serializar desde structs.
+// ComputeRaw calculates confirmed_transcript_hash[n] = Hash(interimHash || RawInput)
+// using raw wire bytes instead of re-serializing from structs.
 func (i *ConfirmedTranscriptHashInput) ComputeRaw(cs ciphersuite.CipherSuite, interimHash []byte) []byte {
-	data := append(interimHash, i.RawInput...)
+	data := make([]byte, 0, len(interimHash)+len(i.RawInput))
+	data = append(data, interimHash...)
+	data = append(data, i.RawInput...)
 	return hashByCipherSuite(cs, data)
 }
 
-// InterimTranscriptHashInput serializa el input para calcular el interim_transcript_hash
-// de una época (RFC 9420 §6.2).
+// InterimTranscriptHashInput serializes the input for computing interim_transcript_hash
+// for an epoch (RFC 9420 §6.2).
+//
+// Structure:
 //
 //	struct {
 //	    MAC confirmation_tag;
@@ -78,21 +86,23 @@ type InterimTranscriptHashInput struct {
 	ConfirmationTag []byte
 }
 
-// Marshal serializa el input para el hash.
+// Marshal serializes the input for hashing.
 func (i *InterimTranscriptHashInput) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteVLBytes(i.ConfirmationTag)
 	return w.Bytes()
 }
 
-// Compute calcula interim_transcript_hash[n] = Hash(confirmedHash || serialize(i)).
+// Compute calculates interim_transcript_hash[n] = Hash(confirmedHash || serialize(i)).
 func (i *InterimTranscriptHashInput) Compute(cs ciphersuite.CipherSuite, confirmedHash []byte) []byte {
-	data := append(confirmedHash, i.Marshal()...)
+	data := make([]byte, 0, len(confirmedHash)+len(i.Marshal()))
+	data = append(data, confirmedHash...)
+	data = append(data, i.Marshal()...)
 	return hashByCipherSuite(cs, data)
 }
 
-// hashByCipherSuite aplica el hash del cipher suite al input.
-// Actualmente solo soporta SHA-256 (MLS_128_DHKEMP256_AES128GCM_SHA256_P256).
+// hashByCipherSuite applies the cipher suite's hash to the input.
+// Currently only supports SHA-256 (MLS_128_DHKEMP256_AES128GCM_SHA256_P256).
 func hashByCipherSuite(_ ciphersuite.CipherSuite, data []byte) []byte {
 	h := sha256.Sum256(data)
 	return h[:]

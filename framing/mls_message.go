@@ -4,12 +4,15 @@ import (
 	"fmt"
 
 	"github.com/mls-go/internal/tls"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// MLSMessage es el wrapper de nivel superior para todos los mensajes MLS (RFC 9420 §6).
+// MLSMessage is the top-level wrapper for all MLS messages (RFC 9420 §6).
 //
-// En el wire, siempre se transmite como MLSMessage — nunca PublicMessage o PrivateMessage solos.
+// On the wire, messages are always transmitted as MLSMessage — never as
+// PublicMessage or PrivateMessage alone.
+//
+// Structure:
 //
 //	struct {
 //	    ProtocolVersion version = mls10;
@@ -23,28 +26,28 @@ import (
 //	    };
 //	} MLSMessage;
 //
-// Para Welcome, GroupInfo y KeyPackage (aún no implementados) se usan payloads opacos.
+// For Welcome, GroupInfo, and KeyPackage (not yet implemented) opaque payloads are used.
 type MLSMessage struct {
-	// Exactamente uno de estos campos es no-nil.
+	// Exactly one of these fields is non-nil.
 	PublicMessage  *PublicMessage
 	PrivateMessage *PrivateMessage
-	// Payloads opacos hasta que Welcome/GroupInfo/KeyPackage estén implementados.
+	// Opaque payloads until Welcome/GroupInfo/KeyPackage are implemented.
 	Welcome    []byte
 	GroupInfo  []byte
 	KeyPackage []byte
 }
 
-// NewMLSMessagePublic crea un MLSMessage desde un PublicMessage.
+// NewMLSMessagePublic creates an MLSMessage from a PublicMessage.
 func NewMLSMessagePublic(pm *PublicMessage) *MLSMessage {
 	return &MLSMessage{PublicMessage: pm}
 }
 
-// NewMLSMessagePrivate crea un MLSMessage desde un PrivateMessage.
+// NewMLSMessagePrivate creates an MLSMessage from a PrivateMessage.
 func NewMLSMessagePrivate(pm *PrivateMessage) *MLSMessage {
 	return &MLSMessage{PrivateMessage: pm}
 }
 
-// WireFormat retorna el wire_format del mensaje.
+// WireFormat returns the wire_format of the message.
 func (m *MLSMessage) WireFormat() WireFormat {
 	switch {
 	case m.PublicMessage != nil:
@@ -62,7 +65,7 @@ func (m *MLSMessage) WireFormat() WireFormat {
 	}
 }
 
-// AsPrivate retorna el PrivateMessage y true si el mensaje es cifrado.
+// AsPrivate returns the PrivateMessage and true if the message is encrypted.
 func (m *MLSMessage) AsPrivate() (*PrivateMessage, bool) {
 	if m.PrivateMessage != nil {
 		return m.PrivateMessage, true
@@ -70,7 +73,7 @@ func (m *MLSMessage) AsPrivate() (*PrivateMessage, bool) {
 	return nil, false
 }
 
-// AsPublic retorna el PublicMessage y true si el mensaje es en claro.
+// AsPublic returns the PublicMessage and true if the message is cleartext.
 func (m *MLSMessage) AsPublic() (*PublicMessage, bool) {
 	if m.PublicMessage != nil {
 		return m.PublicMessage, true
@@ -78,11 +81,11 @@ func (m *MLSMessage) AsPublic() (*PublicMessage, bool) {
 	return nil, false
 }
 
-// Marshal serializa el MLSMessage para transmisión.
+// Marshal serializes the MLSMessage for transmission.
 //
 // Wire encoding: version(2) + wire_format(2) + payload.
-// Como PublicMessage.Marshal() y PrivateMessage.Marshal() ya incluyen el wire_format
-// como primer campo, simplemente se antepone la versión.
+// Since PublicMessage.Marshal() and PrivateMessage.Marshal() already include
+// the wire_format as the first field, we simply prepend the version.
 func (m *MLSMessage) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(keypackages.MLS10))
@@ -106,8 +109,8 @@ func (m *MLSMessage) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalMLSMessage parsea un MLSMessage desde su representación wire.
-// Incluye el version prefix (2 bytes) al inicio.
+// UnmarshalMLSMessage parses an MLSMessage from its wire representation.
+// Includes the version prefix (2 bytes) at the beginning.
 func UnmarshalMLSMessage(data []byte) (*MLSMessage, error) {
 	r := tls.NewReader(data)
 
@@ -119,8 +122,8 @@ func UnmarshalMLSMessage(data []byte) (*MLSMessage, error) {
 		return nil, fmt.Errorf("%w: unsupported protocol version %d", ErrInvalidMessage, version)
 	}
 
-	// Peek wire_format para elegir el parser; luego delegamos con los datos restantes
-	// (que empiezan con wire_format, tal como esperan UnmarshalPublicMessage/PrivateMessage).
+	// Peek wire_format to choose parser; then delegate with remaining data
+	// (which starts with wire_format, as expected by UnmarshalPublicMessage/PrivateMessage).
 	remaining := r.BytesAfterPosition()
 
 	if len(remaining) < 2 {

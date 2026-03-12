@@ -49,10 +49,11 @@ func parseConfirmedTHInput(ac []byte) (cthInput, confirmationTag []byte, err err
 	}
 	readVLLen := func() int {
 		b := ac[pos]
-		if b&0xC0 == 0 {
+		switch b & 0xC0 {
+		case 0:
 			pos++
 			return int(b)
-		} else if b&0xC0 == 0x40 {
+		case 0x40:
 			n := (int(b&0x3F) << 8) | int(ac[pos+1])
 			pos += 2
 			return n
@@ -147,7 +148,7 @@ func TestTranscriptHashVectors(t *testing.T) {
 				t.Fatalf("parseConfirmedTHInput: %v", err)
 			}
 
-			// confirmed_transcript_hash_after = Hash(interim_before || ConfirmedTranscriptHashInput)
+			// RFC 9420: confirmed_transcript_hash_after equals Hash of interim_before concatenated with ConfirmedTranscriptHashInput
 			cthi := &framing.ConfirmedTranscriptHashInput{
 				RawInput: cthInput,
 			}
@@ -156,7 +157,7 @@ func TestTranscriptHashVectors(t *testing.T) {
 				t.Errorf("confirmed_transcript_hash_after mismatch\n  got  %x\n  want %x", confirmed, expectedConfirmed)
 			}
 
-			// interim_transcript_hash_after = Hash(confirmed || VL(confirmation_tag))
+			// RFC 9420: interim_transcript_hash_after equals Hash of confirmed concatenated with variable-length confirmation_tag
 			ithi := &framing.InterimTranscriptHashInput{ConfirmationTag: confirmationTag}
 			interimAfter := ithi.Compute(cs, confirmed)
 			if !bytes.Equal(interimAfter, expectedInterimAfter) {
