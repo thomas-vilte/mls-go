@@ -351,7 +351,7 @@ func (g *Group) CommitWithFormat(
 		}
 	}
 
-	// 3. Generate UpdatePath if necessary (RFC §12.4.1)
+	// Generate UpdatePath if necessary (RFC §12.4.1)
 	var updatePath *UpdatePath
 	var commitSecret *ciphersuite.Secret
 
@@ -361,7 +361,7 @@ func (g *Group) CommitWithFormat(
 		return nil, fmt.Errorf("creating update path: %w", err)
 	}
 
-	// 4. Construir Commit struct
+	// Build Commit structure
 	commit := &Commit{
 		Proposals: make([]ProposalOrRef, len(proposals)),
 		Path:      updatePath,
@@ -373,7 +373,7 @@ func (g *Group) CommitWithFormat(
 		}
 	}
 
-	// 5. Create AuthenticatedContent and sign
+	// Create AuthenticatedContent and sign
 	content := framing.FramedContent{
 		GroupID: g.GroupID.AsSlice(),
 		Epoch:   g.Epoch.AsUint64(),
@@ -395,7 +395,7 @@ func (g *Group) CommitWithFormat(
 	}
 	ac.Auth.Signature = sig
 
-	// 6. Compute confirmed_transcript_hash (RFC §8.2)
+	// Compute confirmed_transcript_hash (RFC §8.2)
 	cthi, err := framing.NewConfirmedTranscriptHashInput(ac)
 	if err != nil {
 		return nil, fmt.Errorf("creating transcript hash input: %w", err)
@@ -451,7 +451,7 @@ func (g *Group) CommitWithFormat(
 
 	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
 
-	// 7. Create StagedCommit with precomputed values for committer
+	// Create StagedCommit with precomputed values for committer
 	stagedCommit := &StagedCommit{
 		Commit:                  commit,
 		Proposals:               proposals,
@@ -1044,7 +1044,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
-	// 1. Apply proposals to the ratchet tree
+	// Apply proposals to the ratchet tree
 	senderIdx := g.OwnLeafIndex
 	if stagedCommit.AuthenticatedContent != nil {
 		if stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
@@ -1133,13 +1133,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
-	// 1.2 Aplicar UpdatePath si existe
+	// Apply UpdatePath if it exists
 	if stagedCommit.Commit.Path != nil {
 		senderLeafIdx := treesync.LeafIndex(senderIdx)
 		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
-		// RFC §12.4.2: verificar firma del nuevo leaf node del committer (source=commit,
-		// TBS incluye group_id y leaf_index per RFC §7.2).
+		// RFC §12.4.2: verify signature of the new committer leaf node (source=commit,
+		// TBS includes group_id and leaf_index per RFC §7.2).
 		if err := leafNodeData.VerifyWithContext(g.CipherSuite, g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx)); err != nil {
 			return fmt.Errorf("UpdatePath leaf node signature invalid: %w", err)
 		}
@@ -1209,10 +1209,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
-	// 2. Recompute TreeHash from treesync
+	// Recompute TreeHash from treesync
 	treeHash := g.RatchetTree.TreeHash()
 
-	// 3. Compute ConfirmedTranscriptHash nuevo
+	// Compute ConfirmedTranscriptHash nuevo
 	cthi, err := framing.NewConfirmedTranscriptHashInput(stagedCommit.AuthenticatedContent)
 	if err != nil {
 		return fmt.Errorf("creating transcript hash input: %w", err)
@@ -1225,7 +1225,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if err != nil {
 		return fmt.Errorf("calculating confirmed transcript hash: %w", err)
 	}
-	// 4. Compute InterimTranscriptHash nuevo
+	// Compute InterimTranscriptHash nuevo
 	itHashInput := &framing.InterimTranscriptHashInput{
 		ConfirmationTag: stagedCommit.AuthenticatedContent.Auth.ConfirmationTag,
 	}
@@ -1235,7 +1235,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		confirmedTranscriptHash,
 	)
 
-	// 5. Update GroupContext (RFC §8.1)
+	// Update GroupContext (RFC §8.1)
 	g.GroupContext.IncrementEpoch()
 	g.GroupContext.UpdateTreeHash(treeHash)
 	g.GroupContext.UpdateConfirmedTranscriptHash(confirmedTranscriptHash)
@@ -1244,16 +1244,20 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	g.Epoch = g.GroupContext.Epoch
 	g.InterimTranscriptHash = interimTranscriptHash
 	g.ConfirmationTag = stagedCommit.AuthenticatedContent.Auth.ConfirmationTag
-	// 6. Advance key schedule → new EpochSecrets
+
+	// Advance key schedule to new EpochSecrets
 	if stagedCommit.PrecomputedEpochSecrets != nil {
 		// Committer: use precomputed epoch secrets from Commit()
+
+		// Securely zero old epoch secrets before replacing them
+		// This prevents old secrets from lingering in memory
+		if g.EpochSecrets != nil {
+			g.EpochSecrets.Zero()
+		}
+
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
-		// Receiver: derive from init_secret of the current epoch
-		fmt.Printf("[DEBUG MergeCommit receiver] g.EpochSecrets ptr: %p, InitSecret ptr: %p\n", g.EpochSecrets, g.EpochSecrets.InitSecret)
-		if g.EpochSecrets.InitSecret != nil {
-			fmt.Printf("[DEBUG MergeCommit receiver] InitSecret value[:4]: %x\n", g.EpochSecrets.InitSecret.AsSlice()[:min(4, len(g.EpochSecrets.InitSecret.AsSlice()))])
-		}
+		// Receiver: derive epoch secrets from init_secret of current epoch
 		initSecretForNewEpoch := g.EpochSecrets.InitSecret
 		for _, proposal := range stagedCommit.Proposals {
 			if proposal.Type != ProposalTypeExternalInit || proposal.ExternalInit == nil {
@@ -1288,11 +1292,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 
 		newGCBytes := g.GroupContext.Marshal()
-		fmt.Printf("[DEBUG MergeCommit] treeHash: %x\n", treeHash)
-		fmt.Printf("[DEBUG MergeCommit] confirmedTranscriptHash: %x\n", confirmedTranscriptHash)
-		fmt.Printf("[DEBUG MergeCommit] newGCBytes: %x\n", newGCBytes)
-		fmt.Printf("[DEBUG MergeCommit] initSecret first4: %x\n", initSecretForNewEpoch.AsSlice()[:4])
-		fmt.Printf("[DEBUG MergeCommit] commitSecret first4: %x\n", commitSecret.AsSlice()[:4])
+		// Derive epoch secrets for the new epoch
 		newKS := schedule.NewKeySchedule(g.CipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
 		if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
@@ -1316,14 +1316,19 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			newEpochSecrets.ConfirmationKey.AsSlice(),
 			confirmedTranscriptHash,
 		)
-		fmt.Printf("[DEBUG MergeCommit] expectedTag first4: %x\n", expectedTag[:4])
-		fmt.Printf("[DEBUG MergeCommit] commitTag first4: %x\n", stagedCommit.AuthenticatedContent.Auth.ConfirmationTag[:4])
 		if !ciphersuite.EqualCT(expectedTag, stagedCommit.AuthenticatedContent.Auth.ConfirmationTag) {
 			return fmt.Errorf("confirmation tag mismatch")
 		}
+
+		// Securely zero old epoch secrets before replacing them
+		// This prevents old secrets from lingering in memory
+		if g.EpochSecrets != nil {
+			g.EpochSecrets.Zero()
+		}
+
 		g.EpochSecrets = newEpochSecrets
 	}
-	// Inicializar key schedule para el próximo epoch
+	// Initialize key schedule for the next epoch
 	g.KeySchedule = schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
 
 	// Update secret tree for new epoch
@@ -1342,7 +1347,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		g.CachedPsks[rKey] = append([]byte(nil), g.EpochSecrets.ResumptionSecret.AsSlice()...)
 	}
 
-	// 7. Clean up state
+	// Clean up state
 	g.Proposals.Clear()
 	g.ProposalByRef = make(map[string]*Proposal)
 	g.PendingCommit = nil
