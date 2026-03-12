@@ -63,7 +63,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -273,13 +272,12 @@ func (c *Credential) Marshal() []byte {
 	case BasicCredential:
 		buf.WriteVLBytes(c.Identity)
 	case X509Credential:
-		// X509Credential: concatenate certs with length prefix
+		// RFC 9420 §5.3: each Certificate = opaque cert_data<V> (MLS varint length)
 		var certData []byte
 		for _, cert := range c.Certificates {
-			certLen := make([]byte, 2)
-			binary.BigEndian.PutUint16(certLen, uint16(len(cert)))
-			certData = append(certData, certLen...)
-			certData = append(certData, cert...)
+			cw := tls.NewWriter()
+			cw.WriteVLBytes(cert)
+			certData = append(certData, cw.Bytes()...)
 		}
 		buf.WriteVLBytes(certData)
 	default:
@@ -329,22 +327,15 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 			return nil, fmt.Errorf("reading cert_data: %w", err)
 		}
 
-		// Parse certificate chain
+		// RFC 9420 §5.3: each Certificate = opaque cert_data<V> (MLS varint length)
 		var certificates [][]byte
-		for len(certData) > 0 {
-			if len(certData) < 2 {
-				return nil, errors.New("invalid certificate chain encoding")
+		certReader := tls.NewReader(certData)
+		for certReader.Remaining() > 0 {
+			cert, err := certReader.ReadVLBytes()
+			if err != nil {
+				return nil, fmt.Errorf("reading certificate: %w", err)
 			}
-			certLen := binary.BigEndian.Uint16(certData[:2])
-			certData = certData[2:]
-
-			if len(certData) < int(certLen) {
-				return nil, errors.New("certificate chain truncated")
-			}
-			cert := make([]byte, certLen)
-			copy(cert, certData[:certLen])
 			certificates = append(certificates, cert)
-			certData = certData[certLen:]
 		}
 
 		return &Credential{
@@ -397,20 +388,15 @@ func UnmarshalCredentialFromReader(r *tls.Reader) (*Credential, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading cert_data: %w", err)
 		}
+		// RFC 9420 §5.3: each Certificate = opaque cert_data<V> (MLS varint length)
 		var certificates [][]byte
-		for len(certData) > 0 {
-			if len(certData) < 2 {
-				return nil, errors.New("invalid certificate chain encoding")
+		certReader := tls.NewReader(certData)
+		for certReader.Remaining() > 0 {
+			cert, err := certReader.ReadVLBytes()
+			if err != nil {
+				return nil, fmt.Errorf("reading certificate: %w", err)
 			}
-			certLen := binary.BigEndian.Uint16(certData[:2])
-			certData = certData[2:]
-			if len(certData) < int(certLen) {
-				return nil, errors.New("certificate chain truncated")
-			}
-			cert := make([]byte, certLen)
-			copy(cert, certData[:certLen])
 			certificates = append(certificates, cert)
-			certData = certData[certLen:]
 		}
 		return &Credential{
 			CredentialType: ct,
@@ -668,12 +654,19 @@ func GenerateCredentialWithKey(identity []byte) (*CredentialWithKey, *ecdsa.Priv
 		return nil, nil, fmt.Errorf("generating key pair: %w", err)
 	}
 
+	// Encode public key as uncompressed point per RFC 9420 §5.1.1 and RFC 8446
+	ecdhKey, err := privKey.ECDH()
+	if err != nil {
+		return nil, nil, fmt.Errorf("converting to ECDH key: %w", err)
+	}
+
 	cred := NewBasicCredential(identity)
 
 	credWithKey := &CredentialWithKey{
-		Credential:   cred,
-		SignatureKey: &privKey.PublicKey,
-		PrivateKey:   privKey,
+		Credential:        cred,
+		SignatureKey:      &privKey.PublicKey,
+		PrivateKey:        privKey,
+		SignatureKeyBytes: ecdhKey.PublicKey().Bytes(), // 0x04 || X || Y (65 bytes)
 	}
 
 	return credWithKey, privKey, nil
@@ -699,19 +692,26 @@ func GenerateCredentialWithKeyForCS(identity []byte, cs ciphersuite.CipherSuite)
 			SignatureKeyBytes: []byte(pub),
 		}
 		return credWithKey, sigPriv, nil
-	default: // ECDSA_SECP256R1_SHA256 (CS2)
+	case ciphersuite.ECDSA_SECP256R1_SHA256:
 		privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("generating P-256 key: %w", err)
 		}
+		ecdhKey, err := privKey.ECDH()
+		if err != nil {
+			return nil, nil, fmt.Errorf("converting to ECDH key: %w", err)
+		}
 		cred := NewBasicCredential(identity)
 		sigPriv := ciphersuite.NewSignaturePrivateKey(privKey)
 		credWithKey := &CredentialWithKey{
-			Credential:   cred,
-			SignatureKey: &privKey.PublicKey,
-			PrivateKey:   privKey,
+			Credential:        cred,
+			SignatureKey:      &privKey.PublicKey,
+			PrivateKey:        privKey,
+			SignatureKeyBytes: ecdhKey.PublicKey().Bytes(),
 		}
 		return credWithKey, sigPriv, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported cipher suite: %d", cs)
 	}
 }
 
@@ -733,21 +733,7 @@ func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*
 
 // Sign signs data with the credential's private key.
 //
-// Signature format is ECDSA-SHA256 as required by MLS (RFC 9420 §5.1.2).
-// Signature is encoded as R || S raw (64 bytes for P-256).
-//
-// # Signature Encoding
-//
-// ```text
-// ┌─────────────────────────────────────────┐
-// │      Signature (64 bytes)               │
-// ├─────────────────────────────────────────┤
-// │  R: 32 bytes (big-endian)               │
-// │  S: 32 bytes (big-endian)               │
-// └─────────────────────────────────────────┘
-// ```
-//
-// Note: This differs from DER encoding. MLS uses raw encoding for efficiency.
+// Signature is ASN.1 DER encoded as required by RFC 9420 §5.1.2 and RFC 8446.
 //
 // # Example
 //
@@ -755,26 +741,17 @@ func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*
 //	if err != nil {
 //	    return err
 //	}
-//	// signature: 64 bytes
 func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 	hash := sha256.Sum256(data)
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, hash[:])
+	sig, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
 	if err != nil {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
-
-	// Encode as R || S (64 bytes for P-256)
-	// FillBytes ensures always 32 bytes each
-	signature := make([]byte, 64)
-	r.FillBytes(signature[:32])
-	s.FillBytes(signature[32:])
-
-	return signature, nil
+	return sig, nil
 }
 
-// Verify verifies a signature using the credential's public key.
+// Verify verifies an ASN.1 DER encoded ECDSA signature per RFC 9420 §5.1.2.
 //
-// Expects signature in R || S format (64 bytes for P-256).
 // Returns true if signature is valid, false otherwise.
 //
 // # Example
@@ -785,16 +762,7 @@ func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 //	}
 func Verify(pubKey *ecdsa.PublicKey, data, signature []byte) bool {
 	hash := sha256.Sum256(data)
-
-	// Decode signature (R || S format, 64 bytes for P-256)
-	if len(signature) != 64 {
-		return false
-	}
-
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-
-	return ecdsa.Verify(pubKey, hash[:], r, s)
+	return ecdsa.VerifyASN1(pubKey, hash[:], signature)
 }
 
 // IsGREASE returns true if the credential is GREASE type.

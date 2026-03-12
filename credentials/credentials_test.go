@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -264,8 +265,9 @@ func TestSignVerify_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if len(sig) != 64 {
-		t.Errorf("signature len = %d, want 64 (raw R||S)", len(sig))
+	// DER-encoded ECDSA signatures for P-256 are variable length (typically 70-72 bytes)
+	if len(sig) == 0 {
+		t.Error("Sign returned empty signature")
 	}
 	if !credentials.Verify(&privKey.PublicKey, msg, sig) {
 		t.Error("Verify failed for valid signature")
@@ -390,6 +392,147 @@ func TestValidateX509Chain_NilCredential(t *testing.T) {
 	// This test documents that Validate with nil causes panic
 	// It's a known behavior that should be handled in production
 	t.Skip("Validate with nil credential panics - known issue")
+}
+
+// ============================================================================
+// GenerateCredentialWithKeyForCS Tests
+// ============================================================================
+
+func TestGenerateCredentialWithKeyForCS_AllSuites(t *testing.T) {
+	suites := []ciphersuite.CipherSuite{
+		ciphersuite.MLS128DHKEMX25519,
+		ciphersuite.MLS128DHKEMP256,
+		ciphersuite.MLS128DHKEMX25519ChaCha20,
+	}
+	for _, cs := range suites {
+		cwk, sigPriv, err := credentials.GenerateCredentialWithKeyForCS([]byte("test"), cs)
+		if err != nil {
+			t.Errorf("GenerateCredentialWithKeyForCS(%v): %v", cs, err)
+			continue
+		}
+		if cwk == nil {
+			t.Errorf("GenerateCredentialWithKeyForCS(%v): nil CredentialWithKey", cs)
+			continue
+		}
+		if sigPriv == nil {
+			t.Errorf("GenerateCredentialWithKeyForCS(%v): nil SignaturePrivateKey", cs)
+		}
+		if cwk.Credential == nil {
+			t.Errorf("GenerateCredentialWithKeyForCS(%v): nil Credential", cs)
+		}
+	}
+}
+
+func TestGenerateCredentialWithKeyForCS_Unsupported(t *testing.T) {
+	_, _, err := credentials.GenerateCredentialWithKeyForCS([]byte("test"), ciphersuite.CipherSuite(0x0099))
+	if err == nil {
+		t.Fatal("expected error for unsupported cipher suite")
+	}
+}
+
+// ============================================================================
+// GenerateCredentialWithKey SignatureKeyBytes
+// ============================================================================
+
+func TestGenerateCredentialWithKey_SignatureKeyBytes(t *testing.T) {
+	cwk, _, err := credentials.GenerateCredentialWithKey([]byte("test"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	// Must be populated: uncompressed P-256 point = 65 bytes (0x04 || X || Y)
+	if len(cwk.SignatureKeyBytes) != 65 {
+		t.Errorf("SignatureKeyBytes len = %d, want 65", len(cwk.SignatureKeyBytes))
+	}
+	if cwk.SignatureKeyBytes[0] != 0x04 {
+		t.Errorf("SignatureKeyBytes[0] = 0x%02x, want 0x04 (uncompressed point)", cwk.SignatureKeyBytes[0])
+	}
+}
+
+// ============================================================================
+// X509 wire format — RFC 9420 §5.3 exact encoding
+// ============================================================================
+
+// TestX509CredentialWireFormat verifies that each certificate is wrapped in a
+// Certificate struct with MLS varint length prefix per RFC 9420 §5.3.
+func TestX509CredentialWireFormat(t *testing.T) {
+	certDER, _ := generateTestCertificate(t)
+	cred := credentials.NewX509Credential([][]byte{certDER})
+	data := cred.Marshal()
+
+	r := tls.NewReader(data)
+
+	// credential_type: uint16 = 0x0002 (X509)
+	credType, err := r.ReadUint16()
+	if err != nil {
+		t.Fatalf("ReadUint16: %v", err)
+	}
+	if credType != uint16(credentials.X509Credential) {
+		t.Fatalf("credential_type = 0x%04x, want 0x%04x", credType, credentials.X509Credential)
+	}
+
+	// outer vector: certificates<V>
+	outer, err := r.ReadVLBytes()
+	if err != nil {
+		t.Fatalf("outer ReadVLBytes: %v", err)
+	}
+
+	// inner: one Certificate = cert_data<V>
+	inner := tls.NewReader(outer)
+	cert, err := inner.ReadVLBytes()
+	if err != nil {
+		t.Fatalf("inner ReadVLBytes (cert_data): %v", err)
+	}
+	if inner.Remaining() != 0 {
+		t.Errorf("unexpected bytes after certificate: %d remaining", inner.Remaining())
+	}
+	if !bytes.Equal(cert, certDER) {
+		t.Error("cert_data mismatch")
+	}
+}
+
+// ============================================================================
+// UnmarshalCredentialFromReader edge cases
+// ============================================================================
+
+func TestUnmarshalCredentialFromReader_Nil(t *testing.T) {
+	// type=0 (nil placeholder)
+	w := tls.NewWriter()
+	w.WriteUint16(0x0000)
+	w.WriteVLBytes(nil)
+	r := tls.NewReader(w.Bytes())
+	cred, err := credentials.UnmarshalCredentialFromReader(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cred != nil {
+		t.Errorf("expected nil credential for type=0, got %v", cred)
+	}
+}
+
+func TestUnmarshalCredentialFromReader_Unknown(t *testing.T) {
+	// unknown non-GREASE type with body
+	w := tls.NewWriter()
+	w.WriteUint16(0x9999)
+	w.WriteVLBytes([]byte("body"))
+	r := tls.NewReader(w.Bytes())
+	cred, err := credentials.UnmarshalCredentialFromReader(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cred == nil {
+		t.Fatal("expected non-nil credential for unknown type")
+	}
+}
+
+// ============================================================================
+// validateBasic edge cases
+// ============================================================================
+
+func TestBasicCredentialValidate_TooLong(t *testing.T) {
+	identity := make([]byte, 65536) // > 65535
+	if err := credentials.NewBasicCredential(identity).Validate(); err == nil {
+		t.Fatal("expected error for identity > 65535 bytes")
+	}
 }
 
 // ============================================================================
