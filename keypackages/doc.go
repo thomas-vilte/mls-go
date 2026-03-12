@@ -65,7 +65,7 @@
 // |----|------|-----|-----|------|-----------|
 // | 0x0001 | MLS128DHKEMX25519 | X25519 | AES-128-GCM | SHA-256 | Ed25519 |
 // | 0x0002 | MLS128DHKEMP256 | P-256 | AES-128-GCM | SHA-256 | ECDSA-P256 |
-// | 0x0003 | MLS256DHKEMX25519ChaCha20 | X25519 | ChaCha20Poly1305 | SHA-256 | Ed25519 |
+// | 0x0003 | MLS128DHKEMX25519ChaCha20 | X25519 | ChaCha20Poly1305 | SHA-256 | Ed25519 |
 //
 // # Usage
 //

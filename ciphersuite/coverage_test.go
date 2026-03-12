@@ -310,18 +310,10 @@ func TestHpkeCiphertext(t *testing.T) {
 	}
 }
 
-// TestSignAndVerify prueba las funciones Sign y Verify del package signable.
-func TestSignAndVerify(t *testing.T) {
-	// Las funciones Sign y Verify existen y son exportadas
-	// Verificamos que compilan correctamente siendo llamadas
-	_ = Sign
-	_ = Verify
+// TestSignAndVerify verifies SignWithLabel and VerifyWithLabel are exported.
+func TestSignAndVerify(_ *testing.T) {
 	_ = VerifyWithLabel
 	_ = SignWithLabel
-
-	// Test básico - solo verificamos que las funciones están disponibles
-	// (no las ejecutamos porque requieren interfaces complejas)
-	t.Log("Sign, Verify, SignWithLabel, VerifyWithLabel functions exist")
 }
 
 // BenchmarkHashReference mide el performance de HashReference.

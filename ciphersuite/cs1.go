@@ -206,7 +206,7 @@ func DeriveKeyPairX25519(ikm []byte) (pubKey, privKey []byte, err error) {
 // Supports CS1 (X25519), CS2 (P256), and CS3 (X25519).
 func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, sharedSecret []byte, err error) {
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, nil, err
@@ -259,7 +259,7 @@ func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, share
 // Supports CS1 (X25519), CS2 (P256), and CS3 (X25519).
 func DecapToBytes(enc, privKeyBytes []byte, cs CipherSuite) ([]byte, error) {
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		priv, err := ecdh.X25519().NewPrivateKey(privKeyBytes)
 		if err != nil {
 			return nil, err

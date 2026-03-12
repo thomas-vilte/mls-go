@@ -367,7 +367,6 @@ func (g *Group) CommitWithContext(
 	// Clone tree, apply proposals provisionally.
 	// Track newly added leaves (Add proposals) to exclude them from
 	// UpdatePath encryption (RFC §12.4.1: new members get commit_secret via Welcome).
-	fmt.Printf("[DEBUG Commit] g.RatchetTree.TreeHash before proposals: %x\n", g.RatchetTree.TreeHash())
 	treeDiff := g.RatchetTree.Clone()
 	excluded := make(map[treesync.LeafIndex]bool)
 	for _, fp := range filtered {
@@ -451,11 +450,6 @@ func (g *Group) CommitWithContext(
 
 	// Advance key schedule to compute confirmation_key del nuevo epoch
 	newGCBytes := newGC.Marshal()
-	fmt.Printf("[DEBUG Commit] newTreeHash: %x\n", newTreeHash)
-	fmt.Printf("[DEBUG Commit] confirmedHash: %x\n", confirmedHash)
-	fmt.Printf("[DEBUG Commit] newGCBytes: %x\n", newGCBytes)
-	fmt.Printf("[DEBUG Commit] initSecret first4: %x\n", g.EpochSecrets.InitSecret.AsSlice()[:4])
-	fmt.Printf("[DEBUG Commit] commitSecret first4: %x\n", commitSecret.AsSlice()[:4])
 	newKS := schedule.NewKeySchedule(g.CipherSuite, g.EpochSecrets.InitSecret)
 	newKS.SetCommitSecret(commitSecret)
 	if _, err = newKS.ComputeJoinerSecret(newGCBytes); err != nil {
@@ -478,7 +472,6 @@ func (g *Group) CommitWithContext(
 		newEpochSecrets.ConfirmationKey.AsSlice(),
 		confirmedHash,
 	)
-	fmt.Printf("[DEBUG Commit] confirmationTag first4: %x\n", confirmationTag[:4])
 	ac.Auth.ConfirmationTag = confirmationTag
 
 	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
@@ -644,12 +637,10 @@ func (g *Group) createUpdatePath(
 	}
 	leafNodeData.Signature = sig.AsSlice()
 
-	fmt.Printf("[DEBUG sender] treeDiff hash before SetLeaf: %x\n", tree.TreeHash())
 	// Apply leaf to tree for provisional tree hash computation.
 	if err := tree.SetLeaf(senderLeafIdx, *leafNodeData); err != nil {
 		return nil, nil, fmt.Errorf("setting leaf in tree: %w", err)
 	}
-	fmt.Printf("[DEBUG sender] treeDiff hash after SetLeaf: %x\n", tree.TreeHash())
 
 	// Compute provisional GroupContext (RFC §12.4.1: next epoch + tree_hash_after).
 	provGCBytes := (&GroupContext{
@@ -661,7 +652,6 @@ func (g *Group) createUpdatePath(
 		ConfirmedTranscriptHash: g.GroupContext.ConfirmedTranscriptHash,
 		Extensions:              g.GroupContext.Extensions,
 	}).Marshal()
-	fmt.Printf("[DEBUG createUpdatePath] provGCBytes: %x\n", provGCBytes)
 
 	// Encrypt path secrets for each filtered level using provisional GC as context.
 	nodes := make([]UpdatePathNode, F)
@@ -686,7 +676,6 @@ func (g *Group) createUpdatePath(
 			if err != nil {
 				return nil, nil, err
 			}
-			fmt.Printf("[DEBUG enc] resIdx=%d j=%d encKey first4=%x kem first4=%x ciph first4=%x\n", resIdx, j, encKeyBytes[:min(4, len(encKeyBytes))], ct.KEMOutput[:min(4, len(ct.KEMOutput))], ct.Ciphertext[:min(4, len(ct.Ciphertext))])
 			encryptedSecrets[j] = *ct
 		}
 		nodes[m] = UpdatePathNode{
@@ -926,7 +915,6 @@ func (g *Group) ProcessReceivedCommit(
 	sortProposalsByRFCOrder(proposals, proposalSenders)
 
 	// Build tree with proposals applied, tracking newly added leaves (exclusion list).
-	fmt.Printf("[DEBUG ProcessReceivedCommit] g.RatchetTree.TreeHash before proposals: %x\n", g.RatchetTree.TreeHash())
 	treeAfterProposals := g.RatchetTree.Clone()
 	excluded := make(map[treesync.LeafIndex]bool)
 	for i, p := range proposals {
@@ -956,10 +944,8 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
-		fmt.Printf("[DEBUG receiver] treeAfterProposals hash: %x\n", treeAfterProposals.TreeHash())
 		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
-		fmt.Printf("[DEBUG ProcessReceivedCommit] provGCBytes: %x\n", provGCBytes)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, myHpkePrivKeyBytes, provGCBytes, excluded)
 		if err != nil {
 			return fmt.Errorf("decrypting path secret: %w", err)
@@ -1003,7 +989,6 @@ func (g *Group) decryptPathSecret(
 				return nil, fmt.Errorf("path secret index out of bounds at filtered level %d", m)
 			}
 			ct := &updatePath.Nodes[m].EncryptedPathSecrets[j]
-			fmt.Printf("[DEBUG dec] m=%d j=%d kem first4=%x ciph first4=%x myPriv first4=%x\n", m, j, ct.KEMOutput[:min(4, len(ct.KEMOutput))], ct.Ciphertext[:min(4, len(ct.Ciphertext))], myPrivKeyBytes[:min(4, len(myPrivKeyBytes))])
 			psBytes, err := ciphersuite.DecryptWithLabel(
 				myPrivKeyBytes,
 				"UpdatePathNode",
@@ -1093,11 +1078,8 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				return fmt.Errorf("external commit missing update path")
 			}
 
-			fmt.Printf("[DEBUG MergeCommit] Before AddLeaf: NumLeaves=%d, tree size=%d\n", g.RatchetTree.NumLeaves, len(g.RatchetTree.Nodes))
-			extLeafIdx, extNodeIdx := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
+			extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
 			senderIdx = LeafNodeIndex(extLeafIdx)
-			fmt.Printf("[DEBUG MergeCommit] After AddLeaf: extLeafIdx=%d, extNodeIdx=%d, NumLeaves=%d, tree size=%d\n", extLeafIdx, extNodeIdx, g.RatchetTree.NumLeaves, len(g.RatchetTree.Nodes))
-			fmt.Printf("[DEBUG MergeCommit] External commit sender leaf node index: %d\n", senderIdx)
 		} else {
 			senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
 		}
@@ -1750,9 +1732,12 @@ func (g *Group) EpochAuthenticator() []byte {
 }
 
 // NewGroupFromReInit creates a successor group from a ReInit proposal.
+// oldGroupID must be the GroupID of the group that sent the ReInit proposal
+// (RFC §12.4.4: the resumption PSK ID references the old group, not the new one).
 func NewGroupFromReInit(
 	reInit *ReInitProposal,
 	resumptionSecret *ciphersuite.Secret,
+	oldGroupID []byte,
 	myKP *keypackages.KeyPackage,
 	myPriv *keypackages.KeyPackagePrivateKeys,
 ) (*Group, error) {
@@ -1761,6 +1746,9 @@ func NewGroupFromReInit(
 	}
 	if resumptionSecret == nil {
 		return nil, fmt.Errorf("resumption secret is nil")
+	}
+	if len(oldGroupID) == 0 {
+		return nil, fmt.Errorf("oldGroupID must not be nil or empty")
 	}
 	if myKP == nil || myPriv == nil {
 		return nil, fmt.Errorf("key package/private keys are nil")
@@ -1813,7 +1801,7 @@ func NewGroupFromReInit(
 
 	resumptionPsk := schedule.Psk{
 		PskType: schedule.PskTypeResumption,
-		PskID:   reInit.GroupID,
+		PskID:   oldGroupID,
 		Psk:     resumptionSecret.AsSlice(),
 	}
 	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {

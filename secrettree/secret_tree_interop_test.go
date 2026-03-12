@@ -69,13 +69,13 @@ func TestSecretTreeVectors(t *testing.T) {
 		// Solo testear cipher suites soportados
 		// CS=1: MLS_128_DHKEX255519_SHA256_Ed25519 (soportado, pero HPKE key schedule necesita fix)
 		// CS=2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (implementado) ✅
-		// CS=3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 (soportado, pero HPKE key schedule necesita fix)
+		// CS=3: MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 (soportado, pero HPKE key schedule necesita fix)
 		if !cs.IsSupported() {
 			continue
 		}
 
 		// TODO: Fix HPKE key schedule for cs=1 and cs=3
-		if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS256DHKEMX25519ChaCha20 {
+		if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
 			t.Logf("Skipping cs=%d (HPKE key schedule issue)", v.CipherSuite)
 			continue
 		}

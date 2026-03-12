@@ -47,7 +47,8 @@ func TestNewGroupFromReInit_Basic(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	g, err := NewGroupFromReInit(reInit, resumptionSecret, kp, priv)
+	oldGroupID := []byte("old-group-id")
+	g, err := NewGroupFromReInit(reInit, resumptionSecret, oldGroupID, kp, priv)
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}
@@ -62,6 +63,7 @@ func TestNewGroupFromReInit_GroupIDPreserved(t *testing.T) {
 	g, err := NewGroupFromReInit(
 		makeReInitProposal(groupID),
 		ciphersuite.NewSecret(bytes.Repeat([]byte{0x11}, 32)),
+		[]byte("old-group-id"),
 		kp, priv,
 	)
 	if err != nil {
@@ -77,6 +79,7 @@ func TestNewGroupFromReInit_EpochZero(t *testing.T) {
 	g, err := NewGroupFromReInit(
 		makeReInitProposal([]byte("gid")),
 		ciphersuite.NewSecret(bytes.Repeat([]byte{0x22}, 32)),
+		[]byte("old-group-id"),
 		kp, priv,
 	)
 	if err != nil {
@@ -92,6 +95,7 @@ func TestNewGroupFromReInit_OperationalState(t *testing.T) {
 	g, err := NewGroupFromReInit(
 		makeReInitProposal([]byte("gid")),
 		ciphersuite.NewSecret(bytes.Repeat([]byte{0x33}, 32)),
+		[]byte("old-group-id"),
 		kp, priv,
 	)
 	if err != nil {
@@ -107,6 +111,7 @@ func TestNewGroupFromReInit_SecretsNonNil(t *testing.T) {
 	g, err := NewGroupFromReInit(
 		makeReInitProposal([]byte("gid")),
 		ciphersuite.NewSecret(bytes.Repeat([]byte{0x44}, 32)),
+		[]byte("old-group-id"),
 		kp, priv,
 	)
 	if err != nil {
@@ -130,13 +135,13 @@ func TestNewGroupFromReInit_DifferentSecretsProduceDifferentEpochs(t *testing.T)
 	reInit := makeReInitProposal([]byte("gid"))
 	kp, priv := makeSingleKP(t)
 
-	g1, err := NewGroupFromReInit(reInit, ciphersuite.NewSecret(bytes.Repeat([]byte{0x01}, 32)), kp, priv)
+	g1, err := NewGroupFromReInit(reInit, ciphersuite.NewSecret(bytes.Repeat([]byte{0x01}, 32)), []byte("old-group-id"), kp, priv)
 	if err != nil {
 		t.Fatalf("g1: %v", err)
 	}
 
 	kp2, priv2 := makeSingleKP(t)
-	g2, err := NewGroupFromReInit(reInit, ciphersuite.NewSecret(bytes.Repeat([]byte{0x02}, 32)), kp2, priv2)
+	g2, err := NewGroupFromReInit(reInit, ciphersuite.NewSecret(bytes.Repeat([]byte{0x02}, 32)), []byte("old-group-id"), kp2, priv2)
 	if err != nil {
 		t.Fatalf("g2: %v", err)
 	}
@@ -151,7 +156,7 @@ func TestNewGroupFromReInit_DifferentSecretsProduceDifferentEpochs(t *testing.T)
 
 func TestNewGroupFromReInit_NilReInit(t *testing.T) {
 	kp, priv := makeSingleKP(t)
-	_, err := NewGroupFromReInit(nil, ciphersuite.NewSecret([]byte{0x01}), kp, priv)
+	_, err := NewGroupFromReInit(nil, ciphersuite.NewSecret([]byte{0x01}), []byte("old-group-id"), kp, priv)
 	if err == nil {
 		t.Error("expected error for nil ReInitProposal")
 	}
@@ -159,7 +164,7 @@ func TestNewGroupFromReInit_NilReInit(t *testing.T) {
 
 func TestNewGroupFromReInit_NilResumptionSecret(t *testing.T) {
 	kp, priv := makeSingleKP(t)
-	_, err := NewGroupFromReInit(makeReInitProposal([]byte("gid")), nil, kp, priv)
+	_, err := NewGroupFromReInit(makeReInitProposal([]byte("gid")), nil, []byte("old-group-id"), kp, priv)
 	if err == nil {
 		t.Error("expected error for nil resumption secret")
 	}
@@ -167,7 +172,7 @@ func TestNewGroupFromReInit_NilResumptionSecret(t *testing.T) {
 
 func TestNewGroupFromReInit_NilKeyPackage(t *testing.T) {
 	secret := ciphersuite.NewSecret(bytes.Repeat([]byte{0x01}, 32))
-	_, err := NewGroupFromReInit(makeReInitProposal([]byte("gid")), secret, nil, nil)
+	_, err := NewGroupFromReInit(makeReInitProposal([]byte("gid")), secret, []byte("old-group-id"), nil, nil)
 	if err == nil {
 		t.Error("expected error for nil KeyPackage")
 	}
