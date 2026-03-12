@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // Signature represents a digital signature as defined in RFC 9420 §5.1.2.
@@ -279,11 +279,11 @@ func (sc *SignContent) Marshal() []byte {
 }
 
 // ============================================================================
-// Signature Interfaces (based on OpenMLS Rust pattern)
+// Signature Interfaces (based on other implementation pattern)
 // ============================================================================
 
 // SignedStruct represents a struct that contains a signature.
-// This is the type-safe pattern used in the OpenMLS Rust implementation
+// This is the type-safe pattern used in the other implementation implementation
 // for signature verification.
 //
 // Example usage:

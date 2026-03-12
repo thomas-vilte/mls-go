@@ -36,7 +36,7 @@ En esta versión, nos enfocamos en alcanzar la plena conformidad con el estánda
 
 ### 🧪 Interoperabilidad y Estabilidad
 
-- Incorporamos una suite extensa de tests de interoperabilidad y vectores de prueba para validar la compatibilidad con implementaciones como OpenMLS.
+- Incorporamos una suite extensa de tests de interoperabilidad y vectores de prueba para validar la compatibilidad con implementaciones como other implementations.
 - Corregimos errores críticos en la derivación de claves privadas y en la serialización de datos.
 - Aseguramos la generación de claves privadas válidas durante los procesos de derivación.
 

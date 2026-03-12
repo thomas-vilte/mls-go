@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // ApplicationIDExtension adds an application-specific identifier to a KeyPackage.

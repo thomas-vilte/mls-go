@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/credentials"
 )
 
 func testLeaf(t *testing.T, id string) LeafNodeData {

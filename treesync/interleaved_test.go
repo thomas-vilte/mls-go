@@ -1,8 +1,9 @@
 package treesync_test
 
 import (
-	"github.com/mls-go/treesync"
 	"testing"
+
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 func TestNewRatchetTreeInterleaved(t *testing.T) {
@@ -17,7 +18,7 @@ func TestNewRatchetTreeInterleaved(t *testing.T) {
 		t.Errorf("Expected 4 leaves, got %d", tree.LeafCount())
 	}
 
-	// Raíz en n=4: root(4) = (1 << floor(log2(7))) - 1 = (1<<2)-1 = 3
+	// Root for n=4: root(4) = (1 << floor(log2(7))) - 1 = (1<<2)-1 = 3
 	root := tree.Root()
 	if root != 3 {
 		t.Errorf("Expected root at 3, got %d", root)

@@ -3,7 +3,7 @@ package extensions_test
 import (
 	"testing"
 
-	"github.com/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/extensions"
 )
 
 // Benchmarks para ApplicationIDExtension

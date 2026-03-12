@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
-	"github.com/mls-go/schedule"
-	"github.com/mls-go/secrettree"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
+	"github.com/thomas-vilte/mls-go/secrettree"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // Welcome represents an MLS Welcome message (RFC 9420 §12.4.3.1).
@@ -517,7 +517,7 @@ func JoinFromWelcome(
 			if pskBytes, ok := externalPsks[string(pskRef.ID)]; ok {
 				psks = append(psks, schedule.Psk{
 					PskType:  schedule.PskType(pskRef.PskType),
-					PskId:    pskRef.ID,
+					PskID:    pskRef.ID,
 					PskNonce: pskRef.Nonce,
 					Psk:      pskBytes,
 				})

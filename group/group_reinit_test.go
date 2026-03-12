@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 func makeReInitProposal(groupID []byte) *ReInitProposal {

@@ -4,7 +4,7 @@ import (
 	"crypto/ecdh"
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 const (
@@ -13,8 +13,8 @@ const (
 	nodeTypeParent uint8 = 2
 )
 
-// MarshalTree serializa el RatchetTree completo para transporte
-// (extensión ratchet_tree en GroupInfo, RFC §12.4.3.3).
+// MarshalTree serializes the complete RatchetTree for transport
+// (ratchet_tree extension in GroupInfo, RFC §12.4.3.3).
 func (t *RatchetTree) MarshalTree() []byte {
 	w := tls.NewWriter()
 	w.WriteUint32(t.NumLeaves)
@@ -54,7 +54,7 @@ func (t *RatchetTree) MarshalTree() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalTree deserializa un RatchetTree desde formato TLS.
+// UnmarshalTree deserializes a RatchetTree from TLS format.
 func UnmarshalTree(data []byte) (*RatchetTree, error) {
 	r := tls.NewReader(data)
 

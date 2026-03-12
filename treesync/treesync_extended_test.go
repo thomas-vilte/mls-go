@@ -1,4 +1,4 @@
-// Package treesync - Tests exhaustivos para LeafNode, Validation según RFC 9420
+// Package treesync - Exhaustive tests for LeafNode, Validation per RFC 9420
 package treesync
 
 import (
@@ -10,9 +10,9 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // ============================================================================
@@ -320,7 +320,7 @@ func sha256sum(b []byte) []byte {
 // ============================================================================
 
 func TestLeafNodeData_Verify_Valid(t *testing.T) {
-	// Crear leaf con firma válida usando ECDSA (como en el resto del código)
+	// Create leaf with valid signature using ECDSA (as in the rest of the code)
 	sigPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey failed: %v", err)
@@ -338,7 +338,7 @@ func TestLeafNodeData_Verify_Valid(t *testing.T) {
 		Lifetime:       &LeafNodeLifetime{NotBefore: 0, NotAfter: 9999999999},
 	}
 
-	// Firmar el TBS usando SignWithLabel (como en el código real)
+	// Sign the TBS using SignWithLabel (as in the real code)
 	tbsBytes := leaf.MarshalTBS()
 	sigPrivWrapper := ciphersuite.NewSignaturePrivateKey(sigPriv)
 	sig, err := ciphersuite.SignWithLabel(sigPrivWrapper, "LeafNodeTBS", tbsBytes)
@@ -347,14 +347,14 @@ func TestLeafNodeData_Verify_Valid(t *testing.T) {
 	}
 	leaf.Signature = sig.AsSlice()
 
-	// Verify debería retornar nil
+	// Verify should return nil
 	if err := leaf.Verify(ciphersuite.MLS128DHKEMP256); err != nil {
 		t.Errorf("Verify should succeed: %v", err)
 	}
 }
 
 func TestLeafNodeData_Verify_TamperedContent(t *testing.T) {
-	// Crear leaf firmado
+	// Create signed leaf
 	sigPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey failed: %v", err)
@@ -372,7 +372,7 @@ func TestLeafNodeData_Verify_TamperedContent(t *testing.T) {
 		Lifetime:       &LeafNodeLifetime{NotBefore: 0, NotAfter: 9999999999},
 	}
 
-	// Firmar
+	// Sign
 	tbsBytes := leaf.MarshalTBS()
 	sigPrivWrapper := ciphersuite.NewSignaturePrivateKey(sigPriv)
 	sig, err := ciphersuite.SignWithLabel(sigPrivWrapper, "LeafNodeTBS", tbsBytes)
@@ -381,22 +381,22 @@ func TestLeafNodeData_Verify_TamperedContent(t *testing.T) {
 	}
 	leaf.Signature = sig.AsSlice()
 
-	// Corromper el encryption key
+	// Corrupt the encryption key
 	originalKey := make([]byte, len(leaf.EncryptionKey))
 	copy(originalKey, leaf.EncryptionKey)
 	leaf.EncryptionKey[0] ^= 0xFF
 
-	// Verify debería fallar
+	// Verify should fail
 	if err := leaf.Verify(ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Error("Verify should fail with tampered content")
 	}
 
-	// Restaurar para cleanup
+	// Restore for cleanup
 	copy(leaf.EncryptionKey, originalKey)
 }
 
 func TestLeafNodeData_VerifyWithContext_KeyPackageSource(t *testing.T) {
-	// LeafNode de KeyPackage (source=1) no necesita group_id/leaf_index
+	// KeyPackage LeafNode (source=1) doesn't need group_id/leaf_index
 	sigPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey failed: %v", err)
@@ -414,7 +414,7 @@ func TestLeafNodeData_VerifyWithContext_KeyPackageSource(t *testing.T) {
 		Lifetime:       &LeafNodeLifetime{NotBefore: 0, NotAfter: 9999999999},
 	}
 
-	// Firmar con TBSWithContext (groupID=nil, leafIndex=0)
+	// Sign with TBSWithContext (groupID=nil, leafIndex=0)
 	tbsBytes := leaf.MarshalTBSWithContext(nil, 0)
 	sigPrivWrapper := ciphersuite.NewSignaturePrivateKey(sigPriv)
 	sig, err := ciphersuite.SignWithLabel(sigPrivWrapper, "LeafNodeTBS", tbsBytes)
@@ -423,14 +423,14 @@ func TestLeafNodeData_VerifyWithContext_KeyPackageSource(t *testing.T) {
 	}
 	leaf.Signature = sig.AsSlice()
 
-	// VerifyWithContext debería verificar OK
+	// VerifyWithContext should verify OK
 	if err := leaf.VerifyWithContext(ciphersuite.MLS128DHKEMP256, nil, 0); err != nil {
 		t.Errorf("VerifyWithContext should succeed for key_package source: %v", err)
 	}
 }
 
 func TestLeafNodeData_VerifyWithContext_CommitSource(t *testing.T) {
-	// LeafNode de Commit (source=3) necesita parent_hash
+	// Commit LeafNode (source=3) needs parent_hash
 	sigPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey failed: %v", err)
@@ -451,7 +451,7 @@ func TestLeafNodeData_VerifyWithContext_CommitSource(t *testing.T) {
 		Capabilities:   &LeafNodeCapabilities{ProtocolVersions: []uint16{1}},
 	}
 
-	// Firmar con TBSWithContext (groupID y leafIndex)
+	// Sign with TBSWithContext (groupID and leafIndex)
 	tbsBytes := leaf.MarshalTBSWithContext(groupID, 5)
 	sigPrivWrapper := ciphersuite.NewSignaturePrivateKey(sigPriv)
 	sig, err := ciphersuite.SignWithLabel(sigPrivWrapper, "LeafNodeTBS", tbsBytes)
@@ -460,19 +460,19 @@ func TestLeafNodeData_VerifyWithContext_CommitSource(t *testing.T) {
 	}
 	leaf.Signature = sig.AsSlice()
 
-	// VerifyWithContext con groupID y leafIndex correctos debería verificar OK
+	// VerifyWithContext with correct groupID and leafIndex should verify OK
 	if err := leaf.VerifyWithContext(ciphersuite.MLS128DHKEMP256, groupID, 5); err != nil {
 		t.Errorf("VerifyWithContext should succeed with correct context: %v", err)
 	}
 
-	// VerifyWithContext con groupID incorrecto debería fallar
+	// VerifyWithContext with wrong groupID should fail
 	if err := leaf.VerifyWithContext(ciphersuite.MLS128DHKEMP256, []byte("wrong-group"), 5); err == nil {
 		t.Error("VerifyWithContext should fail with wrong groupID")
 	}
 }
 
 func TestLeafNodeData_Verify_InvalidSignature(t *testing.T) {
-	// Crear leaf con firma inválida
+	// Create leaf with invalid signature
 	cred := credentials.NewBasicCredential([]byte("test-invalid-sig"))
 	encPriv, _ := ecdh.P256().GenerateKey(rand.Reader)
 	sigPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -487,14 +487,14 @@ func TestLeafNodeData_Verify_InvalidSignature(t *testing.T) {
 		Signature:      []byte("invalid-signature-bytes"),
 	}
 
-	// Verify debería fallar
+	// Verify should fail
 	if err := leaf.Verify(ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Error("Verify should fail with invalid signature")
 	}
 }
 
 func TestLeafNodeData_Verify_NilSignature(t *testing.T) {
-	// Crear leaf sin firma
+	// Create leaf without signature
 	cred := credentials.NewBasicCredential([]byte("test-nil-sig"))
 	encPriv, _ := ecdh.P256().GenerateKey(rand.Reader)
 	sigPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -509,7 +509,7 @@ func TestLeafNodeData_Verify_NilSignature(t *testing.T) {
 		Signature:      nil,
 	}
 
-	// Verify debería fallar
+	// Verify should fail
 	if err := leaf.Verify(ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Error("Verify should fail with nil signature")
 	}

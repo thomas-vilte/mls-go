@@ -3,7 +3,7 @@ package treesync
 import (
 	"crypto/sha256"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // ComputeParentHash computes the parent hash for a node (RFC 9420 §7.9).

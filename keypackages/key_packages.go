@@ -1,7 +1,3 @@
-// Package keypackages implements MLS KeyPackages according to RFC 9420 §10.
-//
-// KeyPackages are used to add new members to MLS groups.
-// They contain the member's public keys and capabilities.
 package keypackages
 
 import (
@@ -16,10 +12,10 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // CipherSuite represents an MLS cipher suite.
@@ -217,7 +213,8 @@ func generateHPKEKeyPair() (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return privKey, privKey.PublicKey(), nil
+	pubKey := privKey.PublicKey()
+	return privKey, pubKey, nil
 }
 
 // generateHPKEKeyPairForCS generates an HPKE key pair appropriate for the cipher suite.
@@ -229,7 +226,8 @@ func generateHPKEKeyPairForCS(cs ciphersuite.CipherSuite) (*ecdh.PrivateKey, *ec
 		if err != nil {
 			return nil, nil, err
 		}
-		return privKey, privKey.PublicKey(), nil
+		pubKey := privKey.PublicKey()
+		return privKey, pubKey, nil
 	default: // CS2 P-256
 		return generateHPKEKeyPair()
 	}
@@ -366,7 +364,7 @@ func (c *Capabilities) Marshal(buf *tls.Writer) {
 	// Credentials<V>
 	credBuf := tls.NewWriter()
 	for _, c := range c.Credentials {
-		credBuf.WriteUint16(uint16(c))
+		credBuf.WriteUint16(c)
 	}
 	buf.WriteVLBytes(credBuf.Bytes())
 }
@@ -592,75 +590,76 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	caps := &Capabilities{}
 
 	// protocol_versions<V>
-	verBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
+	verBytes, verReadErr := buf.ReadVLBytes()
+	if verReadErr != nil {
+		return nil, verReadErr
 	}
 	verReader := tls.NewReader(verBytes)
 	for verReader.Remaining() > 0 {
-		v, err := verReader.ReadUint16()
-		if err != nil {
+		v, verErr := verReader.ReadUint16()
+		if verErr != nil {
 			break
 		}
 		caps.ProtocolVersions = append(caps.ProtocolVersions, ProtocolVersion(v))
 	}
 
 	// cipher_suites<V>
-	csBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
+	csBytes, csReadErr := buf.ReadVLBytes()
+	if csReadErr != nil {
+		return nil, csReadErr
 	}
 	csReader := tls.NewReader(csBytes)
 	for csReader.Remaining() > 0 {
-		cs, err := csReader.ReadUint16()
-		if err != nil {
+		cs, csErr := csReader.ReadUint16()
+		if csErr != nil {
 			break
 		}
 		caps.CipherSuites = append(caps.CipherSuites, CipherSuite(cs))
 	}
 
 	// extensions<V>
-	extBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
+	extBytes, extReadErr := buf.ReadVLBytes()
+	if extReadErr != nil {
+		return nil, extReadErr
 	}
 	extReader := tls.NewReader(extBytes)
 	for extReader.Remaining() > 0 {
-		e, err := extReader.ReadUint16()
-		if err != nil {
+		e, extLoopErr := extReader.ReadUint16()
+		if extLoopErr != nil {
 			break
 		}
 		caps.Extensions = append(caps.Extensions, e)
 	}
 
 	// proposals<V>
-	propBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
+	propBytes, propReadErr := buf.ReadVLBytes()
+	if propReadErr != nil {
+		return nil, propReadErr
 	}
 	propReader := tls.NewReader(propBytes)
 	for propReader.Remaining() > 0 {
-		p, err := propReader.ReadUint16()
-		if err != nil {
+		p, propErr := propReader.ReadUint16()
+		if propErr != nil {
 			break
 		}
 		caps.Proposals = append(caps.Proposals, p)
 	}
 
 	// credentials<V>
-	credBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
+	credBytes, credErr := buf.ReadVLBytes()
+	if credErr != nil {
+		return nil, credErr
 	}
 	credReader := tls.NewReader(credBytes)
 	for credReader.Remaining() > 0 {
-		c, err := credReader.ReadUint16()
-		if err != nil {
+		c, readErr := credReader.ReadUint16()
+		if readErr != nil {
 			break
 		}
-		caps.Credentials = append(caps.Credentials, uint16(c))
+		caps.Credentials = append(caps.Credentials, c)
 	}
 
+	//nolint:nilerr // False positive: credErr was already handled above
 	return caps, nil
 }
 
@@ -710,35 +709,35 @@ func (ln *LeafNode) Validate() error {
 	return nil
 }
 
-// MarshalTBS serializa el KeyPackage TBS (To Be Signed) - versión pública.
+// MarshalTBS serializes the KeyPackage TBS (To Be Signed) - public version.
 // RFC 9420 §10.1: KeyPackageTBS = (version, cipher_suite, init_key, leaf_node, extensions)
 func (kp *KeyPackage) MarshalTBS() []byte {
 	return kp.marshalTBS()
 }
 
-// Verify verifica la firma del KeyPackage.
+// Verify verifies the KeyPackage signature.
 // RFC 9420 §10.1, §12.2: VerifyWithLabel(LeafNode.SignatureKey, "KeyPackageTBS", tbs, signature)
 func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
 	if kp.LeafNode == nil || (kp.LeafNode.SignatureKey == nil && len(kp.LeafNode.SignatureKeyBytes) == 0) {
 		return errors.New("keypackage: missing leaf node or signature key")
 	}
 
-	// serializar TBS
+	// Serialize TBS
 	tbs := kp.marshalTBS()
 
-	// obtener bytes de la clave publica de firma
+	// Get signature public key bytes
 	var pubKeyBytes []byte
 	if len(kp.LeafNode.SignatureKeyBytes) > 0 {
 		pubKeyBytes = kp.LeafNode.SignatureKeyBytes
 	} else {
-		// Usar treesync.MarshalSignatureKey para garantizar padding correcto a 32 bytes por coordenada.
+		// Use treesync.MarshalSignatureKey to ensure correct padding to 32 bytes per coordinate.
 		pubKeyBytes = treesync.MarshalSignatureKey(kp.LeafNode.SignatureKey)
 	}
 
-	// crear clave publica MLS
+	// Create MLS public key
 	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
 
-	// verificar firma
+	// Verify signature
 	sig := ciphersuite.NewSignature(kp.Signature)
 	if err := ciphersuite.VerifyWithLabel(pk, "KeyPackageTBS", tbs, sig); err != nil {
 		return fmt.Errorf("keypackage: signature verification failed: %w", err)

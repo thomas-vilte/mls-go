@@ -6,8 +6,8 @@ package extensions_test
 import (
 	"testing"
 
-	"github.com/mls-go/extensions"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // TestRatchetTreeExtension_New tests creation.

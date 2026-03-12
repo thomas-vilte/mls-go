@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/schedule"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/schedule"
 )
 
 type keyScheduleEpochVector struct {

@@ -1,4 +1,4 @@
-// Package treesync - Tests exhaustivos para Ratchet Tree según RFC 9420 §7
+// Package treesync - Exhaustive tests for Ratchet Tree per RFC 9420 §7
 package treesync
 
 import (
@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/credentials"
 )
 
 func createTestLeaf(t *testing.T, id string) LeafNodeData {

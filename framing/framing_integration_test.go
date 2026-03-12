@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/framing"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // ============================================================================

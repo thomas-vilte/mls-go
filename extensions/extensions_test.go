@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/extensions"
 )
 
 // TestExtensionMarshalUnmarshal tests basic extension serialization.

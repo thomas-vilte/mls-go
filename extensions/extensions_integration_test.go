@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/extensions"
 )
 
 // TestExtensions_Integration tests extension integration.

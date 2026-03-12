@@ -3,8 +3,8 @@ package treesync
 import (
 	"errors"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // UpdatePath represents a path through the tree used in Commit messages.
@@ -49,7 +49,12 @@ func (u *UpdatePath) Marshal() []byte {
 	return buf.Bytes()
 }
 
-// UnmarshalUpdatePath parses an UpdatePath from TLS format.
+// UnmarshalUpdatePath parses an UpdatePath from TLS format per RFC 9420 §7.6.
+//
+// Parameters:
+//   - data: Serialized UpdatePath bytes
+//
+// Returns the parsed UpdatePath, or an error if parsing fails.
 func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	buf := tls.NewReader(data)
 
@@ -93,6 +98,10 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 		})
 	}
 
+	if len(nodes) == 0 && leafNode == nil {
+		return nil, errors.New("empty UpdatePath")
+	}
+
 	return &UpdatePath{
 		LeafNode: leafNode,
 		Nodes:    nodes,
@@ -100,7 +109,19 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 }
 
 // DerivePathSecret derives a path secret from an HPKE shared secret.
-func DerivePathSecret(sharedSecret []byte, context []byte) (*PathSecret, error) {
+//
+// Parameters:
+//   - sharedSecret: The HPKE decapsulated shared secret
+//   - context: Context string for key derivation (currently unused, kept for API compatibility)
+//
+// Returns the derived PathSecret, or an error if the shared secret is empty.
+//
+// RFC 9420 §7.4.3:
+//
+//	path_secret[i] = KDF.Extract(path_secret[i-1], HPKE_output)
+//
+//nolint:gocritic // Keep separate parameters for clarity and future use
+func DerivePathSecret(sharedSecret []byte, _ []byte) (*PathSecret, error) {
 	if len(sharedSecret) == 0 {
 		return nil, errors.New("shared secret is empty")
 	}
@@ -110,15 +131,17 @@ func DerivePathSecret(sharedSecret []byte, context []byte) (*PathSecret, error) 
 	}, nil
 }
 
-// Validate validates an UpdatePath.
+// Validate validates an UpdatePath according to RFC 9420 §7.6.
+//
+// Checks:
+//   - leaf_node must not be nil
+//   - leaf_node must pass validation (RFC §7.3)
+//
+// Returns nil if valid, or an error describing the validation failure.
 func (u *UpdatePath) Validate() error {
 	if u.LeafNode == nil {
 		return errors.New("leaf_node is nil")
 	}
 
-	if err := u.LeafNode.Validate(); err != nil {
-		return err
-	}
-
-	return nil
+	return u.LeafNode.Validate()
 }

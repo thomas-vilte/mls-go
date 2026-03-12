@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/framing"
-	"github.com/mls-go/keypackages"
-	"github.com/mls-go/schedule"
-	"github.com/mls-go/secrettree"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
+	"github.com/thomas-vilte/mls-go/secrettree"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 type testUser struct {

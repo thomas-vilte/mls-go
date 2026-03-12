@@ -4,7 +4,7 @@ package extensions
 import (
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // LastResortExtension marks a KeyPackage for "last resort" use.

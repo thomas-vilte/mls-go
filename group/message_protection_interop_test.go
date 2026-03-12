@@ -9,11 +9,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/framing"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
-	"github.com/mls-go/secrettree"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/secrettree"
 )
 
 type messageProtectionVector struct {

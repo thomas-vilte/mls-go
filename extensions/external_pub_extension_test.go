@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/extensions"
 )
 
 // TestExternalPubExtension_MarshalUnmarshal tests serialization and deserialization.

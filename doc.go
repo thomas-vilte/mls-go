@@ -1,7 +1,7 @@
-// Package openmls implements the Messaging Layer Security (MLS) protocol.
+// Package mls implements the Messaging Layer Security (MLS) protocol.
 //
 // MLS is an end-to-end encryption protocol for group messaging, specified in RFC 9420.
-// This implementation is based on the OpenMLS Rust implementation.
+// This is a pure Go implementation of the protocol.
 //
 // # Getting Started
 //
@@ -46,7 +46,7 @@
 //	    log.Fatal(err)
 //	}
 //
-// To decrypt:
+// # To decrypt:
 //
 //	plaintext, err := group.Decrypt(ciphertext)
 //	if err != nil {
@@ -56,5 +56,4 @@
 // # References
 //
 //   - RFC 9420: https://datatracker.ietf.org/doc/html/rfc9420
-//   - OpenMLS (Rust): https://github.com/openmls/openmls
-package openmls
+package mls

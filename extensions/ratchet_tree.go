@@ -4,8 +4,8 @@ package extensions
 import (
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // RatchetTreeExtension contains the full ratchet tree for a group.
@@ -60,7 +60,7 @@ import (
 // # Parent Hash Validation
 //
 // Parent hashes ensure tree integrity. Each parent node contains a hash
-// of its children, creating a chain of trust from root to leaves.
+// of its children, creating a chain of tgo from root to leaves.
 //
 // # RFC Compliance
 //

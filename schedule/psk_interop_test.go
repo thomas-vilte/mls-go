@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 type pskVectorPsk struct {
@@ -56,7 +56,7 @@ func TestPskSecretVectors(t *testing.T) {
 			for _, p := range v.Psks {
 				psks = append(psks, Psk{
 					PskType:  PskTypeExternal,
-					PskId:    mustDecodeHex(t, p.PskID),
+					PskID:    mustDecodeHex(t, p.PskID),
 					PskNonce: mustDecodeHex(t, p.PskNonce),
 					Psk:      mustDecodeHex(t, p.Psk),
 				})

@@ -9,9 +9,9 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // Marshal serializes LeafNodeData to TLS format (RFC 9420 §7.2).
@@ -386,6 +386,15 @@ func (l *LeafNodeData) SigKeyBytes() []byte {
 	return MarshalSignatureKey(l.SignatureKey)
 }
 
+// MarshalSignatureKey marshals an ECDSA signature public key to bytes.
+//
+// Uses crypto/ecdh to get the uncompressed 65-byte P-256 point representation.
+// This avoids deprecated .X/.Y field access and ensures consistent encoding.
+//
+// Parameters:
+//   - key: ECDSA P-256 public key to marshal
+//
+// Returns the 65-byte uncompressed point format (0x04 || X || Y), or nil if marshaling fails.
 func MarshalSignatureKey(key *ecdsa.PublicKey) []byte {
 	if key == nil {
 		return nil
@@ -489,8 +498,18 @@ func (c *LeafNodeCapabilities) clone() *LeafNodeCapabilities {
 	return result
 }
 
-// Validate validates a node.
-func (n Node) Validate(index NodeIndex, numLeaves uint32) error {
+// Validate validates a node according to RFC 9420 §7.3.
+//
+// Parameters:
+//   - index: Node index in the tree
+//   - numLeaves: Total number of leaves (unused but kept for API compatibility)
+//
+// For leaf nodes (even indices):
+//   - If State is Present, LeafData must not be nil
+//
+// For parent nodes (odd indices):
+//   - If State is Present, EncryptionKey and ParentHash must not be nil
+func (n Node) Validate(index NodeIndex, _ uint32) error {
 	if index%2 == 0 {
 		if n.State == NodeStatePresent && n.LeafData == nil {
 			return errors.New("present leaf has nil LeafData")

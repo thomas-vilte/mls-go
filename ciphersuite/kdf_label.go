@@ -2,7 +2,7 @@
 package ciphersuite
 
 import (
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // KdfLabel represents a KDF label as defined in RFC 9420 §8.

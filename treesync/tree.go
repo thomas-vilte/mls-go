@@ -1,8 +1,10 @@
 // Package treesync implements MLS ratchet tree operations according to RFC 9420 §7.
 //
 // Uses RFC Appendix C interleaved representation:
-// - Leaves at indices 0, 2, 4, 6, ... (even)
-// - Parents at indices 1, 3, 5, 7, ... (odd)
+//   - Leaves at indices 0, 2, 4, 6, ... (even indices)
+//   - Parents at indices 1, 3, 5, 7, ... (odd indices)
+//
+// This layout enables O(1) leaf access and efficient tree traversal without pointers.
 package treesync
 
 import (
@@ -14,32 +16,72 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
-// NodeIndex represents a node in the tree (interleaved representation).
+// NodeIndex represents a node position in the interleaved tree.
+//
+// Even indices (0, 2, 4, ...) are leaves.
+// Odd indices (1, 3, 5, ...) are parents.
 type NodeIndex uint32
 
-// LeafIndex represents a leaf position.
+// LeafIndex represents a leaf position in the tree.
+//
+// Leaf index corresponds to tree node index: leaf i → node 2i.
 type LeafIndex uint32
 
 // NodeState represents the state of a node.
 type NodeState uint8
 
 const (
+	// NodeStateEmpty represents an empty node (no member assigned).
 	NodeStateEmpty NodeState = iota
+	// NodeStatePresent represents a node with valid data.
 	NodeStatePresent
+	// NodeStateBlank represents a blanked node (used in path blanking).
 	NodeStateBlank
 )
 
-// RatchetTree represents the MLS ratchet tree.
+// RatchetTree represents the MLS ratchet tree as defined in RFC 9420 §7.
+//
+// The tree uses interleaved array representation (RFC Appendix C):
+//   - Nodes slice contains 2N-1 nodes for N leaves
+//   - Leaves at even indices, parents at odd indices
+//   - Efficient O(1) access by index
+//
+// RFC 9420 §7.1:
+//
+//	struct {
+//	    HPKEPublicKey public_key;
+//	    opaque parent_hash<V>;
+//	} ParentNode;
+//
+// RFC 9420 §7.2:
+//
+//	struct {
+//	    HPKEPublicKey encryption_key<V>;
+//	    SignaturePublicKey signature_key<V>;
+//	    Credential credential;
+//	    // ... more fields
+//	} LeafNode;
 type RatchetTree struct {
 	Nodes     []Node
 	NumLeaves uint32
 }
 
-// Node represents a node in the tree.
+// Node represents a node in the ratchet tree.
+//
+// A node can be a leaf (even index) or parent (odd index).
+// The State field indicates if the node is empty, present, or blank.
+//
+// For leaf nodes (State == NodeStatePresent):
+//   - LeafData contains the member's credentials and keys
+//
+// For parent nodes (State == NodeStatePresent):
+//   - EncryptionKey: HPKE public key for encrypting path secrets
+//   - ParentHash: Hash chain for tree integrity (RFC §7.9)
+//   - UnmergedLeaves: Leaves not updated through this parent
 type Node struct {
 	State          NodeState
 	EncryptionKey  *ecdh.PublicKey
@@ -48,7 +90,35 @@ type Node struct {
 	LeafData       *LeafNodeData
 }
 
-// LeafNodeData contains leaf-specific data.
+// LeafNodeData contains leaf-specific data as defined in RFC 9420 §7.2.
+//
+// RFC 9420 §7.2 structure:
+//
+//	struct {
+//	    HPKEPublicKey encryption_key<V>;
+//	    SignaturePublicKey signature_key<V>;
+//	    Credential credential;
+//	    Capabilities capabilities;
+//	    LeafNodeSource leaf_node_source;
+//	    select (leaf_node_source) {
+//	        case key_package: Lifetime lifetime;
+//	        case update: struct{};
+//	        case commit: opaque parent_hash<V>;
+//	    }
+//	    Extension extensions<V>;
+//	    opaque signature<V>;
+//	} LeafNode;
+//
+// Fields:
+//   - EncryptionKey: HPKE public key for encrypting to this member
+//   - SignatureKey/SignatureKeyRaw: ECDSA/Ed25519 signature verification key
+//   - Credential: Identity credential (Basic, X509, etc.)
+//   - Capabilities: Supported protocol versions, cipher suites, etc.
+//   - LeafNodeSource: How node was created (1=key_package, 2=update, 3=commit)
+//   - Lifetime: Validity period (only for key_package source)
+//   - ParentHash: Hash chain for tree integrity (only for commit source)
+//   - Extensions: Optional extensions
+//   - Signature: Signature over TBS (To-Be-Signed) content
 type LeafNodeData struct {
 	Credential      *credentials.Credential
 	SignatureKey    *ecdsa.PublicKey
@@ -62,7 +132,24 @@ type LeafNodeData struct {
 	Signature       []byte
 }
 
-// LeafNodeCapabilities represents node capabilities.
+// LeafNodeCapabilities represents node capabilities as defined in RFC 9420 §7.2.
+//
+// RFC 9420 §7.2:
+//
+//	struct {
+//	    ProtocolVersion protocol_versions<V>;
+//	    CipherSuite cipher_suites<V>;
+//	    ExtensionType extensions<V>;
+//	    ProposalType proposals<V>;
+//	    CredentialType credentials<V>;
+//	} Capabilities;
+//
+// Fields:
+//   - ProtocolVersions: Supported MLS protocol versions
+//   - CipherSuites: Supported cipher suites
+//   - Extensions: Supported extension types
+//   - Proposals: Supported proposal types
+//   - Credentials: Supported credential types
 type LeafNodeCapabilities struct {
 	ProtocolVersions []uint16
 	CipherSuites     []uint16
@@ -71,13 +158,41 @@ type LeafNodeCapabilities struct {
 	Credentials      []uint16
 }
 
-// LeafNodeLifetime represents validity period.
+// LeafNodeLifetime represents the validity period of a LeafNode.
+//
+// RFC 9420 §7.2:
+//
+//	struct {
+//	    uint64 not_before;
+//	    uint64 not_after;
+//	} Lifetime;
+//
+// Fields:
+//   - NotBefore: Unix timestamp when the leaf becomes valid (0 = always valid)
+//   - NotAfter: Unix timestamp when the leaf expires (0 = never expires)
+//
+// Validation: Current time MUST be >= NotBefore and <= NotAfter (if set).
 type LeafNodeLifetime struct {
 	NotBefore uint64
 	NotAfter  uint64
 }
 
-// NewRatchetTree creates a tree with N leaves.
+// NewRatchetTree creates a new ratchet tree with N leaves.
+//
+// The tree is initialized with 2N-1 nodes in interleaved representation:
+//   - N leaves at even indices (0, 2, 4, ..., 2N-2)
+//   - N-1 parents at odd indices (1, 3, 5, ..., 2N-3)
+//
+// All nodes start in NodeStateEmpty.
+//
+// Parameters:
+//   - numLeaves: Number of leaves (group members) the tree should support
+//
+// Returns a new RatchetTree, or a tree with 1 leaf if numLeaves < 1.
+//
+// RFC Appendix C:
+//
+//	num_nodes = 2 * num_leaves - 1
 func NewRatchetTree(numLeaves uint32) *RatchetTree {
 	if numLeaves < 1 {
 		numLeaves = 1
@@ -88,12 +203,24 @@ func NewRatchetTree(numLeaves uint32) *RatchetTree {
 	}
 }
 
-// LeafCount returns the number of leaves.
+// LeafCount returns the number of leaves in the tree.
+//
+// For a tree with N members, there are N leaves and N-1 parents,
+// totaling 2N-1 nodes.
 func (t *RatchetTree) LeafCount() uint32 {
 	return t.NumLeaves
 }
 
-// IsLeaf returns true if node index is even (leaf).
+// IsLeaf returns true if the given node index is a leaf.
+//
+// In the interleaved representation:
+//   - Even indices (0, 2, 4, ...) are leaves
+//   - Odd indices (1, 3, 5, ...) are parents
+//
+// Parameters:
+//   - idx: Node index to check
+//
+// Returns true if idx is even (leaf), false if odd (parent).
 func IsLeaf(idx NodeIndex) bool {
 	return uint32(idx)%2 == 0
 }
@@ -116,14 +243,14 @@ func NodeIndexToLeafIndex(node NodeIndex) (LeafIndex, error) {
 	return LeafIndex(uint32(node) / 2), nil
 }
 
-// nodeLevel retorna el nivel de un nodo en la representación intercalada (RFC Apéndice C).
-// Las hojas están en nivel 0; se cuenta cuántos bits 1 consecutivos tiene x desde el bit 0.
+// nodeLevel returns the level of a node in the interleaved representation (RFC Appendix C).
+// Leaves are at level 0; count consecutive 1 bits from bit 0.
 func nodeLevel(x uint32) uint32 {
 	// Trailing ones = trailing zeros of ^x
 	return uint32(bits.TrailingZeros32(^x))
 }
 
-// Root retorna el índice del nodo raíz según RFC Apéndice C:
+// Root returns the root node index per RFC Appendix C:
 //
 //	root(n) = (1 << floor(log2(2n-1))) - 1
 func (t *RatchetTree) Root() NodeIndex {
@@ -135,11 +262,11 @@ func (t *RatchetTree) Root() NodeIndex {
 	return NodeIndex((1 << w) - 1)
 }
 
-// Parent retorna el padre de un nodo según RFC Apéndice C.
+// Parent returns the parent of a node per RFC Appendix C.
 //
-// Si el bit (l+1) del nodo es 0, es hijo izquierdo → padre = x + 2^l.
-// Si el bit (l+1) del nodo es 1, es hijo derecho → padre = x - 2^l.
-// En árboles no potencia-de-2 el resultado puede exceder la raíz; se acota.
+// If bit (l+1) of node is 0, it's a left child → parent = x + 2^l.
+// If bit (l+1) of node is 1, it's a right child → parent = x - 2^l.
+// In non-power-of-2 trees, the result may exceed the root; it is bounded.
 func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	root := t.Root()
 	if node == root {
@@ -149,15 +276,15 @@ func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	l := nodeLevel(uint32(node))
 	var p NodeIndex
 	if (uint32(node)>>(l+1))&1 == 0 {
-		// hijo izquierdo: padre está a la derecha
+		// left child: parent is to the right
 		p = node + NodeIndex(1<<l)
 	} else {
-		// hijo derecho: padre está a la izquierda
+		// right child: parent is to the left
 		p = node - NodeIndex(1<<l)
 	}
 
-	// Para árboles no potencia-de-2, el padre "natural" puede caer fuera
-	// del rango válido (0..2n-2); en ese caso se usa la raíz.
+	// For non-power-of-2 trees, the "natural" parent may fall outside
+	// the valid range (0..2n-2); in that case, use the root.
 	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
 	if p > maxIdx {
 		p = root
@@ -166,7 +293,7 @@ func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	return p, nil
 }
 
-// LeftChild retorna el hijo izquierdo de un nodo padre (RFC Apéndice C):
+// LeftChild returns the left child of a parent node per RFC Appendix C:
 //
 //	left_child(x) = x ^ (1 << (level(x) - 1))
 func (t *RatchetTree) LeftChild(parent NodeIndex) (NodeIndex, error) {
@@ -178,7 +305,7 @@ func (t *RatchetTree) LeftChild(parent NodeIndex) (NodeIndex, error) {
 	return NodeIndex(uint32(parent) ^ (1 << (l - 1))), nil
 }
 
-// RightChild retorna el hijo derecho de un nodo padre (RFC Apéndice C):
+// RightChild returns the right child of a parent node per RFC Appendix C:
 //
 //	right_child(x) = x ^ (3 << (level(x) - 1))
 func (t *RatchetTree) RightChild(parent NodeIndex) (NodeIndex, error) {
@@ -480,10 +607,10 @@ func (t *RatchetTree) ResolutionWithExclusions(idx NodeIndex, excluded map[LeafI
 	return res
 }
 
-// VerifyParentHashes verifica los parent hashes a lo largo del direct path (RFC §7.9).
+// VerifyParentHashes verifies the parent hashes along the direct path (RFC §7.9).
 //
-// Para cada nodo del camino (excepto la raíz), el parent_hash almacenado en ese nodo
-// debe coincidir con ComputeParentHash(padre.EncryptionKey, padre.ParentHash, hermano.TreeHash).
+// For each node in the path (except the root), the parent_hash stored in that node
+// must match ComputeParentHash(parent.EncryptionKey, parent.ParentHash, sibling.TreeHash).
 func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 	path := t.DirectPath(leafIdx)
 	if len(path) <= 1 {
@@ -529,6 +656,10 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 	return nil
 }
 
+// Clone creates a copy of the RatchetTree.
+//
+// Note: This is a shallow copy - Node.LeafData pointers are shared.
+// For a deep copy, each LeafNodeData would need to be cloned individually.
 func (t *RatchetTree) Clone() *RatchetTree {
 	cloned := &RatchetTree{
 		Nodes:     make([]Node, len(t.Nodes)),

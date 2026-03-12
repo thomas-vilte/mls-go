@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/framing"
 )
 
 type transcriptHashVector struct {

@@ -9,7 +9,7 @@ import (
 	"crypto/hpke"
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // EncryptWithLabel encrypts using HPKE with label as defined in RFC 9420 §5.1.3.

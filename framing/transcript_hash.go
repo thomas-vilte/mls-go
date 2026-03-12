@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // ConfirmedTranscriptHashInput serializes the input for computing confirmed_transcript_hash

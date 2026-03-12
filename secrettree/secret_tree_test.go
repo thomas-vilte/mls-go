@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // ============================================================================
@@ -163,11 +163,15 @@ func TestCurrentGeneration(t *testing.T) {
 	if leaf.CurrentGeneration() != 0 {
 		t.Errorf("initial generation = %d, want 0", leaf.CurrentGeneration())
 	}
-	leaf.Advance()
+	if err := leaf.Advance(); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
 	if leaf.CurrentGeneration() != 1 {
 		t.Errorf("after Advance generation = %d, want 1", leaf.CurrentGeneration())
 	}
-	leaf.Advance()
+	if err := leaf.Advance(); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
 	if leaf.CurrentGeneration() != 2 {
 		t.Errorf("after 2x Advance generation = %d, want 2", leaf.CurrentGeneration())
 	}

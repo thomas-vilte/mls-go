@@ -334,6 +334,7 @@ type SignatureScheme uint16
 const (
 	// ECDSA_SECP256R1_SHA256 is ECDSA with P-256 and SHA-256
 	// RFC 9420 §5.1.2: Used by cipher suite 2 (mandatory for MLS 1.0)
+	//nolint:revive // RFC 9420 naming convention
 	ECDSA_SECP256R1_SHA256 SignatureScheme = 0x0403
 
 	// ED25519 is Ed25519 signatures
@@ -365,10 +366,12 @@ type KEMAlgorithm uint16
 const (
 	// DHKEM_P256_HKDF_SHA256 is DHKEM with P-256 and HKDF-SHA256
 	// RFC 9180 §4.1: Used by cipher suite 2 (mandatory for MLS 1.0)
+	//nolint:revive // RFC 9180 naming convention
 	DHKEM_P256_HKDF_SHA256 KEMAlgorithm = 0x0010
 
 	// DHKEM_X25519_HKDF_SHA256 is DHKEM with X25519 and HKDF-SHA256
 	// RFC 9180 §4.1: Used by cipher suites 1 and 3
+	//nolint:revive // RFC 9180 naming convention
 	DHKEM_X25519_HKDF_SHA256 KEMAlgorithm = 0x0020
 )
 
@@ -389,6 +392,7 @@ type KDFAlgorithm uint16
 const (
 	// HKDF_SHA256 is HKDF-SHA256 (32 bytes output)
 	// RFC 9180 §4.1: Used by all implemented cipher suites
+	//nolint:revive // RFC 9180 naming convention
 	HKDF_SHA256 KDFAlgorithm = 0x0001
 )
 

@@ -10,9 +10,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 type treeOperationsVector struct {

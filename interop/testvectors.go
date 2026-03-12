@@ -1,4 +1,4 @@
-// Package interop provides interoperability testing with OpenMLS.
+// Package interop provides interoperability testing with other implementation.
 //
 // This package implements the MLS Interop Test Vectors format
 // as defined by the MLS Working Group:
@@ -14,8 +14,8 @@
 // Usage:
 //  1. Generate test vectors with GenerateTestVectors()
 //  2. Export to JSON with ExportToFile()
-//  3. Validate in OpenMLS using their test vector runner
-//  4. Import OpenMLS test vectors with ImportFromFile() and validate
+//  3. Validate in other implementation using their test vector runner
+//  4. Import other implementation test vectors with ImportFromFile() and validate
 package interop
 
 import (
@@ -24,10 +24,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/group"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/group"
+	keypackages "github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // TestVector represents a single interoperability test case.
@@ -204,7 +204,8 @@ func (tvs *TestVectorSet) ExportToFile(filename string) error {
 		return fmt.Errorf("marshaling test vectors: %w", err)
 	}
 
-	err = os.WriteFile(filename, data, 0644)
+	//nolint:gosec // Test vector files don't need restrictive permissions
+	err = os.WriteFile(filename, data, 0o644)
 	if err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
@@ -214,6 +215,7 @@ func (tvs *TestVectorSet) ExportToFile(filename string) error {
 
 // ImportFromFile imports test vectors from a JSON file.
 func ImportFromFile(filename string) (*TestVectorSet, error) {
+	//nolint:gosec // Test vector file reading is safe
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("reading file: %w", err)
@@ -263,8 +265,8 @@ func ValidateTestVector(tv *TestVector) error {
 // for interoperability testing.
 func GenerateInteropTestVectors() (*TestVectorSet, error) {
 	tvs := &TestVectorSet{
-		Name:        "Go-OpenMLS Interop",
-		Description: "Test vectors for interoperability between Go and OpenMLS implementations",
+		Name:        "Go-other implementation Interop",
+		Description: "Test vectors for interoperability between Go and other implementation implementations",
 	}
 
 	// Generate 1:1 join test vector

@@ -1,13 +1,12 @@
-// Package keypackages - Tests internos para RFC 9420 §10
 package keypackages
 
 import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 func makeCredWithKey(t *testing.T) *credentials.CredentialWithKey {

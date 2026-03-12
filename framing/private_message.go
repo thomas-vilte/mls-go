@@ -3,9 +3,9 @@ package framing
 import (
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/secrettree"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/secrettree"
 )
 
 // PrivateMessage implements RFC 9420 §6.3.

@@ -1,7 +1,7 @@
 // Package tls implements TLS presentation language encoding/decoding.
 //
 // This is a minimal implementation of RFC 8446 §3 for MLS message encoding.
-// It's based on the tls_codec Rust crate used by OpenMLS.
+// It's based on the tls_codec Go crate used by other implementation.
 package tls
 
 import (

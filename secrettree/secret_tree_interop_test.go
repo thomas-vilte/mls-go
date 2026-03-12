@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // Estructuras para parsear el JSON de test vectors
@@ -96,8 +96,8 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 	// Verificar cada leaf
 	for leafIndex, leafGens := range v.Leaves {
 		t.Run(fmt.Sprintf("leaf%d", leafIndex), func(t *testing.T) {
-			// Para cada leaf, necesitamos un tree NUEVO porque el ratchet forward es destructivo
-			// (una vez que ratcheteás a gen 15, no podés volver a gen 0)
+			// For each leaf, we need a NEW tree because ratchet forward is destructive
+			// (once you ratchet to gen 15, you can't go back to gen 0)
 			leafTree, err := NewTree(ciphersuite.NewSecret(encryptionSecretBytes), leafCount, cs)
 			if err != nil {
 				t.Fatalf("NewTree failed: %v", err)
@@ -172,15 +172,15 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 	}
 }
 
-// TestSecretTreeDerivation verifica la derivación básica de secretos
-// según RFC 9420 §9, Figure 25 y Figure 26.
+// TestSecretTreeDerivation verifies basic secret derivation
+// according to RFC 9420 §9, Figure 25 and Figure 26.
 func TestSecretTreeDerivation(t *testing.T) {
-	// Vector de prueba simple con CS=2
-	encryptionSecretHex := "d69fcc35969e94680461974bd26c7cda7594cbf45985c4bf668c3b3118b765ab"
+	// Simple test vector with CS=2
+	encryptionSecretHex := "d69fcc35969e94680461974bd26c7cda7594cbf45985c4bf668c3b3118b765ab" //nolint:gosec // This is a test vector, not a credential
 	encryptionSecretBytes := mustDecodeHex(t, encryptionSecretHex)
 	encryptionSecret := ciphersuite.NewSecret(encryptionSecretBytes)
 
-	// Crear árbol con 1 leaf
+	// Create tree with 1 leaf
 	tree, err := NewTree(encryptionSecret, 1, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("NewTree failed: %v", err)

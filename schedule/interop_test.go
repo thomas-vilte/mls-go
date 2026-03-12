@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // keyScheduleEpoch mirrors one epoch entry from the key-schedule test vector JSON.
@@ -87,6 +87,7 @@ func TestKeyScheduleInteropVectors(t *testing.T) {
 				ks := NewKeySchedule(cs, initSecret)
 				ks.SetCommitSecret(ciphersuite.NewSecret(commitSecretBytes))
 
+				// Compute joiner_secret per RFC 9420 §8:
 				// joiner_secret = ExpandWithLabel(Extract(init_secret, commit_secret), "joiner", GroupContext, Nh)
 				joinerSecret, err := ks.ComputeJoinerSecret(groupContextBytes)
 				if err != nil {
@@ -110,6 +111,7 @@ func TestKeyScheduleInteropVectors(t *testing.T) {
 					t.Errorf("epoch %d: welcome_secret\n  got  %x\n  want %x", i, got, expectedWelcome)
 				}
 
+				// Compute epoch_secret per RFC 9420 §8:
 				// epoch_secret = ExpandWithLabel(member_secret, "epoch", GroupContext, Nh)
 				if _, err := ks.ComputeEpochSecret(groupContextBytes); err != nil {
 					t.Fatalf("epoch %d: ComputeEpochSecret: %v", i, err)

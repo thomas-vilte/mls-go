@@ -3,7 +3,7 @@ package group
 import (
 	"fmt"
 
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // AddProposal adds a new member to the group per RFC 9420 §12.1.1.

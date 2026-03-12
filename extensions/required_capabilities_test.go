@@ -6,8 +6,8 @@ package extensions_test
 import (
 	"testing"
 
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/extensions"
 )
 
 // TestRequiredCapabilitiesExtension_Create tests creation.

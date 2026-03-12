@@ -346,7 +346,9 @@ func TestReader_BytesAfterPosition(t *testing.T) {
 	}
 
 	// After reading 2 bytes
+	//nolint:errcheck,gosec // Test code, errors intentionally ignored
 	r.ReadUint8()
+	//nolint:errcheck,gosec // Test code, errors intentionally ignored
 	r.ReadUint8()
 	got = r.BytesAfterPosition()
 	if !bytes.Equal(got, []byte{0x03, 0x04}) {

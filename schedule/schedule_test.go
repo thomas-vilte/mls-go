@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // ============================================================================
@@ -348,8 +348,8 @@ func TestTranscriptHashes(t *testing.T) {
 func TestPSKCombination(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	psks := []Psk{
-		{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")},
-		{PskType: PskTypeExternal, PskId: []byte("psk2"), Psk: []byte("secret2")},
+		{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")},
+		{PskType: PskTypeExternal, PskID: []byte("psk2"), Psk: []byte("secret2")},
 	}
 
 	pskInput, err := ComputePskInput(psks, cs)
@@ -361,7 +361,7 @@ func TestPSKCombination(t *testing.T) {
 	}
 
 	// Single PSK → hash-length output
-	single := []Psk{{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")}}
+	single := []Psk{{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")}}
 	singleInput, err := ComputePskInput(single, cs)
 	if err != nil {
 		t.Fatalf("ComputePskInput (single): %v", err)
@@ -371,11 +371,11 @@ func TestPSKCombination(t *testing.T) {
 	}
 }
 
-// TestComputePskSecret_WithPSKs prueba ComputePskSecret con PSKs externas
+// TestComputePskSecret_WithPSKs tests ComputePskSecret with external PSKs
 func TestComputePskSecret_WithPSKs(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 
-	// Crear KeySchedule
+	// Create KeySchedule
 	initSecret, _ := ciphersuite.NewSecretRandomCS(cs)
 	ks := NewKeySchedule(cs, initSecret)
 
@@ -392,8 +392,8 @@ func TestComputePskSecret_WithPSKs(t *testing.T) {
 
 	// PSKs externas
 	psks := []Psk{
-		{PskType: PskTypeExternal, PskId: []byte("psk1"), Psk: []byte("secret1")},
-		{PskType: PskTypeExternal, PskId: []byte("psk2"), Psk: []byte("secret2")},
+		{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")},
+		{PskType: PskTypeExternal, PskID: []byte("psk2"), Psk: []byte("secret2")},
 	}
 
 	// ComputePskSecret con PSKs
@@ -406,19 +406,24 @@ func TestComputePskSecret_WithPSKs(t *testing.T) {
 		t.Fatal("ComputePskSecret should return non-nil secret")
 	}
 
-	// Verificar que el resultado difiere del caso sin PSKs
+	// Verify that the result differs from the case without PSKs
 	ks2 := NewKeySchedule(cs, initSecret)
 	ks2.SetCommitSecret(commitSecret)
-	ks2.ComputeJoinerSecret(groupContext)
+	if _, err := ks2.ComputeJoinerSecret(groupContext); err != nil {
+		t.Fatalf("ComputeJoinerSecret failed: %v", err)
+	}
 
-	zeroPskSecret, _ := ks2.ComputePskSecret([]Psk{})
+	zeroPskSecret, err := ks2.ComputePskSecret([]Psk{})
+	if err != nil {
+		t.Fatalf("ComputePskSecret failed: %v", err)
+	}
 
-	if string(pskSecret.AsSlice()) == string(zeroPskSecret.AsSlice()) {
+	if bytes.Equal(pskSecret.AsSlice(), zeroPskSecret.AsSlice()) {
 		t.Error("PskSecret with PSKs should differ from zero PSK case")
 	}
 }
 
-// TestPskInput_ResumptionType prueba PSK con tipo Resumption
+// TestPskInput_ResumptionType tests PSK with Resumption type
 func TestPskInput_ResumptionType(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 
@@ -426,7 +431,7 @@ func TestPskInput_ResumptionType(t *testing.T) {
 	psks := []Psk{
 		{
 			PskType:    PskTypeResumption,
-			PskId:      []byte("resumption-psk-id"),
+			PskID:      []byte("resumption-psk-id"),
 			Psk:        []byte("resumption-secret"),
 			Usage:      0x01, // ResumptionPskUsageReinit
 			PskGroupID: []byte("test-group"),
@@ -444,7 +449,7 @@ func TestPskInput_ResumptionType(t *testing.T) {
 	}
 }
 
-// TestPskMarshal_Roundtrip prueba marshal/unmarshal de PSK
+// TestPskMarshal_Roundtrip tests PSK marshal/unmarshal roundtrip
 // Nota: PskID no es exportado, testeamos ComputePskInput que lo usa internamente
 func TestPskMarshal_Roundtrip(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
@@ -453,7 +458,7 @@ func TestPskMarshal_Roundtrip(t *testing.T) {
 	psks := []Psk{
 		{
 			PskType: PskTypeExternal,
-			PskId:   []byte("external-psk-id"),
+			PskID:   []byte("external-psk-id"),
 			Psk:     []byte("external-secret"),
 		},
 	}
@@ -471,7 +476,7 @@ func TestPskMarshal_Roundtrip(t *testing.T) {
 	psksResumption := []Psk{
 		{
 			PskType:    PskTypeResumption,
-			PskId:      []byte("resumption-id"),
+			PskID:      []byte("resumption-id"),
 			Psk:        []byte("resumption-secret"),
 			Usage:      0x01,
 			PskGroupID: []byte("group-123"),

@@ -3,7 +3,7 @@ package framing
 import (
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 type rawBodyDecoder func(data []byte) (consumed int, err error)

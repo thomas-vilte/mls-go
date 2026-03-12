@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 type passiveClientExternalPsk struct {
@@ -26,7 +26,7 @@ type passiveClientWelcomeVector struct {
 }
 
 func TestPassiveClientWelcomeVectors(t *testing.T) {
-	// Nota: Estos tests usan vectors de OpenMLS Rust que pueden to have diferencias
+	// Nota: Estos tests usan vectors de other implementation que pueden to have diferencias
 	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
 	// Nuestra implementación de HPKE pasa tests round-trip propios.
 

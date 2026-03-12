@@ -3,9 +3,9 @@ package framing
 import (
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // FramedContentAuthData represents authentication data for framed content (RFC 9420 §6.1).

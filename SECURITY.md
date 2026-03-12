@@ -46,4 +46,4 @@ No custom crypto implementations. All primitives come from audited libraries.
 - Protect private keys with secure storage; clear them from memory after use
 - This is beta software — not recommended for production handling sensitive data until v1.0.0
 
-For production use today, consider [OpenMLS](https://github.com/openmls/openmls) (Rust, production-ready).
+For production use today, consider [other implementation]() (Go, production-ready).

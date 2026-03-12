@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // KeyPackageRefLabel is the label for KeyPackage references as defined in RFC 9420 §5.2.

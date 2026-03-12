@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mls-go/framing"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 type passiveClientCommitVector struct {
@@ -34,7 +34,7 @@ type passiveClientCommitVector struct {
 }
 
 func TestPassiveClientHandlingCommitVectors(t *testing.T) {
-	// Nota: Estos tests usan vectors de OpenMLS Rust que pueden to have diferencias
+	// Nota: Estos tests usan vectors de other implementation que pueden to have diferencias
 	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
 	// Nuestra implementación de HPKE pasa tests round-trip propios.
 

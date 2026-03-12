@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // RequiredCapabilitiesExtension specifies capabilities required for group members.

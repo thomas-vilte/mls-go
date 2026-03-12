@@ -66,8 +66,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
 // CredentialType represents a credential type per RFC 9420 §5.3.
@@ -159,7 +159,7 @@ func (ct CredentialType) isGREASE() bool {
 //
 // **X509Credential:**
 //   - ✅ Full PKI validation
-//   - ✅ Verifiable chain of trust
+//   - ✅ Verifiable chain of tgo
 //   - ❌ Heavier, more complex
 type Credential struct {
 	CredentialType CredentialType
@@ -227,7 +227,7 @@ func NewBasicCredentialFromUint64(id uint64) *Credential {
 //
 // Use X509Credential when you need:
 //   - Full PKI validation
-//   - Verifiable chain of trust
+//   - Verifiable chain of tgo
 //   - Strong authentication (e.g., servers, gateways)
 //
 // # Example

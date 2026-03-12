@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/framing"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
-	"github.com/mls-go/schedule"
-	"github.com/mls-go/secrettree"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
+	"github.com/thomas-vilte/mls-go/secrettree"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // GroupID uniquely identifies an MLS group
@@ -1105,7 +1105,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				}
 				psks = append(psks, schedule.Psk{
 					Psk:        pskBytes,
-					PskId:      pid.ID,
+					PskID:      pid.ID,
 					PskNonce:   pid.Nonce,
 					PskType:    schedule.PskType(pid.PskType),
 					Usage:      pid.Usage,
@@ -1124,7 +1124,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				}
 				psks = append(psks, schedule.Psk{
 					Psk:      pskBytes,
-					PskId:    pid.ID,
+					PskID:    pid.ID,
 					PskNonce: pid.Nonce,
 					PskType:  schedule.PskType(pid.PskType),
 					Usage:    pid.Usage,
@@ -1767,7 +1767,7 @@ func NewGroupFromReInit(
 
 	resumptionPsk := schedule.Psk{
 		PskType: schedule.PskTypeResumption,
-		PskId:   reInit.GroupID,
+		PskID:   reInit.GroupID,
 		Psk:     resumptionSecret.AsSlice(),
 	}
 	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {

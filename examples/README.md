@@ -202,7 +202,7 @@ go run examples/export_secrets/main.go
 
 ## Example 4: Interoperability Test
 
-Generates test vectors for interoperability with OpenMLS Rust.
+Generates test vectors for interoperability with other implementation.
 
 ```go
 package main

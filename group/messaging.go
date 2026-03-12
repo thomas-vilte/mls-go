@@ -3,9 +3,9 @@ package group
 import (
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/framing"
-	"github.com/mls-go/treesync"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 // SendMessage encrypts an application message as a PrivateMessage per RFC 9420 §6.3.

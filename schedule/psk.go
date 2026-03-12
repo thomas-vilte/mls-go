@@ -1,25 +1,79 @@
+// Package schedule implements Pre-Shared Key (PSK) handling for the MLS key schedule.
+//
+// PSKs provide additional entropy and authentication in the key schedule per RFC 9420 §8.4.
+// They are used for:
+//   - External PSKs: Application-defined pre-shared keys
+//   - Resumption PSKs: Prove membership in a previous epoch (RFC §8.6)
+//   - Branch PSKs: Link a new group to an existing one
+//
+// Multiple PSKs are combined using iterated HKDF-Extract:
+//
+//	psk_secret_0 = 0^Nh
+//	psk_secret_i = HKDF-Extract(psk_input[i], psk_secret_{i-1})
+//	psk_secret   = psk_secret_n
 package schedule
 
 import (
 	"fmt"
 
-	"github.com/mls-go/ciphersuite"
-	"github.com/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
-// PskType identifies the type of Pre-Shared Key (RFC 9420 §8.4).
+// PskType identifies the type of Pre-Shared Key as defined in RFC 9420 §8.4.
+//
+// The PSK type determines how the PSK is used and what fields are present:
+//   - External: Application-defined pre-shared key
+//   - Resumption: Prove membership in a previous epoch
+//   - Branch: Link a new group to an existing one
+//
+// RFC 9420 §8.4:
+//
+//	enum {
+//	    external(1),
+//	    resumption(2),
+//	    branch(3),
+//	    (255)
+//	} PreSharedKeyType;
 type PskType uint8
 
 const (
-	PskTypeExternal   PskType = 0x01 // matches OpenMLS / interop test vectors
+	// PskTypeExternal represents an externally provided PSK.
+	PskTypeExternal PskType = 0x01 // matches other implementation / interop test vectors
+	// PskTypeResumption represents a resumption PSK from a previous epoch.
 	PskTypeResumption PskType = 0x02
-	PskTypeBranch     PskType = 0x03
+	// PskTypeBranch represents a PSK used for branching a group.
+	PskTypeBranch PskType = 0x03
 )
 
-// Psk represents a Pre-Shared Key.
+// Psk represents a Pre-Shared Key as defined in RFC 9420 §8.4.
+//
+// PSKs can be:
+//   - External: Application-defined pre-shared keys with psk_id and psk
+//   - Resumption: Prove membership in a previous epoch (usage, group_id, epoch)
+//   - Branch: Link a new group to an existing one
+//
+// RFC 9420 §8.4:
+//
+//	struct {
+//	    PreSharedKeyType ktype;
+//	    select (ktype) {
+//	        case external:
+//	            opaque psk_id<V>;
+//	        case resumption:
+//	            uint8 usage;
+//	            opaque group_id<V>;
+//	            uint64 epoch;
+//	        case branch:
+//	            // Same as external
+//	            opaque psk_id<V>;
+//	    };
+//	    opaque psk_nonce<V>;
+//	    opaque psk<V>;
+//	} Psk;
 type Psk struct {
 	PskType  PskType
-	PskId    []byte // external PSK: psk_id
+	PskID    []byte // external PSK: psk_id
 	PskNonce []byte
 	Psk      []byte
 	// Resumption PSK fields (PskType == PskTypeResumption)
@@ -28,13 +82,26 @@ type Psk struct {
 	PskEpoch   uint64
 }
 
-// ComputePskInput computes psk_secret according to RFC 9420 §8.4 / OpenMLS draft-19:
+// ComputePskInput computes psk_secret according to RFC 9420 §8.4.
 //
-//	psk_secret_0   = 0^Nh
-//	psk_extracted  = HKDF-Extract(0^Nh, psk[i])
-//	psk_input      = ExpandWithLabel(psk_extracted, "derived psk", PSKLabel[i], Nh)
-//	psk_secret_i   = HKDF-Extract(psk_input[i], psk_secret_{i-1})
-//	psk_secret     = psk_secret_n
+// Multiple PSKs are combined using iterated HKDF-Extract:
+//
+//	psk_secret_0 = 0^Nh
+//	psk_extracted = HKDF-Extract(0^Nh, psk[i])
+//	psk_input = ExpandWithLabel(psk_extracted, "derived psk", PSKLabel[i], Nh)
+//	psk_secret_i = HKDF-Extract(psk_input[i], psk_secret_{i-1})
+//	psk_secret = psk_secret_n
+//
+// Parameters:
+//   - psks: List of PSKs to combine
+//   - cs: Cipher suite for HKDF operations
+//
+// Returns the combined psk_secret, or an error if no PSKs are provided or any
+// PSK is empty.
+//
+// RFC 9420 §8.4:
+//
+//	psk_secret = HKDF-Extract(psk_input_n, ... HKDF-Extract(psk_input_1, 0^Nh)...)
 func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	if len(psks) == 0 {
 		return nil, fmt.Errorf("no PSKs provided")
@@ -52,7 +119,7 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 		}
 		label := PSKLabel{
 			PskType:    psk.PskType,
-			PskID:      psk.PskId,
+			PskID:      psk.PskID,
 			PskNonce:   psk.PskNonce,
 			Index:      uint16(i),
 			Count:      count,
@@ -64,6 +131,7 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("expanding PSK label %d: %w", i, err)
 		}
+		// Chain PSK secrets per RFC 9420 §8.4:
 		// psk_secret_i = HKDF-Extract(psk_input_i, psk_secret_{i-1})
 		pskSecret, err = pskInput.HKDFExtract(pskSecret)
 		if err != nil {
@@ -73,13 +141,32 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	return pskSecret.AsSlice(), nil
 }
 
-// PSKLabel according to RFC 9420 §8.4
+// PSKLabel represents the PSKLabel structure for PSK derivation per RFC 9420 §8.4.
+//
+// The PSKLabel is used in ExpandWithLabel to derive psk_input from each PSK:
+//
+//	psk_input = ExpandWithLabel(psk_extracted, "derived psk", PSKLabel, Nh)
+//
+// RFC 9420 §8.4:
 //
 //	struct {
 //	    PreSharedKeyID id;
 //	    uint16 index;
 //	    uint16 count;
 //	} PSKLabel;
+//
+// where PreSharedKeyID is:
+//
+//	select (ktype) {
+//	    case external:
+//	        opaque psk_id<V>;
+//	    case resumption:
+//	        uint8 usage;
+//	        opaque group_id<V>;
+//	        uint64 epoch;
+//	    case branch:
+//	        opaque psk_id<V>;
+//	};
 type PSKLabel struct {
 	PskType  PskType
 	PskID    []byte // external: psk_id
@@ -92,6 +179,14 @@ type PSKLabel struct {
 	PskEpoch   uint64
 }
 
+// Marshal serializes the PSKLabel to TLS presentation language format.
+//
+// The serialization includes:
+//   - psk_type: Type of PSK (external, resumption, branch)
+//   - PSK identifier: psk_id for external/branch, or usage+group_id+epoch for resumption
+//   - psk_nonce: Nonce for this PSK
+//   - index: Position of this PSK in the list
+//   - count: Total number of PSKs
 func (l PSKLabel) Marshal() []byte {
 	w := tls.NewWriter()
 	// PreSharedKeyID inline encoding per RFC 9420 §8.4

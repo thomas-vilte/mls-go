@@ -3,9 +3,9 @@ package group
 import (
 	"fmt"
 
-	"github.com/mls-go/credentials"
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // ProposalType identifies the type of MLS proposal per RFC 9420 §12.1.

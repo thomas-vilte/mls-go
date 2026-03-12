@@ -3,8 +3,8 @@ package framing
 import (
 	"fmt"
 
-	"github.com/mls-go/internal/tls"
-	"github.com/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/internal/tls"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // MLSMessage is the top-level wrapper for all MLS messages (RFC 9420 §6).
