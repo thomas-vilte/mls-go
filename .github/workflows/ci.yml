@@ -1,0 +1,90 @@
+#name: CI
+#
+#on:
+#  push:
+#    branches: [master, dev]
+#  pull_request:
+#    branches: [master, dev]
+#  schedule:
+#    - cron: '0 6 * * 0' # weekly on Sunday at 06:00 UTC (fuzz tests)
+#
+#jobs:
+#  test:
+#    name: Build & Test
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: '1.26'
+#          cache: true
+#
+#      - name: Verify go.mod is tidy
+#        run: |
+#          go mod tidy
+#          git diff --exit-code go.mod go.sum
+#
+#      - name: Build
+#        run: go build ./...
+#
+#      - name: Test (race + coverage)
+#        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+#
+#      - name: Upload coverage
+#        uses: codecov/codecov-action@v5
+#        with:
+#          files: ./coverage.txt
+#          flags: unittests
+#          fail_ci_if_error: false
+#
+#  lint:
+#    name: Lint
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: '1.26'
+#          cache: true
+#
+#      - name: golangci-lint
+#        uses: golangci/golangci-lint-action@v6
+#        with:
+#          version: latest
+#          args: --timeout=5m
+#
+#  vet:
+#    name: Vet
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: '1.26'
+#          cache: true
+#
+#      - run: go vet ./...
+#
+#  fuzz:
+#    name: Fuzz Tests
+#    runs-on: ubuntu-latest
+#    if: github.event_name == 'schedule'
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: '1.26'
+#          cache: true
+#
+#      - name: Fuzz AEAD
+#        run: go test -fuzz=FuzzAEAD -fuzztime=60s ./ciphersuite/
+#
+#      - name: Fuzz HKDF
+#        run: go test -fuzz=FuzzHKDF -fuzztime=60s ./ciphersuite/
+#
+#      - name: Fuzz Secret
+#        run: go test -fuzz=FuzzSecret -fuzztime=60s ./ciphersuite/
