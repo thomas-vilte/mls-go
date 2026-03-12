@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
+	"github.com/mls-go/ciphersuite"
 )
 
 // Estructuras para parsear el JSON de test vectors
@@ -28,9 +28,9 @@ type secretTreeLeafGeneration struct {
 }
 
 type secretTreeVector struct {
-	CipherSuite      uint16                     `json:"cipher_suite"`
-	EncryptionSecret string                     `json:"encryption_secret"`
-	SenderData       secretTreeSenderData       `json:"sender_data"`
+	CipherSuite      uint16                       `json:"cipher_suite"`
+	EncryptionSecret string                       `json:"encryption_secret"`
+	SenderData       secretTreeSenderData         `json:"sender_data"`
 	Leaves           [][]secretTreeLeafGeneration `json:"leaves"`
 }
 
@@ -73,7 +73,7 @@ func TestSecretTreeVectors(t *testing.T) {
 		if !cs.IsSupported() {
 			continue
 		}
-		
+
 		// TODO: Fix HPKE key schedule for cs=1 and cs=3
 		if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS256DHKEMX25519ChaCha20 {
 			t.Logf("Skipping cs=%d (HPKE key schedule issue)", v.CipherSuite)

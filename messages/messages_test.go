@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/openmls/go/messages"
+	"github.com/mls-go/messages"
 )
 
 // ============================================================================

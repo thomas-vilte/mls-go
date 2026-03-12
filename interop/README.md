@@ -53,7 +53,7 @@ go test ./interop/... -v -run TestCrossImplementationRoundTrip
 package main
 
 import (
-    "github.com/openmls/go/interop"
+    "github.com/mls-go/interop"
 )
 
 func main() {
@@ -127,7 +127,7 @@ func main() {
 ### "undefined: testvectors" error
 Make sure you're importing the correct package:
 ```go
-import "github.com/openmls/go/interop"
+import "github.com/mls-go/interop"
 ```
 
 ### Empty Commits in Test Vectors

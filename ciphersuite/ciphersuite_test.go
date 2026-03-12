@@ -4,24 +4,24 @@ import (
 	"testing"
 )
 
-// TestCipherSuite_IsSupported prueba qué cipher suites están soportadas.
+// TestCipherSuite_IsSupported tests which cipher suites are supported.
 func TestCipherSuite_IsSupported(t *testing.T) {
-	// MLS128DHKEMX25519 (cs=1) debería estar soportado
+	// MLS128DHKEMX25519 (cs=1) should be supported
 	if !MLS128DHKEMX25519.IsSupported() {
 		t.Error("MLS128DHKEMX25519 (cs=1) should be supported")
 	}
 
-	// MLS128DHKEMP256 (cs=2) debería estar soportado
+	// MLS128DHKEMP256 (cs=2) should be supported
 	if !MLS128DHKEMP256.IsSupported() {
 		t.Error("MLS128DHKEMP256 (cs=2) should be supported")
 	}
 
-	// MLS256DHKEMX25519ChaCha20 (cs=3) debería estar soportado
+	// MLS256DHKEMX25519ChaCha20 (cs=3) should be supported
 	if !MLS256DHKEMX25519ChaCha20.IsSupported() {
 		t.Error("MLS256DHKEMX25519ChaCha20 (cs=3) should be supported")
 	}
 
-	// Cipher suites no soportadas (cs=4,5,6,7 son placeholders)
+	// Unsupported cipher suites (cs=4,5,6,7 are placeholders)
 	var unsupported CipherSuite = 0x0004
 	if unsupported.IsSupported() {
 		t.Error("Unknown cipher suite 0x0004 should not be supported")
@@ -33,7 +33,7 @@ func TestCipherSuite_IsSupported(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_HashAlgorithm prueba los algoritmos de hash.
+// TestCipherSuite_HashAlgorithm tests hash algorithms.
 func TestCipherSuite_HashAlgorithm(t *testing.T) {
 	hashAlgo := MLS128DHKEMP256.HashAlgorithm()
 	if hashAlgo != SHA256 {
@@ -41,7 +41,7 @@ func TestCipherSuite_HashAlgorithm(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_AeadAlgorithm prueba los algoritmos AEAD.
+// TestCipherSuite_AeadAlgorithm tests AEAD algorithms.
 func TestCipherSuite_AeadAlgorithm(t *testing.T) {
 	aeadAlgo := MLS128DHKEMP256.AeadAlgorithm()
 	if aeadAlgo != AES128GCM {
@@ -49,7 +49,7 @@ func TestCipherSuite_AeadAlgorithm(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_SignatureScheme prueba los esquemas de firma.
+// TestCipherSuite_SignatureScheme tests signature schemes.
 func TestCipherSuite_SignatureScheme(t *testing.T) {
 	sigScheme := MLS128DHKEMP256.SignatureScheme()
 	if sigScheme != ECDSA_SECP256R1_SHA256 {
@@ -57,7 +57,7 @@ func TestCipherSuite_SignatureScheme(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_HashLength prueba las longitudes de hash.
+// TestCipherSuite_HashLength tests hash lengths.
 func TestCipherSuite_HashLength(t *testing.T) {
 	hashLen := MLS128DHKEMP256.HashLength()
 	if hashLen != 32 {
@@ -65,7 +65,7 @@ func TestCipherSuite_HashLength(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_AeadKeyLength prueba las longitudes de clave AEAD.
+// TestCipherSuite_AeadKeyLength tests AEAD key lengths.
 func TestCipherSuite_AeadKeyLength(t *testing.T) {
 	keyLen := MLS128DHKEMP256.AeadKeyLength()
 	if keyLen != 16 {
@@ -73,7 +73,7 @@ func TestCipherSuite_AeadKeyLength(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_AeadNonceLength prueba las longitudes de nonce.
+// TestCipherSuite_AeadNonceLength tests nonce lengths.
 func TestCipherSuite_AeadNonceLength(t *testing.T) {
 	nonceLen := MLS128DHKEMP256.AeadNonceLength()
 	if nonceLen != 12 {
@@ -81,7 +81,7 @@ func TestCipherSuite_AeadNonceLength(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_HPKEConfig prueba la configuración HPKE.
+// TestCipherSuite_HPKEConfig tests HPKE configuration.
 func TestCipherSuite_HPKEConfig(t *testing.T) {
 	config := MLS128DHKEMP256.HPKEConfig()
 
@@ -96,7 +96,7 @@ func TestCipherSuite_HPKEConfig(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_String prueba la representación string.
+// TestCipherSuite_String tests string representation.
 func TestCipherSuite_String(t *testing.T) {
 	str := MLS128DHKEMP256.String()
 	expected := "MLS_128_DHKEMP256_AES128GCM_SHA256_P256"
@@ -112,7 +112,7 @@ func TestCipherSuite_String(t *testing.T) {
 	}
 }
 
-// TestHashAlgorithm_Size prueba los tamaños de hash.
+// TestHashAlgorithm_Size tests hash sizes.
 func TestHashAlgorithm_Size(t *testing.T) {
 	size := SHA256.Size()
 	if size != 32 {
@@ -120,7 +120,7 @@ func TestHashAlgorithm_Size(t *testing.T) {
 	}
 }
 
-// TestHashAlgorithm_String prueba la representación string.
+// TestHashAlgorithm_String tests string representation.
 func TestHashAlgorithm_String(t *testing.T) {
 	str := SHA256.String()
 	if str != "SHA256" {
@@ -128,7 +128,7 @@ func TestHashAlgorithm_String(t *testing.T) {
 	}
 }
 
-// TestAeadAlgorithm_KeyLength prueba las longitudes de clave AEAD.
+// TestAeadAlgorithm_KeyLength tests AEAD key lengths.
 func TestAeadAlgorithm_KeyLength(t *testing.T) {
 	keyLen128 := AES128GCM.KeyLength()
 	if keyLen128 != 16 {
@@ -141,7 +141,7 @@ func TestAeadAlgorithm_KeyLength(t *testing.T) {
 	}
 }
 
-// TestSignatureScheme_String prueba la representación string.
+// TestSignatureScheme_String tests string representation.
 func TestSignatureScheme_String(t *testing.T) {
 	str := ECDSA_SECP256R1_SHA256.String()
 	if str != "ecdsa_secp256r1_sha256" {
@@ -149,7 +149,7 @@ func TestSignatureScheme_String(t *testing.T) {
 	}
 }
 
-// TestKEMAlgorithm_String prueba la representación string de KEM.
+// TestKEMAlgorithm_String tests KEM string representation.
 func TestKEMAlgorithm_String(t *testing.T) {
 	str := DHKEM_P256_HKDF_SHA256.String()
 	if str != "DHKEM_P256_HKDF_SHA256" {
@@ -157,7 +157,7 @@ func TestKEMAlgorithm_String(t *testing.T) {
 	}
 }
 
-// TestKDFAlgorithm_String prueba la representación string de KDF.
+// TestKDFAlgorithm_String tests KDF string representation.
 func TestKDFAlgorithm_String(t *testing.T) {
 	str := HKDF_SHA256.String()
 	if str != "HKDF-SHA256" {
@@ -165,28 +165,28 @@ func TestKDFAlgorithm_String(t *testing.T) {
 	}
 }
 
-// TestEqualCT prueba la comparación constant-time.
+// TestEqualCT tests constant-time comparison.
 func TestEqualCT(t *testing.T) {
-	// Iguales
+	// Equal
 	a := []byte{1, 2, 3, 4}
 	b := []byte{1, 2, 3, 4}
 	if !EqualCT(a, b) {
 		t.Error("EqualCT should return true for equal slices")
 	}
 
-	// Diferentes
+	// Different
 	c := []byte{1, 2, 3, 5}
 	if EqualCT(a, c) {
 		t.Error("EqualCT should return false for different slices")
 	}
 
-	// Diferente longitud
+	// Different length
 	d := []byte{1, 2, 3}
 	if EqualCT(a, d) {
 		t.Error("EqualCT should return false for different lengths")
 	}
 
-	// Vacíos
+	// Empty
 	e := []byte{}
 	f := []byte{}
 	if !EqualCT(e, f) {
@@ -194,7 +194,7 @@ func TestEqualCT(t *testing.T) {
 	}
 }
 
-// TestSecret_Random prueba la generación de secretos aleatorios.
+// TestSecret_Random tests random secret generation.
 func TestSecret_Random(t *testing.T) {
 	secret1, err := NewSecretRandom(32)
 	if err != nil {
@@ -217,7 +217,7 @@ func TestSecret_Random(t *testing.T) {
 	}
 }
 
-// TestSecret_Clone prueba el clonado de secretos.
+// TestSecret_Clone tests secret cloning.
 func TestSecret_Clone(t *testing.T) {
 	original := NewSecret([]byte("secret value"))
 	clone := original.Clone()
@@ -234,11 +234,11 @@ func TestSecret_Clone(t *testing.T) {
 	}
 }
 
-// TestSecret_SecureZero prueba que SecureZero limpia la memoria.
+// TestSecret_SecureZero tests that SecureZero clears memory.
 func TestSecret_SecureZero(t *testing.T) {
 	secret := NewSecret([]byte("secret value"))
 
-	// Verificar que tiene valor
+	// Verify it has value
 	if secret.Len() == 0 {
 		t.Fatal("Secret should have value")
 	}
@@ -246,7 +246,7 @@ func TestSecret_SecureZero(t *testing.T) {
 	// Zero out
 	secret.SecureZero()
 
-	// Verificar que está en cero
+	// Verify it's zeroed
 	for i, b := range secret.Value {
 		if b != 0 {
 			t.Errorf("Byte %d should be 0 after SecureZero, got %d", i, b)
@@ -254,7 +254,7 @@ func TestSecret_SecureZero(t *testing.T) {
 	}
 }
 
-// TestSecret_HKDFExtract prueba HKDF-Extract con Secrets.
+// TestSecret_HKDFExtract tests HKDF-Extract with Secrets.
 func TestSecret_HKDFExtract(t *testing.T) {
 	salt, _ := NewSecretRandom(32)
 	ikm, _ := NewSecretRandom(32)
@@ -264,12 +264,12 @@ func TestSecret_HKDFExtract(t *testing.T) {
 		t.Fatalf("HKDFExtract() error = %v", err)
 	}
 
-	// PRK debería tener la longitud correcta
+	// PRK should have correct length
 	if prk.Len() != 32 {
 		t.Errorf("PRK length should be 32, got %d", prk.Len())
 	}
 
-	// Salt e IKM deberían estar en cero después de usar
+	// Salt and IKM should be zeroed after use
 	for i, b := range salt.Value {
 		if b != 0 {
 			t.Errorf("Salt byte %d should be 0 after HKDFExtract, got %d", i, b)
@@ -277,7 +277,7 @@ func TestSecret_HKDFExtract(t *testing.T) {
 	}
 }
 
-// TestSecret_HKDFExpand prueba HKDF-Expand con Secrets.
+// TestSecret_HKDFExpand tests HKDF-Expand with Secrets.
 func TestSecret_HKDFExpand(t *testing.T) {
 	prk, _ := NewSecretRandom(32)
 	info := []byte("info")
@@ -294,7 +294,7 @@ func TestSecret_HKDFExpand(t *testing.T) {
 	}
 }
 
-// TestSecret_DeriveSecret prueba la derivación de secretos.
+// TestSecret_DeriveSecret tests secret derivation.
 func TestSecret_DeriveSecret(t *testing.T) {
 	secret, _ := NewSecretRandom(32)
 	cs := MLS128DHKEMP256
@@ -305,13 +305,13 @@ func TestSecret_DeriveSecret(t *testing.T) {
 		t.Fatalf("DeriveSecret() error = %v", err)
 	}
 
-	// El secreto derivado debería tener la longitud del hash
+	// Derived secret should have hash length
 	if derived.Len() != cs.HashLength() {
 		t.Errorf("Derived secret length should be %d, got %d", cs.HashLength(), derived.Len())
 	}
 }
 
-// TestSecret_Hmac prueba HMAC con Secrets.
+// TestSecret_Hmac tests HMAC with Secrets.
 func TestSecret_Hmac(t *testing.T) {
 	key, _ := NewSecretRandom(32)
 	message := []byte("message to authenticate")
@@ -321,39 +321,39 @@ func TestSecret_Hmac(t *testing.T) {
 		t.Fatalf("Hmac() error = %v", err)
 	}
 
-	// MAC debería tener la longitud correcta (SHA-256)
+	// MAC should have correct length (SHA-256)
 	if len(mac) != 32 {
 		t.Errorf("MAC length should be 32, got %d", len(mac))
 	}
 }
 
-// TestSecret_NilSafety prueba que los métodos manejan nil correctamente.
+// TestSecret_NilSafety tests that methods handle nil correctly.
 func TestSecret_NilSafety(t *testing.T) {
 	var nilSecret *Secret
 
-	// AsSlice con nil debería retornar nil
+	// AsSlice with nil should return nil
 	if nilSecret.AsSlice() != nil {
 		t.Error("AsSlice() on nil should return nil")
 	}
 
-	// Len con nil debería retornar 0
+	// Len with nil should return 0
 	if nilSecret.Len() != 0 {
 		t.Error("Len() on nil should return 0")
 	}
 
-	// Clone con nil debería retornar secret vacío
+	// Clone with nil should return empty secret
 	clone := nilSecret.Clone()
 	if clone == nil || clone.Value != nil {
 		t.Error("Clone() on nil should return empty secret")
 	}
 
-	// Equal con nil
+	// Equal with nil
 	if nilSecret.Equal(nilSecret) != true {
 		t.Error("Equal() with both nil should return true")
 	}
 }
 
-// TestSecretRandomCS prueba NewSecretRandomCS.
+// TestSecretRandomCS tests NewSecretRandomCS.
 func TestSecretRandomCS(t *testing.T) {
 	cs := MLS128DHKEMP256
 	secret, err := NewSecretRandomCS(cs)
@@ -367,17 +367,17 @@ func TestSecretRandomCS(t *testing.T) {
 	}
 }
 
-// TestZeroSecret prueba ZeroSecret.
+// TestZeroSecret tests ZeroSecret.
 func TestZeroSecret(t *testing.T) {
 	length := 32
 	secret := ZeroSecret(length)
 
-	// Verificar longitud
+	// Verify length
 	if secret.Len() != length {
 		t.Errorf("ZeroSecret length should be %d, got %d", length, secret.Len())
 	}
 
-	// Verificar que todos los bytes son cero
+	// Verify all bytes are zero
 	for i, b := range secret.Value {
 		if b != 0 {
 			t.Errorf("Byte %d should be 0, got %d", i, b)
@@ -385,7 +385,7 @@ func TestZeroSecret(t *testing.T) {
 	}
 }
 
-// TestZeroSecretCS prueba ZeroSecretCS.
+// TestZeroSecretCS tests ZeroSecretCS.
 func TestZeroSecretCS(t *testing.T) {
 	cs := MLS128DHKEMP256
 	secret := ZeroSecretCS(cs)
@@ -396,7 +396,7 @@ func TestZeroSecretCS(t *testing.T) {
 	}
 }
 
-// BenchmarkSecret_Random mide el performance de generación aleatoria.
+// BenchmarkSecret_Random measures random generation performance.
 func BenchmarkSecret_Random(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -404,7 +404,7 @@ func BenchmarkSecret_Random(b *testing.B) {
 	}
 }
 
-// BenchmarkSecret_HKDFExtract mide el performance de HKDF-Extract.
+// BenchmarkSecret_HKDFExtract measures HKDF-Extract performance.
 func BenchmarkSecret_HKDFExtract(b *testing.B) {
 	salt, _ := NewSecretRandom(32)
 	ikm, _ := NewSecretRandom(32)
@@ -415,7 +415,7 @@ func BenchmarkSecret_HKDFExtract(b *testing.B) {
 	}
 }
 
-// BenchmarkSecret_HKDFExpand mide el performance de HKDF-Expand.
+// BenchmarkSecret_HKDFExpand measures HKDF-Expand performance.
 func BenchmarkSecret_HKDFExpand(b *testing.B) {
 	prk, _ := NewSecretRandom(32)
 	info := []byte("info")
@@ -427,10 +427,10 @@ func BenchmarkSecret_HKDFExpand(b *testing.B) {
 }
 
 // ============================================================================
-// Tests para Cipher Suite 1 (Ed25519/X25519) - RFC 9420 §5.1
+// Tests for Cipher Suite 1 (Ed25519/X25519) - RFC 9420 §5.1
 // ============================================================================
 
-// TestEd25519_GenerateKeyPair prueba generación de keypair Ed25519
+// TestEd25519_GenerateKeyPair tests Ed25519 keypair generation
 func TestEd25519_GenerateKeyPair(t *testing.T) {
 	privKey, pubKey, err := GenerateEd25519KeyPair()
 	if err != nil {
@@ -446,7 +446,7 @@ func TestEd25519_GenerateKeyPair(t *testing.T) {
 	}
 }
 
-// TestEd25519_SignVerifyWithLabel prueba firma y verificación Ed25519
+// TestEd25519_SignVerifyWithLabel tests Ed25519 signing and verification
 func TestEd25519_SignVerifyWithLabel(t *testing.T) {
 	privKey, pubKey, err := GenerateEd25519KeyPair()
 	if err != nil {
@@ -480,7 +480,7 @@ func TestEd25519_SignVerifyWithLabel(t *testing.T) {
 	}
 }
 
-// TestEd25519_Bytes prueba serialización de keys Ed25519
+// TestEd25519_Bytes tests Ed25519 key serialization
 func TestEd25519_Bytes(t *testing.T) {
 	privKey, pubKey, err := GenerateEd25519KeyPair()
 	if err != nil {
@@ -498,43 +498,43 @@ func TestEd25519_Bytes(t *testing.T) {
 	}
 }
 
-// TestEd25519_NewPrivateKeyFromBytes prueba creación de private key desde bytes
+// TestEd25519_NewPrivateKeyFromBytes tests private key creation from bytes
 func TestEd25519_NewPrivateKeyFromBytes(t *testing.T) {
-	// Generar key original
+	// Generate original key
 	privKey1, _, err := GenerateEd25519KeyPair()
 	if err != nil {
 		t.Fatalf("GenerateEd25519KeyPair failed: %v", err)
 	}
 
-	// Obtener bytes
+	// Get bytes
 	privBytes := privKey1.Bytes()
 
-	// Crear key desde bytes
+	// Create key from bytes
 	privKey2, err := NewEd25519PrivateKey(privBytes)
 	if err != nil {
 		t.Fatalf("NewEd25519PrivateKey failed: %v", err)
 	}
 
-	// Ambas keys deberían firmar igual
+	// Both keys should sign the same
 	data := []byte("test")
 	sig1, _ := privKey1.SignWithLabel("label", data)
 	sig2, _ := privKey2.SignWithLabel("label", data)
 
-	// Las firmas deberían ser iguales (Ed25519 es determinístico)
+	// Signatures should be equal (Ed25519 is deterministic)
 	if string(sig1.AsSlice()) != string(sig2.AsSlice()) {
 		t.Error("Same private key should produce same signature")
 	}
 }
 
-// TestEd25519_InvalidKeyLength prueba longitudes inválidas
+// TestEd25519_InvalidKeyLength tests invalid lengths
 func TestEd25519_InvalidKeyLength(t *testing.T) {
-	// Private key muy corto
+	// Private key too short
 	_, err := NewEd25519PrivateKey([]byte{0x01, 0x02})
 	if err == nil {
 		t.Error("NewEd25519PrivateKey should fail with short key")
 	}
 
-	// Public key muy corto
+	// Public key too short
 	_, err = NewEd25519PublicKey([]byte{0x01, 0x02})
 	if err == nil {
 		t.Error("NewEd25519PublicKey should fail with short key")
@@ -542,10 +542,10 @@ func TestEd25519_InvalidKeyLength(t *testing.T) {
 }
 
 // ============================================================================
-// Tests para X25519 (DHKEM) - RFC 9420 §4.1
+// Tests for X25519 (DHKEM) - RFC 9420 §4.1
 // ============================================================================
 
-// TestX25519_GenerateKeyPair prueba generación de keypair X25519
+// TestX25519_GenerateKeyPair tests X25519 keypair generation
 func TestX25519_GenerateKeyPair(t *testing.T) {
 	privKey, pubKey, err := GenerateX25519KeyPair()
 	if err != nil {
@@ -561,15 +561,15 @@ func TestX25519_GenerateKeyPair(t *testing.T) {
 	}
 }
 
-// TestX25519_EncapDecap prueba encapsulación/decapsulación X25519
+// TestX25519_EncapDecap tests X25519 encapsulation/decapsulation
 func TestX25519_EncapDecap(t *testing.T) {
-	// Generar keypair receptor
+	// Generate receiver keypair
 	pubKey, privKey, err := GenerateX25519KeyPair()
 	if err != nil {
 		t.Fatalf("GenerateX25519KeyPair failed: %v", err)
 	}
 
-	// Encapsular
+	// Encapsulate
 	ciphertext, sharedSecret1, err := EncapToBytes(pubKey, MLS128DHKEMX25519)
 	if err != nil {
 		t.Fatalf("EncapToBytes failed: %v", err)
@@ -583,23 +583,23 @@ func TestX25519_EncapDecap(t *testing.T) {
 		t.Fatal("EncapToBytes should return non-nil shared secret")
 	}
 
-	// Decapsular
+	// Decapsulate
 	sharedSecret2, err := DecapToBytes(ciphertext, privKey, MLS128DHKEMX25519)
 	if err != nil {
 		t.Fatalf("DecapToBytes failed: %v", err)
 	}
 
-	// Los shared secrets deberían ser iguales
+	// Shared secrets should be equal
 	if string(sharedSecret1) != string(sharedSecret2) {
 		t.Error("Encap/Decap should produce same shared secret")
 	}
 }
 
-// TestDeriveKeyPairX25519 prueba derivación determinística de keypair
+// TestDeriveKeyPairX25519 tests deterministic keypair derivation
 func TestDeriveKeyPairX25519(t *testing.T) {
 	ikm := []byte("test ikm for derivation")
 
-	// Derivar dos veces con mismo IKM
+	// Derive twice with same IKM
 	pub1, priv1, err := DeriveKeyPairX25519(ikm)
 	if err != nil {
 		t.Fatalf("DeriveKeyPairX25519 failed: %v", err)
@@ -610,176 +610,55 @@ func TestDeriveKeyPairX25519(t *testing.T) {
 		t.Fatalf("DeriveKeyPairX25519 failed: %v", err)
 	}
 
-	// Deberían ser iguales (derivación determinística)
+	// Should be equal (deterministic derivation)
 	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
 		t.Error("Same IKM should produce same keypair")
 	}
 }
 
 // ============================================================================
-// Tests para Cipher Suite 3 (ChaCha20-Poly1305) - RFC 9420 §5.1
+// Tests for hash and derivation functions - RFC 9420 §5.2
 // ============================================================================
 
-// TestChaCha20Poly1305_EncryptDecrypt prueba cifrado/descifrado ChaCha20-Poly1305
-func TestChaCha20Poly1305_EncryptDecrypt(t *testing.T) {
-	// Generar key y nonce
-	key, err := GenerateChaCha20Key()
-	if err != nil {
-		t.Fatalf("GenerateChaCha20Key failed: %v", err)
-	}
-	nonce, err := GenerateChaCha20Nonce()
-	if err != nil {
-		t.Fatalf("GenerateChaCha20Nonce failed: %v", err)
-	}
-
-	if len(key) != 32 {
-		t.Errorf("ChaCha20 key should be 32 bytes, got %d", len(key))
-	}
-
-	if len(nonce) != 12 {
-		t.Errorf("ChaCha20 nonce should be 12 bytes, got %d", len(nonce))
-	}
-
-	plaintext := []byte("Hello, ChaCha20!")
-	aad := []byte("additional data")
-
-	// Cifrar
-	ciphertext, err := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
-	if err != nil {
-		t.Fatalf("ChaCha20Poly1305Encrypt failed: %v", err)
-	}
-
-	if len(ciphertext) <= len(plaintext) {
-		t.Error("Ciphertext should be longer than plaintext (includes auth tag)")
-	}
-
-	// Descifrar
-	decrypted, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad)
-	if err != nil {
-		t.Fatalf("ChaCha20Poly1305Decrypt failed: %v", err)
-	}
-
-	if string(decrypted) != string(plaintext) {
-		t.Errorf("Decrypted text mismatch: got %q, want %q", string(decrypted), string(plaintext))
-	}
-}
-
-// TestChaCha20Poly1305_WrongKey prueba que key incorrecta falla
-func TestChaCha20Poly1305_WrongKey(t *testing.T) {
-	key1, _ := GenerateChaCha20Key()
-	key2, _ := GenerateChaCha20Key()
-	nonce, _ := GenerateChaCha20Nonce()
-
-	plaintext := []byte("test message")
-	aad := []byte("aad")
-
-	ciphertext, _ := ChaCha20Poly1305Encrypt(key1, nonce, plaintext, aad)
-
-	// Descifrar con key incorrecta debería fallar
-	_, err := ChaCha20Poly1305Decrypt(key2, nonce, ciphertext, aad)
-	if err == nil {
-		t.Error("ChaCha20Poly1305Decrypt should fail with wrong key")
-	}
-}
-
-// TestChaCha20Poly1305_TamperedData prueba que datos modificados fallan
-func TestChaCha20Poly1305_TamperedData(t *testing.T) {
-	key, _ := GenerateChaCha20Key()
-	nonce, _ := GenerateChaCha20Nonce()
-
-	plaintext := []byte("test message")
-	aad := []byte("aad")
-
-	ciphertext, _ := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
-
-	// Corromper un byte del ciphertext
-	ciphertext[0] ^= 0xFF
-
-	// Descifrar debería fallar
-	_, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad)
-	if err == nil {
-		t.Error("ChaCha20Poly1305Decrypt should fail with tampered ciphertext")
-	}
-}
-
-// TestChaCha20Poly1305_WrongAAD prueba que AAD incorrecto falla
-func TestChaCha20Poly1305_WrongAAD(t *testing.T) {
-	key, _ := GenerateChaCha20Key()
-	nonce, _ := GenerateChaCha20Nonce()
-
-	plaintext := []byte("test message")
-	aad1 := []byte("aad1")
-	aad2 := []byte("aad2")
-
-	ciphertext, _ := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad1)
-
-	// Descifrar con AAD incorrecto debería fallar
-	_, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad2)
-	if err == nil {
-		t.Error("ChaCha20Poly1305Decrypt should fail with wrong AAD")
-	}
-}
-
-// TestChaCha20_KeyNonceGeneration prueba generación de key y nonce
-func TestChaCha20_KeyNonceGeneration(t *testing.T) {
-	key1, _ := GenerateChaCha20Key()
-	key2, _ := GenerateChaCha20Key()
-
-	if string(key1) == string(key2) {
-		t.Error("GenerateChaCha20Key should produce different keys")
-	}
-
-	nonce1, _ := GenerateChaCha20Nonce()
-	nonce2, _ := GenerateChaCha20Nonce()
-
-	if string(nonce1) == string(nonce2) {
-		t.Error("GenerateChaCha20Nonce should produce different nonces")
-	}
-}
-
-// ============================================================================
-// Tests para funciones hash y derivación - RFC 9420 §5.2
-// ============================================================================
-
-// TestCiphersuite_Hash prueba función hash
+// TestCiphersuite_Hash tests hash function
 func TestCiphersuite_Hash(t *testing.T) {
 	data := []byte("test data")
 
-	// Hash con cs=2 (P256/AES-GCM)
+	// Hash with cs=2 (P256/AES-GCM)
 	hashFunc := MLS128DHKEMP256.HashFunction()
 	hash1 := hashFunc()
 	hash1.Write(data)
 	sum1 := hash1.Sum(nil)
-	
+
 	if len(sum1) != 32 {
 		t.Errorf("SHA-256 hash should be 32 bytes, got %d", len(sum1))
 	}
 
-	// Hash con cs=1 (X25519)
+	// Hash with cs=1 (X25519)
 	hashFunc2 := MLS128DHKEMX25519.HashFunction()
 	hash2 := hashFunc2()
 	hash2.Write(data)
 	sum2 := hash2.Sum(nil)
-	
+
 	if len(sum2) != 32 {
 		t.Errorf("SHA-256 hash should be 32 bytes, got %d", len(sum2))
 	}
 
-	// Mismo input debería producir mismo hash
+	// Same input should produce same hash
 	hash3 := hashFunc()
 	hash3.Write(data)
 	sum3 := hash3.Sum(nil)
-	
+
 	if string(sum1) != string(sum3) {
 		t.Error("Hash should be deterministic")
 	}
 }
 
-// TestDeriveKeyPairP256 prueba derivación de keypair P256
+// TestDeriveKeyPairP256 tests P256 keypair derivation
 func TestDeriveKeyPairP256(t *testing.T) {
 	ikm := []byte("test ikm for P256 derivation")
 
-	// Derivar dos veces con mismo IKM
+	// Derive twice with same IKM
 	pub1, priv1, err := DeriveKeyPairP256(ikm)
 	if err != nil {
 		t.Fatalf("DeriveKeyPairP256 failed: %v", err)
@@ -790,15 +669,15 @@ func TestDeriveKeyPairP256(t *testing.T) {
 		t.Fatalf("DeriveKeyPairP256 failed: %v", err)
 	}
 
-	// Deberían ser iguales (derivación determinística)
+	// Should be equal (deterministic derivation)
 	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
 		t.Error("Same IKM should produce same P256 keypair")
 	}
 }
 
-// TestSignable_Sign_Verify prueba firma y verificación genérica
+// TestSignable_Sign_Verify tests generic signing and verification
 func TestSignable_Sign_Verify(t *testing.T) {
-	// Generar keypair ECDSA
+	// Generate ECDSA keypair
 	privKey, err := GenerateSignaturePrivateKey()
 	if err != nil {
 		t.Fatalf("GenerateSignaturePrivateKey failed: %v", err)
@@ -806,20 +685,20 @@ func TestSignable_Sign_Verify(t *testing.T) {
 
 	data := []byte("test data to sign")
 
-	// Firmar
+	// Sign
 	sig, err := SignWithLabel(privKey, "test_label", data)
 	if err != nil {
 		t.Fatalf("SignWithLabel failed: %v", err)
 	}
 
-	// Verificar
+	// Verify
 	pubKey := privKey.PublicKey()
 	openMlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 	if err := VerifyWithLabel(openMlsPubKey, "test_label", data, sig); err != nil {
 		t.Errorf("VerifyWithLabel should succeed: %v", err)
 	}
 
-	// Verificar con label incorrecto debería fallar
+	// Verify with wrong label should fail
 	if err := VerifyWithLabel(openMlsPubKey, "wrong_label", data, sig); err == nil {
 		t.Error("VerifyWithLabel should fail with wrong label")
 	}

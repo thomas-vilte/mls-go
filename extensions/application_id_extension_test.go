@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openmls/go/extensions"
+	"github.com/mls-go/extensions"
 )
 
 // TestApplicationIdExtension_MarshalUnmarshal prueba serialización y deserialización.

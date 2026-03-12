@@ -3,8 +3,8 @@ package treesync
 import (
 	"errors"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
 )
 
 // UpdatePath represents a path through the tree used in Commit messages.

@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/schedule"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/schedule"
 )
 
 type keyScheduleEpochVector struct {
@@ -69,12 +69,12 @@ func TestKeyScheduleVectors(t *testing.T) {
 			name := fmt.Sprintf("cs-%d-epoch-%d", v.CipherSuite, i)
 			t.Run(name, func(t *testing.T) {
 				cs := ciphersuite.CipherSuite(v.CipherSuite)
-				
+
 				// Skip cipher suites no soportadas (CS4-7 son placeholders)
 				if !cs.IsSupported() {
 					t.Skipf("cipher suite %d no está implementada", v.CipherSuite)
 				}
-				
+
 				initSecret := ciphersuite.NewSecret(currentInitSecret)
 				commitSecret := ciphersuite.NewSecret(mustHex(t, epoch.CommitSecret))
 				groupContext := mustHex(t, epoch.GroupContext)

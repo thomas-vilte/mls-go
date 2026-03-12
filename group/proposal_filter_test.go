@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/keypackages"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/keypackages"
+	"github.com/mls-go/treesync"
 )
 
 func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {

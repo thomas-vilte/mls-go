@@ -3,7 +3,7 @@ package extensions_test
 import (
 	"testing"
 
-	"github.com/openmls/go/extensions"
+	"github.com/mls-go/extensions"
 )
 
 // TestExtensions_Integration prueba integración entre extensiones.

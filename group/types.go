@@ -3,9 +3,9 @@ package group
 import (
 	"fmt"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
+	keypackages "github.com/mls-go/keypackages"
 )
 
 // readProposalInlineBody reads one proposal body from r based on the given type.

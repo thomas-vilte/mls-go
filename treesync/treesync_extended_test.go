@@ -10,9 +10,9 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 // ============================================================================
@@ -21,12 +21,12 @@ import (
 
 func TestLeafNodeData_Hash(t *testing.T) {
 	leaf := createTestLeafExt(t, "Test")
-	
+
 	hash1 := leaf.Hash()
 	if len(hash1) == 0 {
 		t.Fatal("LeafNodeData.Hash() returned empty hash")
 	}
-	
+
 	hash2 := leaf.Hash()
 	if !bytes.Equal(hash1, hash2) {
 		t.Error("LeafNodeData.Hash() is not deterministic")
@@ -41,31 +41,28 @@ func TestLeafNodeCapabilities_MarshalUnmarshal(t *testing.T) {
 		Proposals:        []uint16{1, 2, 3, 4},
 		Credentials:      []uint16{1},
 	}
-	
+
 	w := tls.NewWriter()
 	caps.Marshal(w)
-	
+
 	if len(w.Bytes()) == 0 {
 		t.Fatal("Capabilities.Marshal() returned empty data")
 	}
-	
+
 	r := tls.NewReader(w.Bytes())
 	got, err := UnmarshalCapabilities(r)
 	if err != nil {
 		t.Fatalf("UnmarshalCapabilities() failed: %v", err)
 	}
-	
+
 	if len(got.CipherSuites) != len(caps.CipherSuites) {
 		t.Errorf("CipherSuites len = %d, want %d", len(got.CipherSuites), len(caps.CipherSuites))
 	}
 }
 
-
-
 // ============================================================================
 // LeafNode Validation Tests - RFC 9420 §7.3
 // ============================================================================
-
 
 func TestValidateLeafNode_EmptyEncryptionKey(t *testing.T) {
 	leaf := createTestLeafExt(t, "Invalid")
@@ -106,12 +103,12 @@ func TestValidateLeafNode_InvalidSource(t *testing.T) {
 func TestUnmarshalLeafNodeData(t *testing.T) {
 	leaf := createTestLeafExt(t, "Test")
 	data := leaf.Marshal()
-	
+
 	got, err := UnmarshalLeafNodeData(data)
 	if err != nil {
 		t.Fatalf("UnmarshalLeafNodeData() failed: %v", err)
 	}
-	
+
 	if got.Credential == nil {
 		t.Error("Unmarshaled leaf has nil credential")
 	}
@@ -120,12 +117,12 @@ func TestUnmarshalLeafNodeData(t *testing.T) {
 func TestLeafNodeData_Roundtrip(t *testing.T) {
 	leaf := createTestLeafExt(t, "Roundtrip")
 	data := leaf.Marshal()
-	
+
 	got, err := UnmarshalLeafNodeData(data)
 	if err != nil {
 		t.Fatalf("Roundtrip failed: %v", err)
 	}
-	
+
 	if !bytes.Equal(got.EncryptionKey, leaf.EncryptionKey) {
 		t.Error("Encryption key mismatch")
 	}
@@ -137,7 +134,7 @@ func TestLeafNodeData_Roundtrip(t *testing.T) {
 
 func TestGetLeaf(t *testing.T) {
 	tree := createTestTreeExt(t, 4)
-	
+
 	node := tree.GetLeaf(0)
 	if node == nil {
 		t.Fatal("GetLeaf(0) returned nil")
@@ -145,7 +142,7 @@ func TestGetLeaf(t *testing.T) {
 	if node.State != NodeStatePresent {
 		t.Errorf("State = %v, want Present", node.State)
 	}
-	
+
 	node = tree.GetLeaf(999)
 	if node != nil {
 		t.Error("GetLeaf(999) should return nil")
@@ -191,7 +188,7 @@ func TestComputeParentHash(t *testing.T) {
 	if len(hash) == 0 {
 		t.Fatal("ComputeParentHash() returned empty hash")
 	}
-	
+
 	hash2 := ComputeParentHash([]byte("key"), []byte("ph"), []byte("sh"))
 	if !bytes.Equal(hash, hash2) {
 		t.Error("Not deterministic")
@@ -1086,13 +1083,13 @@ func createTestLeafExt(t *testing.T, id string) LeafNodeData {
 	cred := credentials.NewBasicCredential([]byte(id))
 	encPriv, _ := ecdh.P256().GenerateKey(rand.Reader)
 	sigPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	
+
 	return LeafNodeData{
 		Credential:     cred,
 		SignatureKey:   &sigPriv.PublicKey,
 		EncryptionKey:  encPriv.PublicKey().Bytes(),
 		LeafNodeSource: 1,
-		Capabilities:   &LeafNodeCapabilities{ProtocolVersions: []uint16{1}, CipherSuites: []uint16{1,2,3}},
+		Capabilities:   &LeafNodeCapabilities{ProtocolVersions: []uint16{1}, CipherSuites: []uint16{1, 2, 3}},
 		Lifetime:       &LeafNodeLifetime{NotBefore: 0, NotAfter: 9999999999},
 	}
 }

@@ -5,11 +5,11 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	keypackages "github.com/openmls/go/keypackages"
-	"github.com/openmls/go/schedule"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/schedule"
+	"github.com/mls-go/treesync"
 )
 
 // Helper: crea un grupo de 2 miembros para tests de Commit

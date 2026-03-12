@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // Welcome represents an MLS Welcome message (RFC 9420 §11.2.2).

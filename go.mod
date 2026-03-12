@@ -1,4 +1,4 @@
-module github.com/openmls/go
+module github.com/mls-go
 
 go 1.26.1
 

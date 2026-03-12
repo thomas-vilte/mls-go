@@ -76,7 +76,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // Extension errors

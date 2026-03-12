@@ -7,8 +7,8 @@ package secrettree
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
 )
 
 // Tree represents the secret tree for a group epoch.

@@ -6,13 +6,13 @@ import (
 	"fmt"
 )
 
-// DeriveKeyPairP256 deriva un P256 key pair desde IKM usando HKDF (RFC 9180 §4.1).
+// DeriveKeyPairP256 derives a P256 key pair from IKM using HKDF (RFC 9180 §4.1).
 //
-// Implementa:
-//   1. PRK = HKDF.Extract(salt="", ikm)
-//   2. okm = HKDF.Expand(PRK, "DKEM P256", 32)
-//   3. sk = okm como private key P256
-//   4. pk = sk.PublicKey()
+// Implements:
+//  1. PRK = HKDF.Extract(salt="", ikm)
+//  2. okm = HKDF.Expand(PRK, "DKEM P256", 32)
+//  3. sk = okm as P256 private key
+//  4. pk = sk.PublicKey()
 func DeriveKeyPairP256(ikm []byte) ([]byte, []byte, error) {
 	hkdf := NewHKDF()
 	prk := hkdf.Extract(nil, ikm)

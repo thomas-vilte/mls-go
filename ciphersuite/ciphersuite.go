@@ -98,12 +98,11 @@ package ciphersuite
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"errors"
 	"fmt"
 	"hash"
 )
 
-// Version information
+// Version information.
 const (
 	MLSVersion    = "1.0"
 	LabelPrefix   = "MLS 1.0 "
@@ -111,16 +110,21 @@ const (
 )
 
 // CipherSuite represents an MLS ciphersuite identifier as defined in RFC 9420 §5.1.
+//
+// See also: RFC 9420 §17.1 for mandatory cipher suites for MLS 1.0
 type CipherSuite uint16
 
 const (
-	// MLS128DHKEMX25519 is cipher suite 1: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (RFC 9420 §17.1)
+	// MLS128DHKEMX25519 is cipher suite 1: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+	// RFC 9420 §17.1: Recommended for most deployments
 	MLS128DHKEMX25519 CipherSuite = 0x0001
 
-	// MLS128DHKEMP256 is cipher suite 2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (RFC 9420 §17.1)
+	// MLS128DHKEMP256 is cipher suite 2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256
+	// RFC 9420 §17.1: MANDATORY for MLS 1.0 compliance
 	MLS128DHKEMP256 CipherSuite = 0x0002
 
-	// MLS256DHKEMX25519ChaCha20 is cipher suite 3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 (RFC 9420 §17.1)
+	// MLS256DHKEMX25519ChaCha20 is cipher suite 3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+	// RFC 9420 §17.1: For environments requiring 256-bit security
 	MLS256DHKEMX25519ChaCha20 CipherSuite = 0x0003
 
 	// Placeholder cipher suites (not implemented)
@@ -216,7 +220,7 @@ func (cs CipherSuite) AeadNonceLength() int {
 	return 12 // Both AES-GCM and ChaCha20-Poly1305 use 12-byte nonces
 }
 
-// HPKEConfig returns the HPKE configuration for the cipher suite.
+// CipherSuite returns the cipher suite for the HPKE configuration.
 func (cs CipherSuite) HPKEConfig() HPKEConfig {
 	switch cs {
 	case MLS128DHKEMX25519:
@@ -242,7 +246,7 @@ func (cs CipherSuite) HPKEConfig() HPKEConfig {
 	}
 }
 
-// HashFunction returns the hash constructor for the ciphersuite.
+// HashFunction returns the hash constructor for the cipher suite.
 func (cs CipherSuite) HashFunction() func() hash.Hash {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS256DHKEMX25519ChaCha20:
@@ -252,10 +256,12 @@ func (cs CipherSuite) HashFunction() func() hash.Hash {
 	}
 }
 
-// HashAlgorithm identifies hash algorithms.
+// HashAlgorithm identifies hash algorithms as defined in RFC 9420 §5.2.
 type HashAlgorithm uint8
 
 const (
+	// SHA256 is SHA-256 (32 bytes output)
+	// RFC 9420 §5.2: Used by cipher suites 1, 2, and 3
 	SHA256 HashAlgorithm = 0x01
 )
 
@@ -276,12 +282,20 @@ func (h HashAlgorithm) Size() int {
 	}
 }
 
-// AeadAlgorithm identifies AEAD algorithms.
+// AeadAlgorithm identifies AEAD algorithms as defined in RFC 9420 §5.1.
 type AeadAlgorithm uint16
 
 const (
-	AES128GCM        AeadAlgorithm = 0x0001
-	AES256GCM        AeadAlgorithm = 0x0002
+	// AES128GCM is AES-128-GCM (16-byte key, 12-byte nonce)
+	// RFC 9420 §5.1: Used by cipher suites 1 and 2
+	AES128GCM AeadAlgorithm = 0x0001
+
+	// AES256GCM is AES-256-GCM (32-byte key, 12-byte nonce)
+	// RFC 9420 §5.1: Used by cipher suites 4 and 5 (not implemented)
+	AES256GCM AeadAlgorithm = 0x0002
+
+	// ChaCha20Poly1305 is ChaCha20-Poly1305 (32-byte key, 12-byte nonce)
+	// RFC 9420 §5.1: Used by cipher suites 3, 6, and 7
 	ChaCha20Poly1305 AeadAlgorithm = 0x0003
 )
 
@@ -311,13 +325,16 @@ func (a AeadAlgorithm) NonceLength() int {
 	return 12
 }
 
-// SignatureScheme identifies signature schemes.
+// SignatureScheme identifies signature schemes as defined in RFC 9420 §5.1.2.
 type SignatureScheme uint16
 
 const (
-	// ECDSA_SECP256R1_SHA256 is ECDSA with P-256 and SHA-256 (RFC 9420 §5.1.2)
+	// ECDSA_SECP256R1_SHA256 is ECDSA with P-256 and SHA-256
+	// RFC 9420 §5.1.2: Used by cipher suite 2 (mandatory for MLS 1.0)
 	ECDSA_SECP256R1_SHA256 SignatureScheme = 0x0403
-	// ED25519 is Ed25519 signatures (RFC 8410)
+
+	// ED25519 is Ed25519 signatures
+	// RFC 8410: Used by cipher suites 1 and 3
 	ED25519 SignatureScheme = 0x0807
 )
 
@@ -339,13 +356,16 @@ type HPKEConfig struct {
 	AEAD AeadAlgorithm
 }
 
-// KEMAlgorithm identifies KEM algorithms for HPKE.
+// KEMAlgorithm identifies KEM algorithms for HPKE as defined in RFC 9180 §4.1.
 type KEMAlgorithm uint16
 
 const (
-	// DHKEM_P256_HKDF_SHA256 is DHKEM with P-256 and HKDF-SHA256 (RFC 9180)
+	// DHKEM_P256_HKDF_SHA256 is DHKEM with P-256 and HKDF-SHA256
+	// RFC 9180 §4.1: Used by cipher suite 2 (mandatory for MLS 1.0)
 	DHKEM_P256_HKDF_SHA256 KEMAlgorithm = 0x0010
-	// DHKEM_X25519_HKDF_SHA256 is DHKEM with X25519 and HKDF-SHA256 (RFC 9180)
+
+	// DHKEM_X25519_HKDF_SHA256 is DHKEM with X25519 and HKDF-SHA256
+	// RFC 9180 §4.1: Used by cipher suites 1 and 3
 	DHKEM_X25519_HKDF_SHA256 KEMAlgorithm = 0x0020
 )
 
@@ -360,10 +380,12 @@ func (k KEMAlgorithm) String() string {
 	}
 }
 
-// KDFAlgorithm identifies KDF algorithms for HPKE.
+// KDFAlgorithm identifies KDF algorithms for HPKE as defined in RFC 9180 §4.1.
 type KDFAlgorithm uint16
 
 const (
+	// HKDF_SHA256 is HKDF-SHA256 (32 bytes output)
+	// RFC 9180 §4.1: Used by all implemented cipher suites
 	HKDF_SHA256 KDFAlgorithm = 0x0001
 )
 
@@ -375,46 +397,6 @@ func (k KDFAlgorithm) String() string {
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(k))
 	}
 }
-
-// Standard errors para error handling moderno con wrapping.
-// Usar con errors.Is() y errors.As() para verificación de errores.
-var (
-	// ErrAeadDecryption ocurre cuando falla el descifrado AEAD.
-	ErrAeadDecryption = errors.New("ciphersuite: AEAD decryption failed")
-
-	// ErrInvalidKeyLength ocurre cuando la longitud de la clave es inválida.
-	ErrInvalidKeyLength = errors.New("ciphersuite: invalid key length")
-
-	// ErrInvalidNonceLength ocurre cuando la longitud del nonce es inválida.
-	ErrInvalidNonceLength = errors.New("ciphersuite: invalid nonce length")
-
-	// ErrInsufficientRandom ocurre cuando no hay suficiente aleatoriedad.
-	ErrInsufficientRandom = errors.New("ciphersuite: insufficient randomness")
-
-	// ErrInvalidSignature ocurre cuando la verificación de firma falla.
-	ErrInvalidSignature = errors.New("ciphersuite: invalid signature")
-
-	// ErrInvalidLength ocurre cuando una longitud es inválida.
-	ErrInvalidLength = errors.New("ciphersuite: invalid length")
-
-	// ErrKdfLabelTooLarge ocurre cuando una etiqueta KDF es demasiado grande.
-	ErrKdfLabelTooLarge = errors.New("ciphersuite: KDF label too large")
-
-	// ErrKdfSerializationError ocurre cuando falla la serialización KDF.
-	ErrKdfSerializationError = errors.New("ciphersuite: KDF serialization error")
-
-	// ErrTlsSerializationError ocurre cuando falla la serialización TLS.
-	ErrTlsSerializationError = errors.New("ciphersuite: TLS serialization error")
-
-	// ErrCryptoLibraryError ocurre cuando hay un error en la librería criptográfica.
-	ErrCryptoLibraryError = errors.New("ciphersuite: crypto library error")
-
-	// ErrHKDFExpand ocurre cuando HKDF-Expand falla.
-	ErrHKDFExpand = errors.New("ciphersuite: HKDF expand failed")
-
-	// ErrHKDFExtract ocurre cuando HKDF-Extract falla.
-	ErrHKDFExtract = errors.New("ciphersuite: HKDF extract failed")
-)
 
 // HpkeCiphertext represents an HPKE ciphertext.
 type HpkeCiphertext struct {
@@ -430,6 +412,7 @@ func EqualCT(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
+// Hash computes the hash of data using the cipher suite's hash function.
 func Hash(cs CipherSuite, data []byte) ([]byte, error) {
 	h := cs.HashFunction()
 	if h == nil {

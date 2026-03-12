@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
+	"github.com/mls-go/ciphersuite"
 )
 
 type pskVectorPsk struct {

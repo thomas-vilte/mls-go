@@ -1,8 +1,8 @@
 package group
 
 import (
-	"github.com/openmls/go/framing"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/framing"
+	"github.com/mls-go/internal/tls"
 )
 
 func init() {

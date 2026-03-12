@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 func makeCredWithKey(t *testing.T) *credentials.CredentialWithKey {

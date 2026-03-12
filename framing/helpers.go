@@ -3,8 +3,8 @@ package framing
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
 )
 
 // marshalAuthenticatedContentTBM serializa AuthenticatedContentTBM para membership_tag (RFC §6.2).

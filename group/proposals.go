@@ -3,7 +3,7 @@ package group
 import (
 	"errors"
 
-	"github.com/openmls/go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
 // All proposal types according to RFC 9420 §12.1

@@ -3,7 +3,7 @@ package framing
 import (
 	"fmt"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // FramedContentBody es la interface que representa el select(content_type) del RFC §6.1

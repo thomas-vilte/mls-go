@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	itls "github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	itls "github.com/mls-go/internal/tls"
+	keypackages "github.com/mls-go/keypackages"
 )
 
 // buildExternalSendersExtData construye el payload de la extensión ExternalSenders

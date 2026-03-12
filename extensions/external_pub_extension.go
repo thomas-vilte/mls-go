@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // ExternalPubExtension contiene una public key HPKE para External Commit.

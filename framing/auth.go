@@ -3,9 +3,9 @@ package framing
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
+	keypackages "github.com/mls-go/keypackages"
 )
 
 // FramedContentAuthData implementa RFC 9420 §6.1.

@@ -9,19 +9,24 @@ import (
 	"fmt"
 
 	"crypto/hpke"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
-// EncryptWithLabel encripta usando HPKE con label (RFC 9420 §5.1.3).
+// EncryptWithLabel encrypts using HPKE with label as defined in RFC 9420 §5.1.3.
 //
-// Implementa:
-//   HPKE.Encrypt(pkR, info, aad, plaintext) -> (enc, ciphertext)
+// Implements RFC 9180 §4.1 (HPKE) with MLS-specific labeling:
 //
-// Donde:
+//	HPKE.Encrypt(pkR, info, aad, plaintext) -> (enc, ciphertext)
+//
+// Where:
 //   - info = Serialize(VL("MLS 1.0 " + label) || context)
-//   - pkR es la public key del receptor
+//   - pkR is the receiver's public key
+//   - enc is the encapsulated key (KEM output)
 //
-// Usa crypto/hpke nativo de Go 1.26 para todas las cipher suites.
+// The label prefix "MLS 1.0 " ensures domain separation as required by
+// RFC 9420 §5.1.3 to prevent cross-protocol attacks.
+//
+// Uses Go 1.26 native crypto/hpke for all cipher suites.
 func EncryptWithLabel(
 	publicKey []byte,
 	label string,
@@ -41,7 +46,7 @@ func EncryptWithLabel(
 	}
 }
 
-// encryptWithLabelNative es la implementación nativa usando crypto/hpke.
+// encryptWithLabelNative is the native implementation using crypto/hpke.
 func encryptWithLabelNative(
 	publicKey []byte,
 	label string,
@@ -87,14 +92,19 @@ func encryptWithLabelNative(
 	}, nil
 }
 
-// DecryptWithLabel desencripta usando HPKE con label (RFC 9420 §5.1.3).
+// DecryptWithLabel decrypts using HPKE with label as defined in RFC 9420 §5.1.3.
 //
-// Implementa:
-//   HPKE.Decrypt(skR, info, aad, enc, ciphertext) -> plaintext
+// Implements RFC 9180 §4.1 (HPKE) with MLS-specific labeling:
 //
-// Donde:
+//	HPKE.Decrypt(skR, info, aad, enc, ciphertext) -> plaintext
+//
+// Where:
 //   - info = Serialize(VL("MLS 1.0 " + label) || context)
-//   - skR es la private key del receptor
+//   - skR is the receiver's private key
+//   - enc is the encapsulated key (KEM output)
+//
+// The label prefix "MLS 1.0 " ensures domain separation as required by
+// RFC 9420 §5.1.3 to prevent cross-protocol attacks.
 func DecryptWithLabel(
 	privateKey []byte,
 	label string,
@@ -114,7 +124,7 @@ func DecryptWithLabel(
 	}
 }
 
-// decryptWithLabelNative es la implementación nativa usando crypto/hpke.
+// decryptWithLabelNative is the native implementation using crypto/hpke.
 func decryptWithLabelNative(
 	privateKey []byte,
 	label string,
@@ -150,11 +160,16 @@ func decryptWithLabelNative(
 	return plaintext, nil
 }
 
-// DeriveKeyPair deriva un HPKE key pair desde IKM (RFC 9180 §4.1).
+// DeriveKeyPair derives an HPKE key pair from IKM as defined in RFC 9180 §4.1.
 //
-// Implementa el algoritmo DeriveKeyPair exacto de RFC 9180 §4.1 usando
-// la implementación nativa de crypto/hpke, que aplica LabeledExtract /
-// LabeledExpand con el suite_id del KEM correcto.
+// Implements the exact DeriveKeyPair algorithm from RFC 9180 §4.1:
+//  1. pk = KEM.DeriveKeyPair(ikm)
+//  2. Returns the derived key pair
+//
+// The function uses LabeledExtract / LabeledExpand with the KEM-specific
+// suite_id as required by RFC 9180 §4.1 for domain separation.
+//
+// See also: RFC 9420 §5.1.3 for HPKE usage in MLS
 func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 	var kem hpke.KEM
 	switch cs {
@@ -186,7 +201,7 @@ func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 	}
 }
 
-// EncryptContext representa el contexto para encriptación HPKE (RFC 9420 §5.1.3).
+// EncryptContext represents the context for HPKE encryption (RFC 9420 §5.1.3).
 //
 //	struct {
 //	    opaque label<V> = "MLS 1.0 " + Label;
@@ -197,7 +212,7 @@ type EncryptContext struct {
 	Context []byte
 }
 
-// NewEncryptContext crea un contexto de encriptación con prefijo MLS.
+// NewEncryptContext creates an encryption context with MLS prefix.
 func NewEncryptContext(label string, context []byte) *EncryptContext {
 	return &EncryptContext{
 		Label:   []byte(LabelPrefix + label),
@@ -205,7 +220,7 @@ func NewEncryptContext(label string, context []byte) *EncryptContext {
 	}
 }
 
-// Marshal serializa a TLS format.
+// Marshal serializes to TLS format.
 func (ec *EncryptContext) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteVLBytes(ec.Label)

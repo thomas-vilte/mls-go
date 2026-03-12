@@ -3,9 +3,9 @@ package group
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
+	keypackages "github.com/mls-go/keypackages"
 )
 
 // GroupContext represents the shared, public state of the group (RFC 9420 §8.1).

@@ -4,7 +4,7 @@ package extensions
 import (
 	"fmt"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // LastResortExtension marca un KeyPackage para uso en escenarios "last resort".

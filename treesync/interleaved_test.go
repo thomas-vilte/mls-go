@@ -1,7 +1,7 @@
 package treesync_test
 
 import (
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/treesync"
 	"testing"
 )
 

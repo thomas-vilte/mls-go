@@ -3,9 +3,9 @@ package framing
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
-	"github.com/openmls/go/schedule"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
+	"github.com/mls-go/schedule"
 )
 
 // PublicMessage implementa RFC 9420 §6.2.

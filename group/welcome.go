@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
-	"github.com/openmls/go/keypackages"
-	"github.com/openmls/go/schedule"
-	"github.com/openmls/go/secrettree"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
+	"github.com/mls-go/keypackages"
+	"github.com/mls-go/schedule"
+	"github.com/mls-go/secrettree"
+	"github.com/mls-go/treesync"
 )
 
 // Welcome represents an MLS Welcome message (RFC 9420 §12.4.3.1).

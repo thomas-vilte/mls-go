@@ -4,7 +4,7 @@ import (
 	"crypto/ecdh"
 	"fmt"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 const (

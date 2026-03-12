@@ -63,8 +63,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
 )
 
 // CredentialType representa el tipo de credencial según RFC 9420 §5.3.

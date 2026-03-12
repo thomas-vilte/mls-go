@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 // ExternalSender represents an external sender allowed to send proposals.
@@ -19,10 +19,10 @@ import (
 // being full members. This is used by DAVE (Discord Audio Voice Encryption)
 // to allow the delivery service to manage group membership.
 //
-// struct {
-//     SignaturePublicKey credential_public_key;
-//     opaque credential<V>;
-// } ExternalSender;
+//	struct {
+//	    SignaturePublicKey credential_public_key;
+//	    opaque credential<V>;
+//	} ExternalSender;
 type ExternalSender struct {
 	Credential *credentials.Credential
 	PublicKey  *ecdsa.PublicKey // Signature public key
@@ -30,9 +30,9 @@ type ExternalSender struct {
 
 // ExternalSendersExtension contains a list of external senders.
 //
-// struct {
-//     ExternalSender senders<V>;
-// } ExternalSendersExtension;
+//	struct {
+//	    ExternalSender senders<V>;
+//	} ExternalSendersExtension;
 type ExternalSendersExtension struct {
 	Senders []ExternalSender
 }

@@ -1,3 +1,4 @@
+// Package ciphersuite implements nonce reuse protection per RFC 9420 §9.1.
 package ciphersuite
 
 import (
@@ -5,10 +6,19 @@ import (
 	"fmt"
 )
 
-// ReuseGuardBytes is the size of the reuse guard in bytes.
+// ReuseGuardBytes is the size of the reuse guard in bytes (RFC 9420 §9.1).
 const ReuseGuardBytes = 4
 
-// ReuseGuard protects against nonce reuse (RFC 9420 §9.1).
+// ReuseGuard protects against nonce reuse as defined in RFC 9420 §9.1.
+//
+// When encrypting with AEAD, MLS XORs the nonce with a random 4-byte reuse guard
+// to prevent nonce reuse even if the same secret and generation are used:
+//
+//	actual_nonce = nonce XOR (0x00...00 || reuse_guard)
+//
+// This is critical for security because AEAD nonce reuse compromises confidentiality.
+//
+// See also: RFC 9420 §9.1 for nonce reuse mitigation
 type ReuseGuard struct {
 	value [ReuseGuardBytes]byte
 }

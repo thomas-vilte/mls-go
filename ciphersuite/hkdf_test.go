@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestHKDF_RFC5869_TestCase1 prueba el Test Case 1 de RFC 5869.
+// TestHKDF_RFC5869_TestCase1 tests Test Case 1 from RFC 5869.
 // https://www.rfc-editor.org/rfc/rfc5869.html#appendix-A.1
 func TestHKDF_RFC5869_TestCase1(t *testing.T) {
 	// RFC 5869 Test Case 1 - Basic test case with SHA-256
@@ -36,7 +36,7 @@ func TestHKDF_RFC5869_TestCase1(t *testing.T) {
 	}
 }
 
-// TestHKDF_RFC5869_TestCase2 prueba el Test Case 2 de RFC 5869.
+// TestHKDF_RFC5869_TestCase2 tests Test Case 2 from RFC 5869.
 // https://www.rfc-editor.org/rfc/rfc5869.html#appendix-A.2
 func TestHKDF_RFC5869_TestCase2(t *testing.T) {
 	// RFC 5869 Test Case 2 - Test with SHA-256 and longer inputs/outputs
@@ -65,7 +65,7 @@ func TestHKDF_RFC5869_TestCase2(t *testing.T) {
 	}
 }
 
-// TestHKDF_RFC5869_TestCase3 prueba el Test Case 3 de RFC 5869.
+// TestHKDF_RFC5869_TestCase3 tests Test Case 3 from RFC 5869.
 // https://www.rfc-editor.org/rfc/rfc5869.html#appendix-A.3
 func TestHKDF_RFC5869_TestCase3(t *testing.T) {
 	// RFC 5869 Test Case 3 - Test with SHA-256 and zero-length salt/IKM
@@ -94,7 +94,7 @@ func TestHKDF_RFC5869_TestCase3(t *testing.T) {
 	}
 }
 
-// TestHKDF_ExtractExpand prueba la función combinada ExtractExpand.
+// TestHKDF_ExtractExpand tests the combined ExtractExpand function.
 func TestHKDF_ExtractExpand(t *testing.T) {
 	ikm := []byte("input key material")
 	salt := []byte("salt")
@@ -123,7 +123,7 @@ func TestHKDF_ExtractExpand(t *testing.T) {
 	}
 }
 
-// TestHKDF_Expand_TooLarge prueba que Expand rechace longitudes demasiado grandes.
+// TestHKDF_Expand_TooLarge tests that Expand rejects too large lengths.
 func TestHKDF_Expand_TooLarge(t *testing.T) {
 	hkdf := NewHKDF()
 	prk := []byte("pseudorandom key")
@@ -135,7 +135,7 @@ func TestHKDF_Expand_TooLarge(t *testing.T) {
 	}
 }
 
-// TestHKDF_NilInputs prueba que HKDF maneje correctamente inputs nil.
+// TestHKDF_NilInputs tests that HKDF handles nil inputs correctly.
 func TestHKDF_NilInputs(t *testing.T) {
 	hkdf := NewHKDF()
 	ikm := []byte("input key material")
@@ -156,7 +156,7 @@ func TestHKDF_NilInputs(t *testing.T) {
 	}
 }
 
-// BenchmarkHKDF_Extract mide el performance de Extract.
+// BenchmarkHKDF_Extract measures Extract performance.
 func BenchmarkHKDF_Extract(b *testing.B) {
 	hkdf := NewHKDF()
 	salt := make([]byte, 32)
@@ -168,7 +168,7 @@ func BenchmarkHKDF_Extract(b *testing.B) {
 	}
 }
 
-// BenchmarkHKDF_Expand mide el performance de Expand.
+// BenchmarkHKDF_Expand measures Expand performance.
 func BenchmarkHKDF_Expand(b *testing.B) {
 	hkdf := NewHKDF()
 	prk := make([]byte, 32)
@@ -180,7 +180,7 @@ func BenchmarkHKDF_Expand(b *testing.B) {
 	}
 }
 
-// BenchmarkHKDF_ExtractExpand mide el performance de ExtractExpand.
+// BenchmarkHKDF_ExtractExpand measures ExtractExpand performance.
 func BenchmarkHKDF_ExtractExpand(b *testing.B) {
 	hkdf := NewHKDF()
 	salt := make([]byte, 32)

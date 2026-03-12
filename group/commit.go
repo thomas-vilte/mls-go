@@ -3,11 +3,11 @@ package group
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/framing"
-	"github.com/openmls/go/internal/tls"
-	"github.com/openmls/go/schedule"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/framing"
+	"github.com/mls-go/internal/tls"
+	"github.com/mls-go/schedule"
+	"github.com/mls-go/treesync"
 )
 
 // ProposalOrRefType - RFC 9420 §12.4

@@ -3,9 +3,9 @@ package group
 import (
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/keypackages"
 )
 
 func TestNewGroup_CS1_Ed25519(t *testing.T) {

@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 // NodeIndex represents a node in the tree (interleaved representation).

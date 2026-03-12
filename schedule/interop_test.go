@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
+	"github.com/mls-go/ciphersuite"
 )
 
 // keyScheduleEpoch mirrors one epoch entry from the key-schedule test vector JSON.

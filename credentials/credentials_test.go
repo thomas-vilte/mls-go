@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 // generateTestCertificate creates a self-signed certificate for testing.
@@ -356,7 +356,7 @@ func TestValidateX509Chain_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ecdsa.GenerateKey: %v", err)
 	}
-	
+
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "Expired"},
@@ -364,7 +364,7 @@ func TestValidateX509Chain_Expired(t *testing.T) {
 		NotAfter:     time.Now().Add(-24 * time.Hour), // Expirado
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	
+
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
 	if err != nil {
 		t.Fatalf("x509.CreateCertificate: %v", err)

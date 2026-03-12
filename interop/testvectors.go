@@ -24,10 +24,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/group"
-	keypackages "github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/group"
+	keypackages "github.com/mls-go/keypackages"
 )
 
 // TestVector represents a single interoperability test case.

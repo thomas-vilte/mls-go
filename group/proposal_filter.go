@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/keypackages"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/keypackages"
+	"github.com/mls-go/treesync"
 )
 
 // ProposalFilter valida y filtra proposals según RFC 9420 §12.2

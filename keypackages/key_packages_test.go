@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openmls/go/credentials"
-	kp "github.com/openmls/go/keypackages"
+	"github.com/mls-go/credentials"
+	kp "github.com/mls-go/keypackages"
 )
 
 func newCredWithKey(t *testing.T, identity string) *credentials.CredentialWithKey {

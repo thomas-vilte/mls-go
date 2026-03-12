@@ -7,8 +7,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/extensions"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/extensions"
 )
 
 // Helper: genera un keypair ECDSA para tests

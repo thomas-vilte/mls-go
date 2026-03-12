@@ -8,32 +8,38 @@ import (
 	"fmt"
 )
 
-// HKDF implements HKDF-Extract-Expand según RFC 5869 usando SHA-256.
+// HKDF implements HKDF-Extract-Expand per RFC 5869 using SHA-256.
 //
-// HKDF (HMAC-based Key Derivation Function) es una función de derivación de claves
-// que sigue el paradigma "extract-then-expand". Se usa extensivamente en MLS
-// para derivar secretos del key schedule.
+// HKDF (HMAC-based Key Derivation Function) is a key derivation function
+// that follows the "extract-then-expand" paradigm as defined in RFC 5869 §2.
+// It is used extensively in MLS for:
+//   - Key schedule (RFC 9420 §8)
+//   - Secret tree derivation (RFC 9420 §8.4)
+//   - HPKE key derivation (RFC 9180 §4.1)
 //
 // RFC 5869: https://www.rfc-editor.org/rfc/rfc5869.html
 type HKDF struct{}
 
-// NewHKDF crea una nueva instancia de HKDF con SHA-256.
+// NewHKDF creates a new HKDF instance with SHA-256.
 func NewHKDF() *HKDF {
 	return &HKDF{}
 }
 
-// Extract extrae una clave pseudorandom (PRK) desde una clave de entrada (IKM).
+// Extract extracts a pseudorandom key (PRK) from input keying material (IKM).
 //
 // RFC 5869 §2.2:
 //
 //	PRK = HMAC-Hash(salt, IKM)
 //
-// Parámetros:
-//   - salt: valor sal opcional (si es nil, usa zeros del tamaño del hash)
+// Parameters:
+//   - salt: optional salt value (if nil, uses zeros of hash length)
 //   - ikm: Input Keying Material
 //
-// Retorna:
-//   - PRK: Pseudorandom Key (32 bytes para SHA-256)
+// Returns:
+//   - PRK: Pseudorandom Key (32 bytes for SHA-256)
+//
+// Security note: The salt should be at least HashLen bytes for optimal security.
+// If salt is not available, passing nil is acceptable (uses zeros).
 func (h *HKDF) Extract(salt, ikm []byte) []byte {
 	if salt == nil {
 		salt = make([]byte, sha256.Size)
@@ -44,24 +50,28 @@ func (h *HKDF) Extract(salt, ikm []byte) []byte {
 	return hmacHash.Sum(nil)
 }
 
-// Expand expande PRK a material de clave (OKM) de longitud deseada.
+// Expand expands PRK to output keying material (OKM) of desired length.
 //
 // RFC 5869 §2.3:
 //
 //	OKM = T(1) | T(2) | T(3) | ... | T(N)
-//	donde T(0) = empty string
+//	where T(0) = empty string
 //	      T(1) = HMAC-Hash(PRK, T(0) | info | 0x01)
 //	      T(2) = HMAC-Hash(PRK, T(1) | info | 0x02)
 //	      ...
 //
-// Parámetros:
-//   - prk: Pseudorandom Key (de Extract)
-//   - info: contexto opcional (puede ser empty)
-//   - length: longitud deseada en bytes (máx 255 * HashLength)
+// Parameters:
+//   - prk: Pseudorandom Key (from Extract)
+//   - info: optional context (can be empty)
+//   - length: desired length in bytes (max 255 * HashLength)
 //
-// Retorna:
+// Returns:
 //   - OKM: Output Keying Material
-//   - error: si length es demasiado grande
+//   - error: if length is too large (> 255 * HashLen per RFC 5869 §2.3)
+//
+// Security note: The info parameter provides context for key derivation.
+// It should include protocol identifiers, version numbers, etc. to ensure
+// domain separation.
 func (h *HKDF) Expand(prk, info []byte, length int) ([]byte, error) {
 	if length > 255*sha256.Size {
 		return nil, fmt.Errorf("hkdf: output length too large: %d (max %d)", length, 255*sha256.Size)
@@ -76,15 +86,15 @@ func (h *HKDF) Expand(prk, info []byte, length int) ([]byte, error) {
 	return okm, nil
 }
 
-// ExtractExpand combina Extract y Expand en una sola operación.
-// Útil cuando no necesitás el PRK intermedio.
+// ExtractExpand combines Extract and Expand in a single operation.
+// Useful when you don't need the intermediate PRK.
 func (h *HKDF) ExtractExpand(salt, ikm, info []byte, length int) ([]byte, error) {
 	prk := h.Extract(salt, ikm)
 	return h.Expand(prk, info, length)
 }
 
-// hkdfExtract es una función helper para compatibilidad con código existente.
-// Usa la implementación estándar de crypto/hkdf.
+// hkdfExtract is a helper function for compatibility with existing code.
+// Uses the standard crypto/hkdf implementation.
 func hkdfExtract(salt, ikm []byte) []byte {
 	if salt == nil {
 		salt = make([]byte, sha256.Size)
@@ -95,14 +105,14 @@ func hkdfExtract(salt, ikm []byte) []byte {
 	return hmacHash.Sum(nil)
 }
 
-// hkdfExpand es una función helper para compatibilidad con código existente.
-// Usa la implementación estándar de crypto/hkdf.
+// hkdfExpand is a helper function for compatibility with existing code.
+// Uses the standard crypto/hkdf implementation.
 func hkdfExpand(prk, info []byte, length int) ([]byte, error) {
 	if length > 255*sha256.Size {
 		return nil, fmt.Errorf("hkdf: output length too large: %d", length)
 	}
 
-	// Go 1.24+: hkdf.Expand usa generics con hash.Hash
+	// Go 1.24+: hkdf.Expand uses generics with hash.Hash
 	okm, err := hkdf.Expand(sha256.New, prk, string(info), length)
 	if err != nil {
 		return nil, fmt.Errorf("hkdf expand: %w", err)
@@ -111,8 +121,8 @@ func hkdfExpand(prk, info []byte, length int) ([]byte, error) {
 	return okm, nil
 }
 
-// hmacSha256 computa HMAC-SHA256 usando la standard lib.
-// Esta implementación reemplaza la versión manual propensa a errores.
+// hmacSha256 computes HMAC-SHA256 using the standard library.
+// This implementation replaces the manual version prone to errors.
 func hmacSha256(key, message []byte) []byte {
 	hmacHash := hmac.New(sha256.New, key)
 	hmacHash.Write(message)

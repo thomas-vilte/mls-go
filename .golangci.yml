@@ -17,8 +17,6 @@ linters:
     - revive         # golint successor: naming, style, best practices
     - gocritic       # opinionated checks: appendAssign, sloppyReassign, etc.
     - misspell       # spelling mistakes in comments and strings
-    - gofmt          # enforces gofmt formatting
-    - goimports      # enforces goimports (subset of gofmt + import ordering)
     - whitespace     # unnecessary blank lines at start/end of blocks
     - godot          # comments should end with a period
 
@@ -56,6 +54,11 @@ linters:
 
     godot:
       scope: declarations  # only exported declarations, not all comments
+
+formatters:
+  enable:
+    - gofmt       # standard formatter
+    - goimports   # gofmt + import grouping
 
 issues:
   max-issues-per-linter: 0

@@ -83,8 +83,8 @@ package extensions
 import (
 	"fmt"
 
-	"github.com/openmls/go/internal/tls"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/internal/tls"
+	"github.com/mls-go/treesync"
 )
 
 // RatchetTreeExtension contains the full ratchet tree for a group.

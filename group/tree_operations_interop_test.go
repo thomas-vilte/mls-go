@@ -10,9 +10,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/internal/tls"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/internal/tls"
+	"github.com/mls-go/treesync"
 )
 
 type treeOperationsVector struct {
@@ -104,7 +104,7 @@ func unmarshalInteropTree(data []byte, cs ciphersuite.CipherSuite) (*treesync.Ra
 	// optional<Node> ratchet_tree<V>
 	// So we need to read the VL-prefixed extension content first.
 	r := tls.NewReader(data)
-	
+
 	// Read the VL-prefixed ratchet_tree from the extension
 	nodesData, err := r.ReadVLBytes()
 	if err != nil {

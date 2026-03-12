@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/openmls/go/credentials"
+	"github.com/mls-go/credentials"
 )
 
 func createTestLeaf(t *testing.T, id string) LeafNodeData {
@@ -57,8 +57,8 @@ func TestLeafCount(t *testing.T) {
 
 func TestIsLeaf_IsParent(t *testing.T) {
 	tests := []struct {
-		idx       NodeIndex
-		wantLeaf  bool
+		idx        NodeIndex
+		wantLeaf   bool
 		wantParent bool
 	}{
 		{0, true, false},
@@ -108,10 +108,10 @@ func TestParent(t *testing.T) {
 func TestLeftChild_RightChild(t *testing.T) {
 	tree := NewRatchetTree(4)
 	tests := []struct {
-		idx        NodeIndex
-		wantLeft   NodeIndex
-		wantRight  NodeIndex
-		wantErr    bool
+		idx       NodeIndex
+		wantLeft  NodeIndex
+		wantRight NodeIndex
+		wantErr   bool
 	}{
 		{3, 1, 5, false},
 		{1, 0, 2, false},
@@ -189,7 +189,7 @@ func TestRoot(t *testing.T) {
 
 func TestDirectPath_Copath(t *testing.T) {
 	tree := NewRatchetTree(4)
-	
+
 	// Direct path from leaf 0: [0, 1, 3]
 	direct := tree.DirectPath(0)
 	wantDirect := []NodeIndex{0, 1, 3}
@@ -207,7 +207,7 @@ func TestDirectPath_Copath(t *testing.T) {
 
 func TestResolution(t *testing.T) {
 	tree := NewRatchetTree(4)
-	
+
 	// Add some leaves
 	for i := 0; i < 4; i++ {
 		leaf := createTestLeaf(t, string(rune('A'+i)))
@@ -246,7 +246,7 @@ func TestHashNode(t *testing.T) {
 	tree := NewRatchetTree(4)
 	leafHash := tree.HashNode(0)
 	parentHash := tree.HashNode(1)
-	
+
 	if len(leafHash) == 0 {
 		t.Error("HashNode(leaf) returned empty hash")
 	}

@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/framing"
-	"github.com/openmls/go/keypackages"
+	"github.com/mls-go/framing"
+	"github.com/mls-go/keypackages"
 )
 
 type passiveClientCommitVector struct {

@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestHPKE_EncryptDecrypt prueba el cifrado/descifrado HPKE completo.
+// TestHPKE_EncryptDecrypt tests complete HPKE encryption/decryption.
 func TestHPKE_EncryptDecrypt(t *testing.T) {
-	// Generar key pair
+	// Generate key pair
 	privKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey() error = %v", err)
@@ -27,7 +27,7 @@ func TestHPKE_EncryptDecrypt(t *testing.T) {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
 	}
 
-	// Verificar que el ciphertext tiene KEMOutput y Ciphertext
+	// Verify ciphertext has KEMOutput and Ciphertext
 	if len(ciphertext.KEMOutput) == 0 {
 		t.Error("KEMOutput should not be empty")
 	}
@@ -42,15 +42,15 @@ func TestHPKE_EncryptDecrypt(t *testing.T) {
 		t.Fatalf("DecryptWithLabel() error = %v", err)
 	}
 
-	// Verificar
+	// Verify
 	if !bytes.Equal(plaintext, decrypted) {
 		t.Errorf("Decryption mismatch:\ngot  %s\nwant %s", decrypted, plaintext)
 	}
 }
 
-// TestHPKE_WrongKey prueba que falla con clave privada incorrecta.
+// TestHPKE_WrongKey tests that it fails with wrong private key.
 func TestHPKE_WrongKey(t *testing.T) {
-	// Generar dos key pairs
+	// Generate two key pairs
 	privKey1, _ := ecdh.P256().GenerateKey(rand.Reader)
 	privKey2, _ := ecdh.P256().GenerateKey(rand.Reader)
 
@@ -60,13 +60,13 @@ func TestHPKE_WrongKey(t *testing.T) {
 	context := []byte{}
 	cs := MLS128DHKEMP256
 
-	// Encrypt con key 1
+	// Encrypt with key 1
 	ciphertext, err := EncryptWithLabel(publicKey1, label, context, plaintext, cs)
 	if err != nil {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
 	}
 
-	// Intentar decrypt con key 2 (incorrecta)
+	// Try decrypt with key 2 (wrong)
 	privKey2Bytes := privKey2.Bytes()
 	_, err = DecryptWithLabel(privKey2Bytes, label, context, ciphertext, cs)
 	if err == nil {
@@ -74,7 +74,7 @@ func TestHPKE_WrongKey(t *testing.T) {
 	}
 }
 
-// TestHPKE_TamperedCiphertext prueba que detecta ciphertext modificado.
+// TestHPKE_TamperedCiphertext tests that it detects modified ciphertext.
 func TestHPKE_TamperedCiphertext(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -90,16 +90,16 @@ func TestHPKE_TamperedCiphertext(t *testing.T) {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
 	}
 
-	// Tamper con el ciphertext
+	// Tamper with ciphertext
 	tampered := &HpkeCiphertext{
 		KEMOutput:  make([]byte, len(ciphertext.KEMOutput)),
 		Ciphertext: make([]byte, len(ciphertext.Ciphertext)),
 	}
 	copy(tampered.KEMOutput, ciphertext.KEMOutput)
 	copy(tampered.Ciphertext, ciphertext.Ciphertext)
-	tampered.Ciphertext[0] ^= 0xFF // Modificar primer byte
+	tampered.Ciphertext[0] ^= 0xFF // Modify first byte
 
-	// Decrypt con datos modificados debe fallar
+	// Decrypt with modified data should fail
 	privKeyBytes := privKey.Bytes()
 	_, err = DecryptWithLabel(privKeyBytes, label, context, tampered, cs)
 	if err == nil {
@@ -107,7 +107,7 @@ func TestHPKE_TamperedCiphertext(t *testing.T) {
 	}
 }
 
-// TestHPKE_EmptyPlaintext prueba cifrado de plaintext vacío.
+// TestHPKE_EmptyPlaintext tests empty plaintext encryption.
 func TestHPKE_EmptyPlaintext(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -136,7 +136,7 @@ func TestHPKE_EmptyPlaintext(t *testing.T) {
 	}
 }
 
-// TestHPKE_LargePlaintext prueba cifrado de plaintext grande.
+// TestHPKE_LargePlaintext tests large plaintext encryption.
 func TestHPKE_LargePlaintext(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -170,7 +170,7 @@ func TestHPKE_LargePlaintext(t *testing.T) {
 	}
 }
 
-// TestHPKE_DifferentLabels prueba que diferentes labels producen diferentes ciphertexts.
+// TestHPKE_DifferentLabels tests that different labels produce different ciphertexts.
 func TestHPKE_DifferentLabels(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -196,7 +196,7 @@ func TestHPKE_DifferentLabels(t *testing.T) {
 	}
 }
 
-// TestHPKE_InvalidPublicKey prueba que falla con public key inválida.
+// TestHPKE_InvalidPublicKey tests that it fails with invalid public key.
 func TestHPKE_InvalidPublicKey(t *testing.T) {
 	invalidPublicKey := []byte("invalid key")
 	plaintext := []byte("test")
@@ -210,7 +210,7 @@ func TestHPKE_InvalidPublicKey(t *testing.T) {
 	}
 }
 
-// TestHPKE_InvalidPrivateKey prueba que falla con private key inválida.
+// TestHPKE_InvalidPrivateKey tests that it fails with invalid private key.
 func TestHPKE_InvalidPrivateKey(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -226,7 +226,7 @@ func TestHPKE_InvalidPrivateKey(t *testing.T) {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
 	}
 
-	// Decrypt con private key inválida
+	// Decrypt with invalid private key
 	invalidPrivKey := []byte("invalid key")
 	_, err = DecryptWithLabel(invalidPrivKey, label, context, ciphertext, cs)
 	if err == nil {
@@ -234,32 +234,32 @@ func TestHPKE_InvalidPrivateKey(t *testing.T) {
 	}
 }
 
-// TestEncryptContext prueba la creación y serialización de EncryptContext.
+// TestEncryptContext tests EncryptContext creation and serialization.
 func TestEncryptContext(t *testing.T) {
 	label := "test label"
 	context := []byte("test context")
 
 	encContext := NewEncryptContext(label, context)
 
-	// Verificar que el label tiene el prefijo MLS
+	// Verify label has MLS prefix
 	expectedLabel := LabelPrefix + label
 	if !bytes.Equal(encContext.Label, []byte(expectedLabel)) {
 		t.Errorf("Label mismatch:\ngot  %s\nwant %s", encContext.Label, expectedLabel)
 	}
 
-	// Verificar contexto
+	// Verify context
 	if !bytes.Equal(encContext.Context, context) {
 		t.Errorf("Context mismatch:\ngot  %v\nwant %v", encContext.Context, context)
 	}
 
-	// Verificar marshaling
+	// Verify marshaling
 	marshaled := encContext.Marshal()
 	if len(marshaled) == 0 {
 		t.Error("Marshaled context should not be empty")
 	}
 }
 
-// BenchmarkHPKE_Encrypt mide el performance de encrypt.
+// BenchmarkHPKE_Encrypt measures encrypt performance.
 func BenchmarkHPKE_Encrypt(b *testing.B) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
@@ -274,7 +274,7 @@ func BenchmarkHPKE_Encrypt(b *testing.B) {
 	}
 }
 
-// BenchmarkHPKE_Decrypt mide el performance de decrypt.
+// BenchmarkHPKE_Decrypt measures decrypt performance.
 func BenchmarkHPKE_Decrypt(b *testing.B) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()

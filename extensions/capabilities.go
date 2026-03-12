@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/internal/tls"
 )
 
 // RequiredCapabilitiesExtension specifies capabilities required for group members.
@@ -14,18 +14,18 @@ import (
 // This extension is used in LeafNode and GroupContext to ensure all members
 // support the required features.
 //
-// struct {
-//     ProtocolVersion protocol_versions<V>;
-//     CipherSuite cipher_suites<V>;
-//     ExtensionType extensions<V>;
-//     ProposalType proposals<V>;
-//     CredentialType credentials<V>;
-// } RequiredCapabilities;
+//	struct {
+//	    ProtocolVersion protocol_versions<V>;
+//	    CipherSuite cipher_suites<V>;
+//	    ExtensionType extensions<V>;
+//	    ProposalType proposals<V>;
+//	    CredentialType credentials<V>;
+//	} RequiredCapabilities;
 type RequiredCapabilitiesExtension struct {
-	ProtocolVersions []uint16          // Protocol versions required
-	CipherSuites     []uint16          // Cipher suites required
-	Extensions       []ExtensionType   // Extensions that must be supported
-	Proposals        []uint16          // Proposal types that must be supported
+	ProtocolVersions []uint16                     // Protocol versions required
+	CipherSuites     []uint16                     // Cipher suites required
+	Extensions       []ExtensionType              // Extensions that must be supported
+	Proposals        []uint16                     // Proposal types that must be supported
 	Credentials      []credentials.CredentialType // Credential types required
 }
 

@@ -1,8 +1,17 @@
+// Package ciphersuite implements MAC operations per RFC 9420 §6.1.
 package ciphersuite
 
-// Mac represents a Message Authentication Code (RFC 9420 §6.1).
+// Mac represents a Message Authentication Code as defined in RFC 9420 §6.1.
 //
-// opaque MAC<V>;
+// MACs are used in MLS for:
+//   - Membership tags (RFC 9420 §6.1)
+//   - External sender authentication (RFC 9420 §12.1)
+//
+// The MAC is computed using HMAC-SHA256:
+//
+//	MAC = HMAC(secret, message)
+//
+// See also: RFC 9420 §6.1 for MAC usage in MLS framing
 type Mac struct {
 	Value []byte
 }

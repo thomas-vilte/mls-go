@@ -3,7 +3,7 @@ package schedule
 import (
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
+	"github.com/mls-go/ciphersuite"
 )
 
 // ExporterLabel represents an exporter label.

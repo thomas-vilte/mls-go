@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
+	"github.com/mls-go/ciphersuite"
 )
 
 // ============================================================================

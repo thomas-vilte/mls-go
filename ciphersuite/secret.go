@@ -73,9 +73,9 @@ func (s *Secret) Clone() *Secret {
 
 // HKDFExtract performs HKDF-Extract with this Secret as salt.
 //
-// CRÍTICO: Usa runtime.KeepAlive() para prevenir que el GC mueva
-// los secrets antes de que hkdfExtract termine, y para asegurar
-// que SecureZero() no sea optimizado away por el compiler.
+// CRITICAL: Uses runtime.KeepAlive() to prevent the GC from moving
+// secrets before hkdfExtract completes, and to ensure SecureZero()
+// is not optimized away by the compiler.
 func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 	if s == nil {
 		return nil, fmt.Errorf("salt is nil")
@@ -86,11 +86,11 @@ func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 
 	prk := hkdfExtract(s.Value, ikm.Value)
 
-	// CRÍTICO: Mantener vivos hasta que hkdfExtract termine
+	// CRITICAL: Keep alive until hkdfExtract completes
 	runtime.KeepAlive(s)
 	runtime.KeepAlive(ikm)
 
-	// Zero out después de usar
+	// Zero out after use
 	s.SecureZero()
 	ikm.SecureZero()
 
@@ -114,18 +114,45 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 		return nil, ErrCryptoLibraryError
 	}
 
-	// CRÍTICO: Mantener vivo hasta que hkdfExpand termine
+	// CRITICAL: Keep alive until hkdfExpand completes
 	runtime.KeepAlive(s)
 
 	return NewSecret(okm), nil
 }
 
-// DeriveSecret derives a new Secret with the given label (RFC 9420 §8).
+// DeriveSecret derives a new Secret with the given label as defined in RFC 9420 §8.
+//
+// Implements:
+//
+//	DeriveSecret(secret, label) = KDF-Expand-Label(secret, label, "", Hash.Length)
+//
+// This function is used in the MLS key schedule (RFC 9420 §8) to derive:
+//   - encryption_secret
+//   - decryption_secret
+//   - exporter_secret
+//   - epoch_authenticator
+//
+// See also: RFC 9420 §8.4 for secret tree derivation
 func (s *Secret) DeriveSecret(ciphersuite CipherSuite, label string) (*Secret, error) {
 	return s.KdfExpandLabel(label, []byte{}, ciphersuite.HashLength())
 }
 
-// KdfExpandLabel expands with a label as defined in RFC 9420.
+// KdfExpandLabel expands with a label as defined in RFC 9420 §8.
+//
+// Implements KDF-Expand-Label from RFC 9420 §8:
+//
+//	KDF-Expand-Label(secret, label, context, length) =
+//	  KDF-Expand(secret, KdfLabel, length)
+//
+// Where KdfLabel is:
+//
+//	struct {
+//	    uint16 length = Length;
+//	    opaque label<V> = "MLS 1.0 " + Label;
+//	    opaque context<V> = Context;
+//	} KdfLabel;
+//
+// The "MLS 1.0 " prefix ensures domain separation as required by RFC 9420 §8.
 func (s *Secret) KdfExpandLabel(label string, context []byte, length int) (*Secret, error) {
 	if length > 65535 {
 		return nil, ErrKdfLabelTooLarge
@@ -144,7 +171,7 @@ func (s *Secret) Hmac(message []byte) ([]byte, error) {
 
 	result := hmacSha256(s.Value, message)
 
-	// CRÍTICO: Mantener vivo hasta que hmacSha256 termine
+	// CRITICAL: Keep alive until hmacSha256 completes
 	runtime.KeepAlive(s)
 
 	return result, nil
@@ -160,14 +187,14 @@ func (s *Secret) Equal(other *Secret) bool {
 
 // SecureZero clears the secret value from memory.
 //
-// CRÍTICO: Usa runtime.KeepAlive() para asegurar que el compiler
-// no optimice away esta función (podría considerar que no tiene efectos).
+// CRITICAL: Uses runtime.KeepAlive() to ensure the compiler
+// does not optimize away this function (it might consider it has no side effects).
 func (s *Secret) SecureZero() {
 	if s != nil && s.Value != nil {
 		for i := range s.Value {
 			s.Value[i] = 0
 		}
-		// Asegurar que SecureZero no sea optimizado away
+		// Ensure SecureZero is not optimized away
 		runtime.KeepAlive(s)
 	}
 }

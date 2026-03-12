@@ -1,16 +1,22 @@
+// Package ciphersuite implements KDF label serialization per RFC 9420 §8.
 package ciphersuite
 
 import (
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
 // KdfLabel represents a KDF label as defined in RFC 9420 §8.
+//
+// This structure is used in the MLS key schedule for labeled key derivation:
 //
 //	struct {
 //	    uint16 length = Length;
 //	    opaque label<V> = "MLS 1.0 " + Label;
 //	    opaque context<V> = Context;
 //	} KdfLabel;
+//
+// The "MLS 1.0 " prefix ensures domain separation across protocol versions
+// as required by RFC 9420 §8.
 type KdfLabel struct {
 	Length  uint16
 	Label   []byte

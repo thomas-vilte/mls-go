@@ -3,8 +3,8 @@ package extensions_test
 import (
 	"testing"
 
-	"github.com/openmls/go/credentials"
-	"github.com/openmls/go/extensions"
+	"github.com/mls-go/credentials"
+	"github.com/mls-go/extensions"
 )
 
 // TestRequiredCapabilitiesExtension_Create prueba creación.
@@ -98,7 +98,7 @@ func TestRequiredCapabilitiesExtension_MarshalUnmarshal(t *testing.T) {
 // TestRequiredCapabilitiesExtension_Validate prueba validación.
 func TestRequiredCapabilitiesExtension_Validate(t *testing.T) {
 	req := extensions.NewRequiredCapabilities()
-	
+
 	// Empty should fail
 	err := req.Validate()
 	if err == nil {
@@ -108,7 +108,7 @@ func TestRequiredCapabilitiesExtension_Validate(t *testing.T) {
 	// Add required fields
 	req.AddProtocolVersion(0x01)
 	req.AddCipherSuite(0x0002)
-	
+
 	err = req.Validate()
 	if err != nil {
 		t.Errorf("Validate() failed: %v", err)
@@ -119,10 +119,10 @@ func TestRequiredCapabilitiesExtension_Validate(t *testing.T) {
 func TestRequiredCapabilitiesExtension_Equal(t *testing.T) {
 	req1 := extensions.NewRequiredCapabilities()
 	req1.AddProtocolVersion(0x01)
-	
+
 	req2 := extensions.NewRequiredCapabilities()
 	req2.AddProtocolVersion(0x01)
-	
+
 	req3 := extensions.NewRequiredCapabilities()
 	req3.AddProtocolVersion(0x02)
 

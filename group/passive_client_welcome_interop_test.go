@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/keypackages"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/keypackages"
 )
 
 type passiveClientExternalPsk struct {

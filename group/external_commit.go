@@ -4,11 +4,11 @@ import (
 	"crypto/ecdh"
 	"fmt"
 
-	"github.com/openmls/go/ciphersuite"
-	"github.com/openmls/go/framing"
-	"github.com/openmls/go/schedule"
-	"github.com/openmls/go/secrettree"
-	"github.com/openmls/go/treesync"
+	"github.com/mls-go/ciphersuite"
+	"github.com/mls-go/framing"
+	"github.com/mls-go/schedule"
+	"github.com/mls-go/secrettree"
+	"github.com/mls-go/treesync"
 )
 
 // ExternalCommit allows a client to join a group without a Welcome message (RFC 9420 §12.4.3.2).

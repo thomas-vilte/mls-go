@@ -1,19 +1,30 @@
+// Package ciphersuite implements hash reference operations per RFC 9420 §5.2.
 package ciphersuite
 
 import (
 	"fmt"
 	"hash"
 
-	"github.com/openmls/go/internal/tls"
+	"github.com/mls-go/internal/tls"
 )
 
-// KeyPackageRefLabel is the label for KeyPackage references (RFC 9420 §5.2).
+// KeyPackageRefLabel is the label for KeyPackage references as defined in RFC 9420 §5.2.
 var KeyPackageRefLabel = []byte("MLS 1.0 KeyPackage Reference")
 
-// ProposalRefLabel is the label for Proposal references (RFC 9420 §5.2).
+// ProposalRefLabel is the label for Proposal references as defined in RFC 9420 §5.2.
 var ProposalRefLabel = []byte("MLS 1.0 Proposal Reference")
 
-// HashReference represents a hash-based reference to an MLS object (RFC 9420 §5.2).
+// HashReference represents a hash-based reference to an MLS object as defined in RFC 9420 §5.2.
+//
+// Hash references are used to uniquely identify MLS objects without revealing their content:
+//   - KeyPackageRef: identifies a KeyPackage in a group (RFC 9420 §5.2)
+//   - ProposalRef: identifies a Proposal in a Commit (RFC 9420 §5.2)
+//
+// The reference is computed as:
+//
+//	RefHash(label, value) = Hash(VL(label) || VL(value))
+//
+// where VL() is a variable-length integer encoding.
 type HashReference struct {
 	Value []byte
 }
@@ -37,11 +48,17 @@ func (hr *HashReference) String() string {
 	return s
 }
 
-// KeyPackageRef is a reference to a KeyPackage.
+// KeyPackageRef is a reference to a KeyPackage as defined in RFC 9420 §5.2.
 type KeyPackageRef HashReference
 
-// MakeKeyPackageRef computes a KeyPackage reference.
-// MakeKeyPackageRef(value) = RefHash("MLS 1.0 KeyPackage Reference", value)
+// MakeKeyPackageRef computes a KeyPackage reference per RFC 9420 §5.2.
+//
+// Implements:
+//
+//	MakeKeyPackageRef(value) = RefHash("MLS 1.0 KeyPackage Reference", value)
+//
+// This reference is used to identify a KeyPackage in a group without
+// revealing the KeyPackage content.
 func MakeKeyPackageRef(value []byte, hashFn func() hash.Hash) *KeyPackageRef {
 	ref := makeHashReference(value, KeyPackageRefLabel, hashFn)
 	return (*KeyPackageRef)(ref)
@@ -52,11 +69,16 @@ func (kpr *KeyPackageRef) AsSlice() []byte {
 	return (*HashReference)(kpr).AsSlice()
 }
 
-// ProposalRef is a reference to a Proposal.
+// ProposalRef is a reference to a Proposal as defined in RFC 9420 §5.2.
 type ProposalRef HashReference
 
-// MakeProposalRef computes a Proposal reference.
-// MakeProposalRef(value) = RefHash("MLS 1.0 Proposal Reference", value)
+// MakeProposalRef computes a Proposal reference per RFC 9420 §5.2.
+//
+// Implements:
+//
+//	MakeProposalRef(value) = RefHash("MLS 1.0 Proposal Reference", value)
+//
+// This reference is used to identify a Proposal in a Commit's references list.
 func MakeProposalRef(value []byte, hashFn func() hash.Hash) *ProposalRef {
 	ref := makeHashReference(value, ProposalRefLabel, hashFn)
 	return (*ProposalRef)(ref)
@@ -81,14 +103,20 @@ func (hri *hashReferenceInput) Marshal() []byte {
 	return w.Bytes()
 }
 
-// makeHashReference computes a hash reference.
-// RefHash(label, value) = Hash(RefHashInput)
+// makeHashReference computes a hash reference per RFC 9420 §5.2.
+//
+// Implements:
+//
+//	RefHash(label, value) = Hash(RefHashInput)
+//
 // where RefHashInput is:
 //
 //	struct {
 //	    opaque label<V> = label;
 //	    opaque value<V> = value;
 //	} RefHashInput;
+//
+// The variable-length encoding (VL) ensures the hash input is unambiguous.
 func makeHashReference(value, label []byte, hashFn func() hash.Hash) *HashReference {
 	input := &hashReferenceInput{
 		Label: label,
