@@ -1,70 +1,49 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2.0 | :x:                |
+| Version | Supported |
+|---------|-----------|
+| 0.2.x   | ✅        |
+| < 0.2.0 | ❌        |
 
-This is beta software. Security updates are provided for the latest minor version (0.2.x).
+This is beta software. Security fixes go into the latest minor version only.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-**Important:** Do not open public issues for security vulnerabilities.
+**Don't open a public issue for security bugs.**
 
-Please report security issues to: **viltetomas2003@gmail.com**
+Email: **viltetomas2003@gmail.com**
 
-Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+Include a description of the issue, steps to reproduce, and the potential impact. I'll respond within 7 days with an assessment and a timeline. If a fix is needed, we can coordinate disclosure before going public.
 
-I'll respond within 7 days with:
-- Confirmation of receipt
-- Initial assessment
-- Timeline for fix
+## Current limitations
 
-## What to expect
+These are known gaps, not vulnerabilities — they're documented and expected for v0.2.0:
 
-1. **Within 7 days:** Initial response and assessment
-2. **Within 30 days:** Fix developed and tested
-3. **After fix:** Coordinated disclosure (if you agree)
+- Received `AuthenticatedContent` signatures not verified (commits/proposals from peers)
+- PSKs not resolved in the commit receiver path
+- `NewGroupFromReInit` uses empty GroupContext for joiner_secret derivation
+- Ratchet tree not truncated after member removals
+- `PublicMessage` processing not implemented
 
-## Known limitations
+None of these affect the confidentiality of encrypted messages in the normal group flow. They do limit the security guarantees on edge cases.
 
-This is beta software. Some known limitations:
+## Cryptographic foundation
 
-- Not all RFC 9420 features implemented
-- TreeKEM operations incomplete
-- External senders not implemented
-- API may change between versions
+mls-go uses:
 
-These are not vulnerabilities - they're documented gaps in implementation.
+- Go standard library crypto (`crypto/aes`, `crypto/ecdh`, `crypto/ed25519`, `crypto/hpke`)
+- `golang.org/x/crypto` for ChaCha20-Poly1305
+- RFC 9420, RFC 9180, RFC 5869 as specification
 
-## Security best practices
+No custom crypto implementations. All primitives come from audited libraries.
 
-When using mls-go:
+## Recommendations for users
 
-1. **Always use latest version** - Security fixes in latest release
-2. **Validate KeyPackages** - Don't trust unvalidated key packages
-3. **Protect private keys** - Use secure storage
-4. **Zero secrets after use** - Clear memory containing secrets
-5. **Use secure random** - Ensure crypto/rand is properly seeded
-6. **Monitor for updates** - Watch releases for security patches
-
-## Cryptographic assumptions
-
-mls-go relies on:
-- Go standard library crypto (audited)
-- golang.org/x/crypto for HPKE (audited)
-- RFC 9420, RFC 9180, RFC 5869 specifications
-
-If you find issues in these dependencies, report to respective maintainers.
-
-## Disclaimer
-
-This is beta software. Use at your own risk. Not recommended for production handling sensitive data until v1.0.0.
+- Always use the latest version
+- Validate `KeyPackage`s before trusting them — don't skip `Validate()`
+- Protect private keys with secure storage; clear them from memory after use
+- This is beta software — not recommended for production handling sensitive data until v1.0.0
 
 For production use today, consider [OpenMLS](https://github.com/openmls/openmls) (Rust, production-ready).
