@@ -119,6 +119,12 @@ func DefaultLifetime() *Lifetime {
 //
 // This is the main entry point for creating KeyPackages.
 // It generates HPKE and signature keys, creates a LeafNode, and signs everything.
+// Generate creates a new KeyPackage and its associated private keys.
+//
+// RFC 9420 §10.1
+// This function generates the necessary HPKE keys, constructs the LeafNode with the
+// provided credential, signs the LeafNode, and finally signs the entire KeyPackage.
+// The resulting KeyPackage can be published to a directory or sent directly to a group creator.
 func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuite) (*KeyPackage, *KeyPackagePrivateKeys, error) {
 	if credWithKey == nil || credWithKey.Credential == nil {
 		return nil, nil, errors.New("credential is nil")
