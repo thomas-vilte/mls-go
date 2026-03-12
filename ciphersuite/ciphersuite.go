@@ -10,13 +10,13 @@
 //
 //   - CS1 (0x0001): MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ✅
 //   - CS2 (0x0002): MLS_128_DHKEMP256_AES128GCM_SHA256_P256 ✅
-//   - CS3 (0x0003): MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ✅
+//   - CS3 (0x0003): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ✅
 //
 // # Placeholder Cipher Suites (not implemented)
 //
 //   - CS4 (0x0004): MLS_256_DHKEMP384_AES256GCM_SHA384_P384 ⏳
 //   - CS5 (0x0005): MLS_256_DHKEMP521_AES256GCM_SHA512_P521 ⏳
-//   - CS6 (0x0006): MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ⏳
+//   - CS6 (0x0006): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ⏳
 //   - CS7 (0x0007): MLS_256_DHKEMP384_CHACHA20POLY1305_SHA384_P384 ⏳
 //
 // # Components
@@ -119,9 +119,9 @@ const (
 	// RFC 9420 §17.1: MANDATORY for MLS 1.0 compliance
 	MLS128DHKEMP256 CipherSuite = 0x0002
 
-	// MLS256DHKEMX25519ChaCha20 is cipher suite 3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
-	// RFC 9420 §17.1: For environments requiring 256-bit security
-	MLS256DHKEMX25519ChaCha20 CipherSuite = 0x0003
+	// MLS128DHKEMX25519ChaCha20 is cipher suite 3: MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+	// RFC 9420 §17.1: RFC 9420 §17.1: X25519 + ChaCha20-Poly1305 (for devices without AES-NI)
+	MLS128DHKEMX25519ChaCha20 CipherSuite = 0x0003
 
 	// Placeholder cipher suites (not implemented)
 	// MLS256DHKEMP384AES256GCM        CipherSuite = 0x0004 // CS4: P384 + AES256GCM + SHA384 + P384
@@ -137,8 +137,8 @@ func (cs CipherSuite) String() string {
 		return "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"
 	case MLS128DHKEMP256:
 		return "MLS_128_DHKEMP256_AES128GCM_SHA256_P256"
-	case MLS256DHKEMX25519ChaCha20:
-		return "MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519"
+	case MLS128DHKEMX25519ChaCha20:
+		return "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519"
 	default:
 		return fmt.Sprintf("Unknown(0x%04X)", uint16(cs))
 	}
@@ -147,7 +147,7 @@ func (cs CipherSuite) String() string {
 // IsSupported returns true if the cipher suite is implemented.
 func (cs CipherSuite) IsSupported() bool {
 	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20:
 		return true
 	default:
 		return false
@@ -157,7 +157,7 @@ func (cs CipherSuite) IsSupported() bool {
 // HashAlgorithm returns the hash algorithm for the cipher suite.
 func (cs CipherSuite) HashAlgorithm() HashAlgorithm {
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		return SHA256
 	case MLS128DHKEMP256:
 		return SHA256
@@ -171,7 +171,7 @@ func (cs CipherSuite) AeadAlgorithm() AeadAlgorithm {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256:
 		return AES128GCM
-	case MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519ChaCha20:
 		return ChaCha20Poly1305
 	default:
 		return 0
@@ -181,7 +181,7 @@ func (cs CipherSuite) AeadAlgorithm() AeadAlgorithm {
 // SignatureScheme returns the signature scheme for the cipher suite.
 func (cs CipherSuite) SignatureScheme() SignatureScheme {
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		return ED25519
 	case MLS128DHKEMP256:
 		return ECDSA_SECP256R1_SHA256
@@ -193,7 +193,7 @@ func (cs CipherSuite) SignatureScheme() SignatureScheme {
 // HashLength returns the hash output length in bytes.
 func (cs CipherSuite) HashLength() int {
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20, MLS128DHKEMP256:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20, MLS128DHKEMP256:
 		return 32 // SHA-256
 	default:
 		return 0
@@ -205,7 +205,7 @@ func (cs CipherSuite) AeadKeyLength() int {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256:
 		return 16 // AES-128
-	case MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519ChaCha20:
 		return 32 // ChaCha20
 	default:
 		return 0
@@ -232,7 +232,7 @@ func (cs CipherSuite) HPKEConfig() HPKEConfig {
 			KDF:  HKDF_SHA256,
 			AEAD: AES128GCM,
 		}
-	case MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519ChaCha20:
 		return HPKEConfig{
 			KEM:  DHKEM_X25519_HKDF_SHA256,
 			KDF:  HKDF_SHA256,
@@ -243,13 +243,13 @@ func (cs CipherSuite) HPKEConfig() HPKEConfig {
 	}
 }
 
-// HashFunction returns the hash constructor for the cipher suite.
+// HashFunction returns the hash constructor for the cipher suite, or nil if unsupported.
 func (cs CipherSuite) HashFunction() func() hash.Hash {
 	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20:
 		return sha256.New
 	default:
-		return sha256.New
+		return nil
 	}
 }
 
@@ -419,11 +419,13 @@ func EqualCT(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
-// Hash computes the hash of data using the cipher suite's hash function.
+// Hash computes the hash of data using the cipher suite's hash function (RFC 9420 §5.2).
+//
+// Returns [ErrUnsupportedSuite] for cipher suites outside CS1-CS3.
 func Hash(cs CipherSuite, data []byte) ([]byte, error) {
 	h := cs.HashFunction()
 	if h == nil {
-		return nil, fmt.Errorf("unsupported ciphersuite for hash: %d", cs)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
 	hs := h()
 	_, _ = hs.Write(data)

@@ -6,19 +6,19 @@ import (
 	"fmt"
 )
 
-// DeriveKeyPairP256 derives a P256 key pair from IKM using HKDF (RFC 9180 §4.1).
+// DeriveKeyPairP256 derives a P-256 key pair deterministically from IKM (RFC 9180 §4.1).
 //
-// Implements:
 //  1. PRK = HKDF.Extract(salt="", ikm)
-//  2. okm = HKDF.Expand(PRK, "DKEM P256", 32)
-//  3. sk = okm as P256 private key
-//  4. pk = sk.PublicKey()
+//  2. sk  = HKDF.Expand(PRK, "DKEM P256", 32)
+//  3. pk  = sk.PublicKey()
+//
+// The info string "DKEM P256" is used as a plain byte slice (no KDF label wrapping),
+// consistent with DeriveKeyPairX25519 and the RFC 9180 §4.1 spec.
 func DeriveKeyPairP256(ikm []byte) (pubKey, privKey []byte, err error) {
 	hkdf := NewHKDF()
 	prk := hkdf.Extract(nil, ikm)
 
-	info := SerializeKdfLabel("DKEM P256", []byte{}, 32)
-	okm, err := hkdf.Expand(prk, info, 32)
+	okm, err := hkdf.Expand(prk, []byte("DKEM P256"), 32)
 	if err != nil {
 		return nil, nil, fmt.Errorf("HKDF expand: %w", err)
 	}

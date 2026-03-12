@@ -26,8 +26,8 @@ const (
 	MLS128DHKEMX25519 CipherSuite = 0x0001
 	// MLS128DHKEMP256 is cipher suite 2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (baseline for MLS 1.0)
 	MLS128DHKEMP256 CipherSuite = 0x0002
-	// MLS256DHKEMX25519ChaCha20 is cipher suite 3: MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
-	MLS256DHKEMX25519ChaCha20 CipherSuite = 0x0003
+	// MLS128DHKEMX25519ChaCha20 is cipher suite 3: MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+	MLS128DHKEMX25519ChaCha20 CipherSuite = 0x0003
 )
 
 // ProtocolVersion represents the MLS protocol version.
@@ -227,7 +227,7 @@ func generateHPKEKeyPair() (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
 // CS1/CS3 use X25519; CS2 uses P-256.
 func generateHPKEKeyPairForCS(cs ciphersuite.CipherSuite) (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
 	switch cs {
-	case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS256DHKEMX25519ChaCha20:
+	case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS128DHKEMX25519ChaCha20:
 		privKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, nil, err

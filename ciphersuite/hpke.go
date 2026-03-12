@@ -37,7 +37,7 @@ func EncryptWithLabel(
 	switch ciphersuite {
 	case MLS128DHKEMX25519:
 		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.AES128GCM())
-	case MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519ChaCha20:
 		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.ChaCha20Poly1305())
 	case MLS128DHKEMP256:
 		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.P256(), hpke.AES128GCM())
@@ -115,7 +115,7 @@ func DecryptWithLabel(
 	switch ciphersuite {
 	case MLS128DHKEMX25519:
 		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.AES128GCM())
-	case MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519ChaCha20:
 		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.ChaCha20Poly1305())
 	case MLS128DHKEMP256:
 		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.P256(), hpke.AES128GCM())
@@ -175,7 +175,7 @@ func decryptWithLabelNative(
 func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 	var kem hpke.KEM
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		kem = hpke.DHKEM(ecdh.X25519())
 	case MLS128DHKEMP256:
 		kem = hpke.DHKEM(ecdh.P256())
@@ -194,7 +194,7 @@ func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 		return nil, fmt.Errorf("DeriveKeyPair marshal: %w", err)
 	}
 	switch cs {
-	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
 		return ecdh.X25519().NewPrivateKey(privBytes)
 	case MLS128DHKEMP256:
 		return ecdh.P256().NewPrivateKey(privBytes)

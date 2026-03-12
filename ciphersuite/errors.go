@@ -69,6 +69,13 @@ var (
 	ErrTLSSerializationError = errors.New("ciphersuite: TLS serialization error")
 )
 
+// Suite errors
+var (
+	// ErrUnsupportedSuite occurs when an operation is requested for a cipher suite
+	// that is not implemented. CS1, CS2, and CS3 are supported; CS4-CS7 are not.
+	ErrUnsupportedSuite = errors.New("ciphersuite: unsupported cipher suite")
+)
+
 // Crypto library errors
 var (
 	// ErrCryptoLibraryError occurs when an underlying crypto operation fails.
