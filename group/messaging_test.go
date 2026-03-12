@@ -6,10 +6,10 @@ import (
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
 	"github.com/mls-go/framing"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// TestSendMessage_EmptyPayload verifica que SendMessage funciona con payload vacío
+// TestSendMessage_EmptyPayload verifies that SendMessage funciona con payload vacío
 func TestSendMessage_EmptyPayload(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
@@ -26,10 +26,10 @@ func TestSendMessage_EmptyPayload(t *testing.T) {
 	}
 
 	// Nota: no probamos el ReceiveMessage aquí porque requiere sincronización
-	// completa de secretos entre Alice y Bob, lo cual se prueba en integration_test.go
+	// completa de secrets entre Alice y Bob, lo cual se prueba en integration_test.go
 }
 
-// TestSendMessage_NilSignKey verifica que SendMessage falla con sigKey nil
+// TestSendMessage_NilSignKey verifies that SendMessage fails con sigKey nil
 func TestSendMessage_NilSignKey(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
@@ -40,7 +40,7 @@ func TestSendMessage_NilSignKey(t *testing.T) {
 	}
 }
 
-// TestReceiveMessage_WrongSender verifica que ReceiveMessage falla con sender inválido
+// TestReceiveMessage_WrongSender verifies that ReceiveMessage fails con sender inválido
 func TestReceiveMessage_WrongSender(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
@@ -59,9 +59,9 @@ func TestReceiveMessage_WrongSender(t *testing.T) {
 	}
 }
 
-// TestSendMessage_WrongState verifica que SendMessage falla si el grupo no está operacional
+// TestSendMessage_WrongState verifies that SendMessage fails si el grupo no está operational
 func TestSendMessage_WrongState(t *testing.T) {
-	// Crear grupo pero forzar estado no operacional (solo para test)
+	// Create grupo pero forzar estado no operational (solo para test)
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("User"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey: %v", err)
@@ -82,7 +82,7 @@ func TestSendMessage_WrongState(t *testing.T) {
 		t.Fatalf("NewGroup: %v", err)
 	}
 
-	// Forzar estado no operacional (hack para test)
+	// Force estado no operational (hack para test)
 	group.state = StateInactive
 
 	// Intentar enviar mensaje
@@ -93,7 +93,7 @@ func TestSendMessage_WrongState(t *testing.T) {
 	}
 }
 
-// TestReceiveMessage_NilMessage verifica que ReceiveMessage falla con mensaje nil
+// TestReceiveMessage_NilMessage verifies that ReceiveMessage fails con mensaje nil
 func TestReceiveMessage_NilMessage(t *testing.T) {
 	_, bobGroup, _, _ := setupTwoMemberGroup(t)
 
@@ -104,7 +104,7 @@ func TestReceiveMessage_NilMessage(t *testing.T) {
 	}
 }
 
-// TestSendMessage_NoSecretTree verifica que SendMessage falla sin SecretTree
+// TestSendMessage_NoSecretTree verifies that SendMessage fails sin SecretTree
 func TestSendMessage_NoSecretTree(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
@@ -122,7 +122,7 @@ func TestSendMessage_NoSecretTree(t *testing.T) {
 	aliceGroup.SecretTree = originalTree
 }
 
-// TestReceiveMessage_NoSecretTree verifica que ReceiveMessage falla sin SecretTree
+// TestReceiveMessage_NoSecretTree verifies that ReceiveMessage fails sin SecretTree
 func TestReceiveMessage_NoSecretTree(t *testing.T) {
 	_, bobGroup, _, _ := setupTwoMemberGroup(t)
 

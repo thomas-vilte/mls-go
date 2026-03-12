@@ -52,7 +52,7 @@ type GroupSecrets struct {
 	Psks         []PskID
 }
 
-// Marshal serializa GroupSecrets a formato TLS.
+// Marshal serializes GroupSecrets to TLS format.
 func (gs *GroupSecrets) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteVLBytes(gs.JoinerSecret.AsSlice())
@@ -82,7 +82,7 @@ func (gs *GroupSecrets) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalGroupSecrets deserializa GroupSecrets desde formato TLS.
+// UnmarshalGroupSecrets deserializes GroupSecrets from TLS format.
 func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 	r := tls.NewReader(data)
 
@@ -175,7 +175,7 @@ type GroupInfo struct {
 	RatchetTree     *treesync.RatchetTree
 }
 
-// MarshalTBS serializa los campos a firmar de GroupInfo (excluye Signature).
+// MarshalTBS serializes the fields to sign of GroupInfo (excludes Signature).
 func (gi *GroupInfo) MarshalTBS() []byte {
 	w := tls.NewWriter()
 	w.WriteRaw(gi.GroupContext.Marshal())
@@ -190,7 +190,7 @@ func (gi *GroupInfo) MarshalTBS() []byte {
 	return w.Bytes()
 }
 
-// Marshal serializa GroupInfo a formato TLS.
+// Marshal serializes GroupInfo to TLS format.
 func (gi *GroupInfo) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteRaw(gi.GroupContext.Marshal())
@@ -210,7 +210,7 @@ func (gi *GroupInfo) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalGroupInfo deserializa GroupInfo desde formato TLS.
+// UnmarshalGroupInfo deserializes GroupInfo from TLS format.
 func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	r := tls.NewReader(data)
 
@@ -309,7 +309,7 @@ func (w *Welcome) Marshal() []byte {
 	return writer.Bytes()
 }
 
-// UnmarshalWelcome deserializa un Welcome desde formato TLS.
+// UnmarshalWelcome deserializes a Welcome from TLS format.
 func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	r := tls.NewReader(data)
 
@@ -362,7 +362,7 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	}, nil
 }
 
-// keyPackageRef calcula la referencia de un KeyPackage (hash).
+// keyPackageRef calculates the reference of a KeyPackage (hash).
 func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byte {
 	if kp == nil {
 		return nil
@@ -373,7 +373,7 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
 }
 
-// CreateWelcome genera un Welcome message para nuevos miembros.
+// CreateWelcome generates a Welcome message for new members.
 // RFC 9420 §12.4.3.1
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
@@ -385,10 +385,10 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
 	}
 
-	// 1. Calcular welcome_secret (RFC §8, §12.4.3.1):
+	// 1. Compute welcome_secret (RFC §8, §12.4.3.1):
 	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret=0^Nh)
 	//    welcome_secret = DeriveSecret(member_secret, "welcome")
-	// Usamos copia para no destruir joiner_secret (necesario para GroupSecrets).
+	// We use a copy to not destroy joiner_secret (needed for GroupSecrets).
 	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
 	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(
 		ciphersuite.ZeroSecret(g.CipherSuite.HashLength()),
@@ -428,21 +428,21 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("encrypting group info: %w", err)
 	}
 
-	// 4. Para cada nuevo miembro, encriptar GroupSecrets
+	// 4. For each new member, encrypt GroupSecrets
 	var encryptedSecrets []EncryptedGroupSecrets
 
 	for _, kp := range newMemberKeyPackages {
-		// Calcular key_package_ref (hash del key package)
+		// Compute key_package_ref (hash of the key package)
 		kpRef := keyPackageRef(kp, g.CipherSuite)
 
-		// Construir GroupSecrets
+		// Build GroupSecrets
 		groupSecrets := &GroupSecrets{
 			JoinerSecret: joinerSecret,
 			PathSecret:   pathSecret,
 			Psks:         nil,
 		}
 
-		// Encriptar con HPKE usando init_key del KeyPackage
+		// Encrypt with HPKE using init_key of the KeyPackage
 		secretsBytes := groupSecrets.Marshal()
 		encryptedSecretsData, err := ciphersuite.EncryptWithLabel(
 			kp.InitKey,
@@ -470,17 +470,17 @@ func (g *Group) CreateWelcome(
 	}, nil
 }
 
-// JoinFromWelcome permite a un nuevo miembro unirse usando un Welcome.
+// JoinFromWelcome allows a new member to join using a Welcome.
 func JoinFromWelcome(
 	welcome *Welcome,
 	myKeyPackage *keypackages.KeyPackage,
 	myPrivateKeys *keypackages.KeyPackagePrivateKeys,
 	externalPsks map[string][]byte,
 ) (*Group, error) {
-	// 1. Calcular mi key_package_ref
+	// 1. Compute my key_package_ref
 	myRef := keyPackageRef(myKeyPackage, welcome.CipherSuite)
 
-	// 2. Buscar mis GroupSecrets encriptados
+	// 2. Find my encrypted GroupSecrets
 	var myEncryptedSecrets *EncryptedGroupSecrets
 	for i := range welcome.Secrets {
 		if bytes.Equal(welcome.Secrets[i].NewMember, myRef) {
@@ -493,7 +493,7 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("no encrypted secrets found for this key package")
 	}
 
-	// 3. Desencriptar GroupSecrets con mi HPKE private key
+	// 3. Decrypt GroupSecrets with my HPKE private key
 	privKeyBytes := myPrivateKeys.InitKey.Bytes()
 	secretsData, err := ciphersuite.DecryptWithLabel(
 		privKeyBytes,
@@ -525,13 +525,13 @@ func JoinFromWelcome(
 		}
 	}
 
-	// 4. Derivar welcome_secret (RFC §8, §12.4.3.1):
-	//    psk_secret     = ComputePskSecret(psks)           (0^Nh si no hay PSKs)
+	// 4. Derive welcome_secret (RFC §8, §12.4.3.1):
+	//    psk_secret     = ComputePskSecret(psks)           (0^Nh if no PSKs)
 	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret)
 	//    welcome_secret = DeriveSecret(member_secret, "welcome")
 	//
-	// Usamos una COPIA del joiner_secret para que HKDFExtract (que zeroes sus inputs)
-	// no destruya el original, que el key schedule necesita más adelante.
+	// We use a COPY of joiner_secret so that HKDFExtract (which zeroes its inputs)
+	// does not destroy the original, which the key schedule needs later.
 	rawPskSecret := ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength())
 	if len(psks) > 0 {
 		pskInput, pskErr := schedule.ComputePskInput(psks, welcome.CipherSuite)
@@ -576,8 +576,8 @@ func JoinFromWelcome(
 	}
 	welcome.GroupInfo = groupInfo
 
-	// 6. Reconstituir ratchet tree: primero buscar extensión ratchet_tree,
-	// sino usar el árbol en memoria (para tests), sino crear árbol vacío
+	// 6. Reconstruct ratchet tree: first look for ratchet_tree extension,
+	// otherwise use the tree in memory (for tests), otherwise create empty tree
 	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
 	var ratchetTreeParseErr error
@@ -599,7 +599,7 @@ func JoinFromWelcome(
 	}
 	groupInfo.RatchetTree = ratchetTree
 
-	// 7. Verificar firma de GroupInfo cuando el signer leaf está disponible en el árbol.
+	// 7. Verify GroupInfo signature when the signer leaf is available in the tree.
 	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
 	if signerLeaf != nil && signerLeaf.LeafData != nil && signerLeaf.LeafData.SignatureKey != nil {
 		rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
@@ -610,10 +610,10 @@ func JoinFromWelcome(
 		}
 	}
 
-	// 8. Inicializar GroupContext desde GroupInfo
+	// 8. Initialize GroupContext from GroupInfo
 	groupContext := groupInfo.GroupContext
 
-	// 9. Avanzar key schedule desde joiner_secret provisto por Welcome.
+	// 9. Advance key schedule from joiner_secret provided by Welcome.
 	keySchedule := schedule.NewKeySchedule(
 		welcome.CipherSuite,
 		ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()),
@@ -636,9 +636,9 @@ func JoinFromWelcome(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
-	// 9b. Determinar OwnLeafIndex buscando nuestra clave en el árbol.
-	// Se busca por LeafNode.EncryptionKey (clave TreeKEM del leaf), que puede diferir
-	// del InitKey del KeyPackage (clave HPKE para el Welcome).
+	// 9b. Determine OwnLeafIndex by looking for our key in the tree.
+	// It searches by LeafNode.EncryptionKey (TreeKEM key of the leaf), which may differ
+	// from the InitKey of the KeyPackage (HPKE key for the Welcome).
 	var ownLeafIndex LeafNodeIndex
 	leafEncKey := myKeyPackage.LeafNode.EncryptionKey
 	if len(leafEncKey) == 0 {
@@ -653,7 +653,7 @@ func JoinFromWelcome(
 			}
 		}
 	}
-	// 10. Crear Group
+	// 10. Create Group
 	group := &Group{
 		GroupID:      groupContext.GroupID,
 		Epoch:        groupContext.Epoch,
@@ -674,16 +674,14 @@ func JoinFromWelcome(
 		CachedPsks:  make(map[string][]byte),
 	}
 	group.ProposalByRef = make(map[string]*Proposal)
-	// Guardar la clave HPKE privada del leaf para descifrar path secrets en commits.
+	// Store the leaf's private HPKE key to decrypt path secrets in commits.
 	if myPrivateKeys.EncryptionKey != nil {
 		group.MyLeafEncryptionKey = myPrivateKeys.EncryptionKey.Bytes()
 	} else if myPrivateKeys.InitKey != nil {
 		group.MyLeafEncryptionKey = myPrivateKeys.InitKey.Bytes()
 	}
-	if externalPsks != nil {
-		for id, pskBytes := range externalPsks {
-			group.CachedPsks[id] = append([]byte(nil), pskBytes...)
-		}
+	for id, pskBytes := range externalPsks {
+		group.CachedPsks[id] = append([]byte(nil), pskBytes...)
 	}
 
 	// Cache the resumption secret for this initial epoch so that future

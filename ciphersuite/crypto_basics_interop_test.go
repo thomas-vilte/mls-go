@@ -112,9 +112,10 @@ func testDeriveSecret(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	}
 }
 
-func testDeriveTreeSecret(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
+func testDeriveTreeSecret(t *testing.T, _ CipherSuite, v cryptoBasicsVector) {
 	t.Helper()
-	// DeriveTreeSecret(secret, label, generation, length) =
+	// DeriveTreeSecret deriva un secreto del árbol de secret
+	// DeriveTreeSecret(secret, label, generation, length) = KDF-Expand-Label(secret, label, uint32_be(generation), length)
 	//   ExpandWithLabel(secret, label, uint32_be(generation), length)
 	secret := NewSecret(mustDecodeHex(t, v.DeriveTreeSecret.Secret))
 	var genBytes [4]byte
@@ -250,6 +251,7 @@ func testEncryptWithLabel(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 }
 
 // privKeyFromScalar reconstructs an ECDSA P-256 private key from a raw 32-byte scalar.
+// nolint:staticcheck // Using ScalarBaseMult for test vector compatibility
 func privKeyFromScalar(scalar []byte) *ecdsa.PrivateKey {
 	curve := elliptic.P256()
 	x, y := curve.ScalarBaseMult(scalar)

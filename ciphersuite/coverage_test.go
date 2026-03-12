@@ -23,7 +23,7 @@ func TestHashReference(t *testing.T) {
 
 	// String
 	str := hashRef.String()
-	if len(str) == 0 {
+	if str == "" {
 		t.Error("String() returned empty string")
 	}
 }
@@ -76,7 +76,7 @@ func TestHashReferenceMarshal(t *testing.T) {
 		t.Error("AsSlice() returned empty data")
 	}
 
-	// Debería mantener los 32 bytes originales
+	// Debería mantener los 32 bytes original
 	if len(marshaled) != 32 {
 		t.Errorf("AsSlice() should return 32 bytes, got %d", len(marshaled))
 	}
@@ -236,13 +236,13 @@ func TestOpenMlsSignaturePublicKeyMethods(t *testing.T) {
 func TestSignatureError(t *testing.T) {
 	err := ErrVerificationError
 	str := err.Error()
-	if len(str) == 0 {
+	if str == "" {
 		t.Error("Error() returned empty string")
 	}
 
 	err2 := ErrSigningError
 	str2 := err2.Error()
-	if len(str2) == 0 {
+	if str2 == "" {
 		t.Error("Error() returned empty string")
 	}
 }
@@ -256,7 +256,7 @@ func TestCryptoError(t *testing.T) {
 		t.Error("ErrCryptoLibraryError should not be nil")
 	}
 	str := err.Error()
-	if len(str) == 0 {
+	if str == "" {
 		t.Error("Error() returned empty string")
 	}
 }
@@ -282,7 +282,7 @@ func TestHashAlgorithmMethods(t *testing.T) {
 // TestKEMAlgorithmMethods prueba métodos de KEMAlgorithm.
 func TestKEMAlgorithmMethods(t *testing.T) {
 	str := DHKEM_P256_HKDF_SHA256.String()
-	if len(str) == 0 {
+	if str == "" {
 		t.Error("String() returned empty string")
 	}
 }
@@ -290,7 +290,7 @@ func TestKEMAlgorithmMethods(t *testing.T) {
 // TestKDFAlgorithmMethods prueba métodos de KDFAlgorithm.
 func TestKDFAlgorithmMethods(t *testing.T) {
 	str := HKDF_SHA256.String()
-	if len(str) == 0 {
+	if str == "" {
 		t.Error("String() returned empty string")
 	}
 }
@@ -339,7 +339,9 @@ func BenchmarkMac(b *testing.B) {
 	message := []byte("message")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ComputeMac(key, message)
+		if _, err := ComputeMac(key, message); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -347,6 +349,8 @@ func BenchmarkMac(b *testing.B) {
 func BenchmarkReuseGuard(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewReuseGuardRandom()
+		if _, err := NewReuseGuardRandom(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

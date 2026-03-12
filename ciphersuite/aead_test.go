@@ -404,7 +404,9 @@ func BenchmarkAESEncrypt(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		AESEncrypt(key, nonce, plaintext, aad)
+		if _, err := AESEncrypt(key, nonce, plaintext, aad); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -422,11 +424,16 @@ func BenchmarkAESDecrypt(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	ciphertext, _ := AESEncrypt(key, nonce, plaintext, aad)
+	ciphertext, err := AESEncrypt(key, nonce, plaintext, aad)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		AESDecrypt(key, nonce, ciphertext, aad)
+		if _, err := AESDecrypt(key, nonce, ciphertext, aad); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -446,7 +453,9 @@ func BenchmarkChaCha20Poly1305Encrypt(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
+		if _, err := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -464,10 +473,15 @@ func BenchmarkChaCha20Poly1305Decrypt(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	ciphertext, _ := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
+	ciphertext, err := ChaCha20Poly1305Encrypt(key, nonce, plaintext, aad)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad)
+		if _, err := ChaCha20Poly1305Decrypt(key, nonce, ciphertext, aad); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

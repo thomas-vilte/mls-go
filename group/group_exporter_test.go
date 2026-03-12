@@ -6,12 +6,12 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// TestExport_Basic verifica que Export deriva keys consistentes (RFC 9420 §8.5).
+// TestExport_Basic verifies that Export derives consistent keys (RFC 9420 §8.5).
 func TestExport_Basic(t *testing.T) {
-	// Crear grupo con Alice
+	// Create group with Alice
 	cred1, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -27,7 +27,7 @@ func TestExport_Basic(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Export con mismo label y context debe dar mismo resultado
+	// Export with same label and context must give same result
 	label := "test-label"
 	context := []byte("test-context")
 	length := 32
@@ -40,7 +40,7 @@ func TestExport_Basic(t *testing.T) {
 		t.Errorf("Export length = %d, want %d", len(key1), length)
 	}
 
-	// Segunda export con mismos parámetros debe dar igual resultado
+	// Second export with same parameters must give equal result
 	key2, err := aliceGroup.Export(label, context, length)
 	if err != nil {
 		t.Fatalf("Export second call failed: %v", err)
@@ -49,14 +49,14 @@ func TestExport_Basic(t *testing.T) {
 		t.Error("Export should be deterministic")
 	}
 
-	// Export con diferente label debe dar diferente resultado
+	// Export with different label must give different result
 	key3, _ := aliceGroup.Export("different-label", context, length)
 	if bytes.Equal(key1, key3) {
 		t.Error("Different label should produce different key")
 	}
 }
 
-// TestExport_WhenNotOperational verifica que Export falla si el grupo no está operacional.
+// TestExport_WhenNotOperational verifies that Export fails if the group is not operational.
 func TestExport_WhenNotOperational(t *testing.T) {
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
@@ -73,24 +73,28 @@ func TestExport_WhenNotOperational(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear un commit pendiente cambia el estado
+	// Create un commit pendiente cambia el estado
 	cred2, _, _ := credentials.GenerateCredentialWithKey([]byte("bob"))
 	kp2, _, _ := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
-	group.AddMember(kp2)
+	if _, err := group.AddMember(kp2); err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
 	sigPriv := ciphersuite.NewSignaturePrivateKey(priv.SignatureKey)
 	sigPub := sigPriv.PublicKey()
-	group.Commit(sigPriv, sigPub, nil) // Estado cambia a PendingCommit
+	if _, err := group.Commit(sigPriv, sigPub, nil); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	} // State changes to PendingCommit
 
-	// Export debería fallar porque el grupo está en PendingCommit
+	// Export should fail because the group is in PendingCommit
 	_, err = group.Export("label", nil, 32)
 	if err == nil {
 		t.Error("Export should fail when group is not operational")
 	}
 }
 
-// TestExport_AfterCommit verifica que Export funciona después de un commit.
+// TestExport_AfterCommit verifies that Export works after a commit.
 func TestExport_AfterCommit(t *testing.T) {
-	// Crear grupo con Alice
+	// Create group with Alice
 	cred1, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -106,7 +110,7 @@ func TestExport_AfterCommit(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage for Bob
 	cred2, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -116,7 +120,7 @@ func TestExport_AfterCommit(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Agregar a Bob y hacer commit
+	// Add Bob and commit
 	_, _ = aliceGroup.AddMember(kp2)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(priv1.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -128,7 +132,7 @@ func TestExport_AfterCommit(t *testing.T) {
 		t.Fatalf("merging commit: %v", err)
 	}
 
-	// Export debería funcionar después del commit
+	// Export should work after the commit
 	key, err := aliceGroup.Export("media-key", []byte("context"), 32)
 	if err != nil {
 		t.Fatalf("Export after commit failed: %v", err)

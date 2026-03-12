@@ -8,7 +8,16 @@ import (
 	"github.com/mls-go/treesync"
 )
 
-// SendMessage encrypts an application message as PrivateMessage (RFC 9420 §6.3).
+// SendMessage encrypts an application message as a PrivateMessage per RFC 9420 §6.3.
+//
+// Application messages are encrypted using the secret tree derived from the
+// epoch secrets. Each sender gets their own encryption key from the secret tree.
+//
+// # Security
+//
+//   - Message confidentiality: Only group members can decrypt the message
+//   - Message authentication: The sender's signature is verified
+//   - Forward secrecy: Each message uses fresh encryption keys from the secret tree
 func (g *Group) SendMessage(
 	data []byte,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
@@ -46,7 +55,16 @@ func (g *Group) SendMessage(
 	})
 }
 
-// ReceiveMessage decrypts a PrivateMessage and returns application data (RFC 9420 §6.3).
+// ReceiveMessage decrypts a PrivateMessage and returns application data per RFC 9420 §6.3.
+//
+// The sender leaf index must be provided to look up the sender's public key
+// for signature verification.
+//
+// # Security
+//
+//   - Verifies message signature using sender's public key from ratchet tree
+//   - Validates sender is an active member of the group
+//   - Decrypts using the secret tree
 func (g *Group) ReceiveMessage(
 	pm *framing.PrivateMessage,
 	senderLeafIdx LeafNodeIndex,
@@ -63,11 +81,13 @@ func (g *Group) ReceiveMessage(
 	if g.SecretTree == nil {
 		return nil, fmt.Errorf("secret tree not available")
 	}
+
 	// RFC §6.1: Validate sender index is within tree bounds
 	if uint32(senderLeafIdx) >= g.RatchetTree.NumLeaves {
 		return nil, fmt.Errorf("sender index %d out of bounds (tree has %d leaves)", senderLeafIdx, g.RatchetTree.NumLeaves)
 	}
-	// resolve sender signature pubkey from ratchet tree
+
+	// Resolve sender signature pubkey from ratchet tree
 	senderLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(senderLeafIdx))
 	var sigPubKey *ciphersuite.OpenMlsSignaturePublicKey
 	if senderLeaf != nil && senderLeaf.LeafData != nil && senderLeaf.LeafData.SignatureKey != nil {

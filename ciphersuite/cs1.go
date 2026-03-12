@@ -72,7 +72,7 @@ func NewEd25519PrivateKey(key interface{}) (*Ed25519PrivateKey, error) {
 		if len(k) != ed25519.PrivateKeySize {
 			return nil, fmt.Errorf("invalid Ed25519 private key length: %d (expected 32 or 64)", len(k))
 		}
-		return &Ed25519PrivateKey{key: ed25519.PrivateKey(k)}, nil
+		return &Ed25519PrivateKey{key: k}, nil
 
 	case ed25519.PrivateKey:
 		return &Ed25519PrivateKey{key: k}, nil
@@ -89,7 +89,7 @@ func NewEd25519PublicKey(bytes []byte) (*Ed25519PublicKey, error) {
 	if len(bytes) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("invalid Ed25519 public key length: %d", len(bytes))
 	}
-	return &Ed25519PublicKey{key: ed25519.PublicKey(bytes)}, nil
+	return &Ed25519PublicKey{key: bytes}, nil
 }
 
 // Sign signs data using Ed25519 as specified in RFC 8410.
@@ -128,17 +128,17 @@ func (k *Ed25519PublicKey) VerifyWithLabel(label string, content []byte, sig *Si
 
 // Bytes returns the private key bytes (64 bytes).
 func (k *Ed25519PrivateKey) Bytes() []byte {
-	return []byte(k.key)
+	return k.key
 }
 
 // PublicBytes returns the public key bytes (32 bytes).
 func (k *Ed25519PrivateKey) PublicBytes() []byte {
-	return []byte(k.key.Public().(ed25519.PublicKey))
+	return k.key.Public().(ed25519.PublicKey)
 }
 
 // Bytes returns the public key bytes (32 bytes).
 func (k *Ed25519PublicKey) Bytes() []byte {
-	return []byte(k.key)
+	return k.key
 }
 
 // ============================================================================
@@ -173,7 +173,7 @@ func GenerateX25519KeyPair() (publicKey, privateKey []byte, err error) {
 //  4. pk = sk.PublicKey()
 //
 // This is used for deterministic key derivation in HPKE.
-func DeriveKeyPairX25519(ikm []byte) ([]byte, []byte, error) {
+func DeriveKeyPairX25519(ikm []byte) (pubKey, privKey []byte, err error) {
 	hkdf := NewHKDF()
 	prk := hkdf.Extract(nil, ikm)
 
@@ -204,7 +204,7 @@ func DeriveKeyPairX25519(ikm []byte) ([]byte, []byte, error) {
 //   - error: if encapsulation fails
 //
 // Supports CS1 (X25519), CS2 (P256), and CS3 (X25519).
-func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) ([]byte, []byte, error) {
+func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, sharedSecret []byte, err error) {
 	switch cs {
 	case MLS128DHKEMX25519, MLS256DHKEMX25519ChaCha20:
 		priv, err := ecdh.X25519().GenerateKey(rand.Reader)

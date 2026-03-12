@@ -6,7 +6,7 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
 func TestUnmarshalGroupInfo_RoundTrip(t *testing.T) {
@@ -41,7 +41,7 @@ func TestUnmarshalGroupInfo_RoundTrip(t *testing.T) {
 	}
 
 	if !bytes.Equal(got.GroupContext.GroupID.AsSlice(), g.GroupContext.GroupID.AsSlice()) {
-		t.Error("GroupID mismatch after unmarshal")
+		t.Error("GroupID match after unmarshal")
 	}
 	if got.GroupContext.Epoch.AsUint64() != g.GroupContext.Epoch.AsUint64() {
 		t.Errorf("Epoch = %d, want %d", got.GroupContext.Epoch.AsUint64(), g.GroupContext.Epoch.AsUint64())
@@ -50,7 +50,7 @@ func TestUnmarshalGroupInfo_RoundTrip(t *testing.T) {
 		t.Errorf("CipherSuite = %d, want %d", got.GroupContext.CipherSuite, g.GroupContext.CipherSuite)
 	}
 	if !bytes.Equal(got.GroupContext.TreeHash, g.GroupContext.TreeHash) {
-		t.Error("TreeHash mismatch after unmarshal")
+		t.Error("TreeHash match after unmarshal")
 	}
 }
 
@@ -83,13 +83,17 @@ func TestGetGroupInfo_NotOperational(t *testing.T) {
 		t.Fatalf("NewGroup: %v", err)
 	}
 
-	// Forzar estado no-operacional creando un pending commit.
+	// Force non-operational state by creating a pending commit.
 	cred2, _, _ := credentials.GenerateCredentialWithKey([]byte("bob"))
 	kp2, _, _ := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
-	g.AddMember(kp2)
+	if _, err := g.AddMember(kp2); err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
 	sigPriv := ciphersuite.NewSignaturePrivateKey(priv.SignatureKey)
 	sigPub := sigPriv.PublicKey()
-	g.Commit(sigPriv, sigPub, nil)
+	if _, err := g.Commit(sigPriv, sigPub, nil); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
 
 	_, err = g.GetGroupInfo(sigPriv)
 	if err == nil {

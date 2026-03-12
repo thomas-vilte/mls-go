@@ -10,7 +10,7 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/internal/tls"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 	"github.com/mls-go/treesync"
 )
 
@@ -194,14 +194,13 @@ func applyUpdatePathToTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Le
 // decryptLevel to accumulate path_secrets for subsequent update_paths.
 func decryptInteropPathSecret(
 	tree *treesync.RatchetTree,
-	senderLeafIdx treesync.LeafIndex,
-	receiverLeafIdx treesync.LeafIndex,
+	senderLeafIdx, receiverLeafIdx treesync.LeafIndex,
 	up *interopUpdatePath,
 	leafPrivKeyBytes []byte,
 	receiverNodeSecrets map[int][]byte, // nodeIdx → path_secret from leaves_private
 	gcBytes []byte, // serialized GroupContext for current epoch
 	cs ciphersuite.CipherSuite,
-) ([]byte, []byte, int, error) {
+) (pathSecret, commitSecret []byte, decryptLevel int, err error) {
 	_, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	receiverNodeIdx := treesync.LeafIndexToNodeIndex(receiverLeafIdx)
 
@@ -322,7 +321,7 @@ func TestTreeKEMVectors(t *testing.T) {
 
 				// Verify tree_hash_after.
 				if got, want := treeCopy.TreeHash(), mustDecodeHexBytes(t, entry.TreeHashAfter); !bytes.Equal(got, want) {
-					t.Fatalf("tree_hash_after mismatch for update_path[%d]\n  got  %x\n  want %x", upIndex, got, want)
+					t.Fatalf("tree_hash_after sametch for update_path[%d]\n  got  %x\n  want %x", upIndex, got, want)
 				}
 
 				// RFC §12.4.1: UpdatePathNode encryption uses the PROVISIONAL GroupContext
@@ -367,12 +366,12 @@ func TestTreeKEMVectors(t *testing.T) {
 
 					wantPathSecret := mustDecodeHexBytes(t, *expected)
 					if !bytes.Equal(pathSecret, wantPathSecret) {
-						t.Fatalf("path_secret mismatch update_path[%d] receiver %d\n  got  %x\n  want %x", upIndex, leafIdx, pathSecret, wantPathSecret)
+						t.Fatalf("path_secret sametch update_path[%d] receiver %d\n  got  %x\n  want %x", upIndex, leafIdx, pathSecret, wantPathSecret)
 					}
 
 					wantCommitSecret := mustDecodeHexBytes(t, entry.CommitSecret)
 					if !bytes.Equal(commitSecret, wantCommitSecret) {
-						t.Fatalf("commit_secret mismatch update_path[%d] receiver %d\n  got  %x\n  want %x", upIndex, leafIdx, commitSecret, wantCommitSecret)
+						t.Fatalf("commit_secret sametch update_path[%d] receiver %d\n  got  %x\n  want %x", upIndex, leafIdx, commitSecret, wantCommitSecret)
 					}
 
 					// Accumulate path_secrets so subsequent update_paths can decrypt via

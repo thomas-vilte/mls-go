@@ -5,14 +5,14 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 	"github.com/mls-go/treesync"
 )
 
-// TestMergeCommit_InvalidSignature verifica que MergeCommit rechaza commits con firma inválida.
+// TestMergeCommit_InvalidSignature verifies that MergeCommit rechaza commits con firma inválida.
 // Fase 1.1: Verificación de firma en commits recibidos
 func TestMergeCommit_InvalidSignature(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -29,7 +29,7 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -55,17 +55,17 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 		sigBytes[0] ^= 0xFF
 	}
 
-	// Intentar mergear debe fallar por firma inválida
+	// Intentar mergear debe failsr por firma inválida
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with invalid signature")
 	}
 }
 
-// TestMergeCommit_WrongSigner verifica que MergeCommit rechaza commits firmados por otro miembro.
+// TestMergeCommit_WrongSigner verifies that MergeCommit rechaza commits firmados por otro miembro.
 // Fase 1.1: Verificación de firma en commits recibidos
 func TestMergeCommit_WrongSigner(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -82,7 +82,7 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -127,20 +127,20 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 	}
 
 	// Cambiar el sender para que parezca de Alice (0) en vez de Bob (1)
-	// Esto debería hacer fallar la verificación de firma
+	// Esto should hacer failsr la verificación de firma
 	stagedCommit2.AuthenticatedContent.Content.Sender.LeafIndex = 0
 
-	// Intentar mergear debe fallar porque la firma no coincide con el sender
+	// Intentar mergear debe failsr porque la firma no coincide con el sender
 	err = aliceGroup.MergeCommit(stagedCommit2)
 	if err == nil {
 		t.Error("MergeCommit should fail with wrong signer")
 	}
 }
 
-// TestMergeCommit_EpochMismatch verifica que MergeCommit rechaza commits con epoch incorrecto.
+// TestMergeCommit_EpochMismatch verifies that MergeCommit rechaza commits con epoch incorrecto.
 // Fase 1.2: Validación de epoch
 func TestMergeCommit_EpochMismatch(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -157,7 +157,7 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -194,7 +194,7 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 		t.Error("MergeCommit should fail with past epoch (replay)")
 	}
 
-	// Caso 3: Commit con epoch correcto debe funcionar
+	// Caso 3: Commit con epoch correcto debe work
 	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err != nil {
@@ -202,10 +202,10 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 	}
 }
 
-// TestMergeCommit_WrongGroupID verifica que MergeCommit rechaza commits con GroupID incorrecto.
+// TestMergeCommit_WrongGroupID verifies that MergeCommit rechaza commits con GroupID incorrecto.
 // Fase 1.3: Validación de GroupID
 func TestMergeCommit_WrongGroupID(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -222,7 +222,7 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -245,17 +245,17 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 	// Cambiar GroupID
 	stagedCommit.AuthenticatedContent.Content.GroupID = []byte("wrong-group")
 
-	// Intentar mergear debe fallar por GroupID incorrecto
+	// Intentar mergear debe failsr por GroupID incorrecto
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with wrong GroupID")
 	}
 }
 
-// TestProcessReceivedCommit_WrongGroupID verifica que ProcessReceivedCommit rechaza commits con GroupID incorrecto.
+// TestProcessReceivedCommit_WrongGroupID verifies that ProcessReceivedCommit rechaza commits con GroupID incorrecto.
 // Fase 1.3: Validación de GroupID en ProcessReceivedCommit
 func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -272,7 +272,7 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -296,7 +296,7 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("merging commit: %v", err)
 	}
 
-	// Crear otro grupo (simulando cross-group attack)
+	// Create otro grupo (simulando cross-group attack)
 	otherCred, _, err := credentials.GenerateCredentialWithKey([]byte("other"))
 	if err != nil {
 		t.Fatalf("generating other credential: %v", err)
@@ -313,7 +313,7 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("creating other group: %v", err)
 	}
 
-	// Crear commit en other-group
+	// Create commit en other-group
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("charlie"))
 	if err != nil {
 		t.Fatalf("generating charlie credential: %v", err)
@@ -332,7 +332,7 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("creating commit in other group: %v", err)
 	}
 
-	// Intentar procesar el commit de other-group en aliceGroup debe fallar
+	// Intentar procesar el commit de other-group en aliceGroup debe failsr
 	err = aliceGroup.ProcessReceivedCommit(
 		stagedCommit2.AuthenticatedContent,
 		treesync.LeafIndex(aliceGroup.OwnLeafIndex),
@@ -343,10 +343,10 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 	}
 }
 
-// TestProcessReceivedCommit_EpochMismatch verifica que ProcessReceivedCommit rechaza commits con epoch incorrecto.
+// TestProcessReceivedCommit_EpochMismatch verifies that ProcessReceivedCommit rechaza commits con epoch incorrecto.
 // Fase 1.2: Validación de epoch en ProcessReceivedCommit
 func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
-	// Crear grupo con Alice
+	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)
@@ -363,7 +363,7 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("creating group: %v", err)
 	}
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage para Bob
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("bob"))
 	if err != nil {
 		t.Fatalf("generating bob credential: %v", err)
@@ -388,7 +388,7 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 	}
 
 	// Ahora Bob procesa un commit con epoch incorrecto
-	// Crear commit con epoch futuro
+	// Create commit con epoch futuro
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("charlie"))
 	if err != nil {
 		t.Fatalf("generating charlie credential: %v", err)
@@ -410,7 +410,7 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 	// Corromper epoch
 	stagedCommit2.AuthenticatedContent.Content.Epoch = 999
 
-	// Bob intenta procesar el commit - debe fallar por epoch
+	// Bob intenta procesar el commit - debe failsr por epoch
 	err = aliceGroup.ProcessReceivedCommit(
 		stagedCommit2.AuthenticatedContent,
 		treesync.LeafIndex(aliceGroup.OwnLeafIndex),

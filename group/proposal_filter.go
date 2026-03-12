@@ -10,7 +10,10 @@ import (
 	"github.com/mls-go/treesync"
 )
 
-// ProposalFilter valida y filtra proposals según RFC 9420 §12.2
+// ProposalFilter validates and filters proposals according to RFC 9420 §12.2.
+//
+// The filter enforces validation rules, checks for duplicates, and orders
+// proposals according to the RFC-specified application order.
 type ProposalFilter struct {
 	groupContext *GroupContext
 	committer    LeafNodeIndex
@@ -19,7 +22,7 @@ type ProposalFilter struct {
 	tree         *treesync.RatchetTree
 }
 
-// NewProposalFilter crea un nuevo filtro de proposals.
+// NewProposalFilter creates a new proposal filter.
 func NewProposalFilter(
 	groupContext *GroupContext,
 	committer LeafNodeIndex,
@@ -36,31 +39,34 @@ func NewProposalFilter(
 	}
 }
 
-// FilteredProposal representa un proposal con su sender.
+// FilteredProposal represents a proposal with its sender.
 type FilteredProposal struct {
 	Proposal *Proposal
 	Sender   LeafNodeIndex
 }
 
-// FilterAndValidateProposals valida y filtra una lista de proposals.
-// Retorna los proposals ordenados según RFC §12.4.2.
+// FilterAndValidateProposals validates and filters a list of proposals per RFC 9420 §12.2.
 //
-// RFC 9420 §12.2 reglas de validación:
-// - No Update del committer mismo
-// - No Remove del committer
-// - ExternalInit solo de external senders
-// - ReInit incompatible con otros (excepto PreSharedKey)
-// - Validar KeyPackages de Add
-// - No duplicados del mismo tipo para el mismo miembro
+// # RFC 9420 §12.2 Validation Rules
 //
-// RFC 9420 §12.4.2 orden de aplicación:
-// 1. GroupContextExtensions
-// 2. Update (del committer al final)
-// 3. Remove
-// 4. Add
-// 5. PreSharedKey
-// 6. ReInit
-// 7. ExternalInit
+//   - No Update of the committer itself
+//   - No Remove of the committer
+//   - ExternalInit only from external senders
+//   - ReInit incompatible with other proposals (except PreSharedKey)
+//   - Validate KeyPackages in Add proposals
+//   - No duplicate proposals of the same type for the same member
+//
+// # RFC 9420 §12.4.2 Application Order
+//
+// Proposals are sorted in this order:
+//
+//  1. GroupContextExtensions
+//  2. Update (committer's update last)
+//  3. Remove
+//  4. Add
+//  5. PreSharedKey
+//  6. ReInit
+//  7. ExternalInit
 func (pf *ProposalFilter) FilterAndValidateProposals(
 	proposals []FilteredProposal,
 	capabilities *keypackages.Capabilities,
@@ -69,7 +75,7 @@ func (pf *ProposalFilter) FilterAndValidateProposals(
 		return nil, fmt.Errorf("no proposals to filter: %w", ErrInvalidProposal)
 	}
 
-	// Paso 1: Validar cada proposal individualmente
+	// Step 1: Validate each proposal individually
 	validated := make([]FilteredProposal, 0, len(proposals))
 	for _, fp := range proposals {
 		if err := pf.validateSingleProposal(fp, capabilities); err != nil {
@@ -78,23 +84,23 @@ func (pf *ProposalFilter) FilterAndValidateProposals(
 		validated = append(validated, fp)
 	}
 
-	// Paso 2: Validar combinaciones y restricciones
+	// Step 2: Validate combinations and restrictions
 	if err := pf.validateProposalCombinations(validated); err != nil {
 		return nil, fmt.Errorf("validating proposal combinations: %w", err)
 	}
 
-	// Paso 3: Verificar duplicados
+	// Step 3: Check for duplicates
 	if err := pf.checkDuplicates(validated); err != nil {
 		return nil, fmt.Errorf("checking duplicates: %w", err)
 	}
 
-	// Paso 4: Ordenar según RFC §12.4.2
+	// Step 4: Sort according to RFC §12.4.2
 	sorted := pf.sortProposals(validated)
 
 	return sorted, nil
 }
 
-// validateSingleProposal valida un proposal individual.
+// validateSingleProposal validates an individual proposal.
 func (pf *ProposalFilter) validateSingleProposal(
 	fp FilteredProposal,
 	capabilities *keypackages.Capabilities,
@@ -103,6 +109,7 @@ func (pf *ProposalFilter) validateSingleProposal(
 	if err := ValidateProposal(proposal, capabilities); err != nil {
 		return err
 	}
+
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
@@ -112,11 +119,12 @@ func (pf *ProposalFilter) validateSingleProposal(
 			); err != nil {
 				return err
 			}
-			// RFC 9420 §12.2: Verificar firma del KeyPackage en Add proposals
+			// RFC 9420 §12.2: Verify KeyPackage signature in Add proposals
 			if err := proposal.Add.KeyPackage.Verify(pf.cipherSuite); err != nil {
 				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
 			}
 		}
+
 	case ProposalTypeUpdate:
 		if fp.Sender == pf.committer {
 			return fmt.Errorf("committer cannot update itself: %w", ErrInvalidProposal)
@@ -132,8 +140,7 @@ func (pf *ProposalFilter) validateSingleProposal(
 			); err != nil {
 				return err
 			}
-			// RFC 9420 §12.2, §7.3: Verificar firma del LeafNode en Update proposals
-			// Usar VerifyWithContext para incluir group_id y leaf_index
+			// RFC 9420 §12.2, §7.3: Verify LeafNode signature with context
 			ln := keyPackageLeafToTreeSync(proposal.Update.LeafNode)
 			if err := ln.VerifyWithContext(
 				pf.cipherSuite,
@@ -143,6 +150,7 @@ func (pf *ProposalFilter) validateSingleProposal(
 				return fmt.Errorf("update leaf node signature invalid: %w", err)
 			}
 		}
+
 	case ProposalTypeRemove:
 		if proposal.Remove != nil && proposal.Remove.Removed == pf.committer {
 			return fmt.Errorf("cannot remove the committer: %w", ErrInvalidProposal)
@@ -153,15 +161,17 @@ func (pf *ProposalFilter) validateSingleProposal(
 					proposal.Remove.Removed, ErrInvalidProposal)
 			}
 		}
+
 	case ProposalTypeExternalInit:
 		if int(fp.Sender) < len(pf.members) {
 			return fmt.Errorf("external init from internal sender: %w", ErrInvalidProposal)
 		}
 	}
+
 	return nil
 }
 
-// validateProposalCombinations valida combinaciones de proposals.
+// validateProposalCombinations validates combinations of proposals.
 func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredProposal) error {
 	hasReInit := false
 	hasOther := false
@@ -171,13 +181,13 @@ func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredPropo
 		case ProposalTypeReInit:
 			hasReInit = true
 		case ProposalTypePreSharedKey:
-			// PreSharedKey es compatible con ReInit
+			// PreSharedKey is compatible with ReInit
 		default:
 			hasOther = true
 		}
 	}
 
-	// RFC §12.2: ReInit es incompatible con otros tipos (excepto PreSharedKey)
+	// RFC §12.2: ReInit is incompatible with other types (except PreSharedKey)
 	if hasReInit && hasOther {
 		return fmt.Errorf("reinit incompatible with other proposal types: %w", ErrInvalidProposal)
 	}
@@ -185,15 +195,15 @@ func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredPropo
 	return nil
 }
 
-// checkDuplicates verifica que no haya proposals duplicados.
+// checkDuplicates checks for duplicate proposals.
 func (pf *ProposalFilter) checkDuplicates(proposals []FilteredProposal) error {
-	// Track updates por sender
+	// Track updates by sender
 	updatesBySender := make(map[LeafNodeIndex]bool)
-	// Track removes por índice
+	// Track removes by index
 	removesByIndex := make(map[LeafNodeIndex]bool)
-	// Track adds por key package hash
+	// Track adds by key package hash
 	addsByKeyPackage := make(map[string]bool)
-	// Track PSK IDs externos (RFC §12.2: no pueden repetirse)
+	// Track PSK IDs (RFC §12.2: must not repeat)
 	pskIDs := make(map[string]bool)
 
 	for _, fp := range proposals {
@@ -224,7 +234,7 @@ func (pf *ProposalFilter) checkDuplicates(proposals []FilteredProposal) error {
 			}
 
 		case ProposalTypePreSharedKey:
-			// RFC §12.2: PSK IDs must not repeat within a commit.
+			// RFC §12.2: PSK IDs must not repeat within a commit
 			if fp.Proposal.PreSharedKey != nil {
 				pid := fp.Proposal.PreSharedKey.PskID
 				key := string(pid.ID) + fmt.Sprintf(":%d:%x:%d", pid.PskType, pid.PskGroupID, pid.PskEpoch)
@@ -236,22 +246,19 @@ func (pf *ProposalFilter) checkDuplicates(proposals []FilteredProposal) error {
 		}
 	}
 
-	// RFC §12.2 ValSem101–103: claves únicas en Add proposals.
-	if err := pf.checkAddKeyUniqueness(proposals); err != nil {
-		return err
-	}
-
-	return nil
+	// RFC §12.2 ValSem101–103: unique keys in Add proposals
+	return pf.checkAddKeyUniqueness(proposals)
 }
 
-// checkAddKeyUniqueness verifica que las claves de los Add proposals sean únicas
-// respecto a otros Add proposals y a los miembros existentes del árbol (RFC §12.2).
+// checkAddKeyUniqueness verifies that keys in Add proposals are unique.
 //
-// ValSem101: signature keys únicas en Adds y vs árbol existente.
-// ValSem102: init keys únicas entre Adds.
-// ValSem103: encryption keys únicas en Adds y vs árbol existente.
+// RFC 9420 §12.2 validation semantics:
+//
+//   - ValSem101: Unique signature keys in Adds and vs existing tree
+//   - ValSem102: Unique init keys among Adds
+//   - ValSem103: Unique encryption keys in Adds and vs existing tree
 func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) error {
-	// Recolectar claves existentes del árbol (leaf nodes presentes).
+	// Collect existing keys from tree
 	existingEncKeys := make(map[string]bool)
 	existingSigKeys := make(map[string]bool)
 
@@ -263,7 +270,6 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 		if len(node.LeafData.EncryptionKey) > 0 {
 			existingEncKeys[string(node.LeafData.EncryptionKey)] = true
 		}
-		// SignatureKeyRaw contiene los bytes crudos de la clave de firma.
 		if len(node.LeafData.SignatureKeyRaw) > 0 {
 			existingSigKeys[string(node.LeafData.SignatureKeyRaw)] = true
 		}
@@ -282,7 +288,7 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 			continue
 		}
 
-		// ValSem102: init key único entre Adds.
+		// ValSem102: Unique init key among Adds
 		if len(kp.InitKey) > 0 {
 			k := string(kp.InitKey)
 			if addInitKeys[k] {
@@ -296,7 +302,7 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 			continue
 		}
 
-		// ValSem103: encryption key único en Adds y vs árbol.
+		// ValSem103: Unique encryption key in Adds and vs tree
 		if len(ln.EncryptionKey) > 0 {
 			k := string(ln.EncryptionKey)
 			if addEncKeys[k] {
@@ -308,8 +314,7 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 			addEncKeys[k] = true
 		}
 
-		// ValSem101: signature key único en Adds y vs árbol.
-		// Usamos SignatureKeyBytes (raw bytes parseados del wire) si está disponible.
+		// ValSem101: Unique signature key in Adds and vs tree
 		sigBytes := ln.SignatureKeyBytes
 		if len(sigBytes) == 0 && ln.SignatureKey != nil {
 			sigBytes = treesync.MarshalSignatureKey(ln.SignatureKey)
@@ -329,14 +334,15 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 	return nil
 }
 
-// sortProposals ordena los proposals según RFC §12.4.2.
-// Orden: GroupContextExtensions, Update, Remove, Add, PreSharedKey, ReInit, ExternalInit
+// sortProposals sorts proposals according to RFC 9420 §12.4.2 application order.
+//
+// Order: GroupContextExtensions → Update → Remove → Add → PreSharedKey → ReInit → ExternalInit
 func (pf *ProposalFilter) sortProposals(proposals []FilteredProposal) []FilteredProposal {
-	// Crear copia para no modificar el original
+	// Create copy to avoid modifying original
 	sorted := make([]FilteredProposal, len(proposals))
 	copy(sorted, proposals)
 
-	// Definir prioridad de tipos (menor número = aplicar primero)
+	// Define priority (lower number = apply first)
 	priority := map[ProposalType]int{
 		ProposalTypeGroupContextExtensions: 1,
 		ProposalTypeUpdate:                 2,
@@ -351,9 +357,8 @@ func (pf *ProposalFilter) sortProposals(proposals []FilteredProposal) []Filtered
 		pi := priority[sorted[i].Proposal.Type]
 		pj := priority[sorted[j].Proposal.Type]
 
-		// Si son del mismo tipo, Updates del committer van al final
+		// For same type, committer's Update goes last
 		if pi == pj && sorted[i].Proposal.Type == ProposalTypeUpdate {
-			// El committer va después que otros
 			if sorted[i].Sender == pf.committer {
 				return false
 			}
@@ -368,7 +373,7 @@ func (pf *ProposalFilter) sortProposals(proposals []FilteredProposal) []Filtered
 	return sorted
 }
 
-// hashKeyPackage calcula un hash simple del key package.
+// hashKeyPackage computes a simple hash of the key package.
 func hashKeyPackage(kp *keypackages.KeyPackage) string {
 	if kp == nil {
 		return ""
@@ -377,17 +382,16 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 	return string(h[:])
 }
 
-// FilterProposalsForCommit es una función helper que filtra proposals para un commit.
-// Extrae proposals del ProposalStore y los prepara para el commit.
+// FilterProposalsForCommit filters proposals from the ProposalStore for a commit.
+//
+// This is a helper that extracts proposals from the ProposalStore and prepares
+// them for the commit operation.
 func (g *Group) FilterProposalsForCommit(
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
 	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
 	for _, sp := range g.Proposals.Proposals {
-		filtered = append(filtered, FilteredProposal{
-			Proposal: sp.Proposal,
-			Sender:   sp.Sender,
-		})
+		filtered = append(filtered, FilteredProposal(sp))
 	}
 
 	pf := NewProposalFilter(
@@ -401,6 +405,7 @@ func (g *Group) FilterProposalsForCommit(
 	return pf.FilterAndValidateProposals(filtered, capabilities)
 }
 
+// validateCapabilitiesCompatible checks if leaf capabilities are compatible with the group.
 func validateCapabilitiesCompatible(
 	groupCS ciphersuite.CipherSuite,
 	leafCaps *treesync.LeafNodeCapabilities,
@@ -428,12 +433,13 @@ func validateCapabilitiesCompatible(
 		}
 	}
 	if !supportCS {
-		return fmt.Errorf("leaf does not support group cipher suite: %d: %w", groupCS, ErrInvalidProposal)
+		return fmt.Errorf("leaf does not support group cipher suite %d: %w", groupCS, ErrInvalidProposal)
 	}
 
 	return nil
 }
 
+// toTreeSyncCapabilities converts keypackage capabilities to treesync capabilities.
 func toTreeSyncCapabilities(caps *keypackages.Capabilities) *treesync.LeafNodeCapabilities {
 	if caps == nil {
 		return nil

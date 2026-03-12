@@ -269,7 +269,9 @@ func BenchmarkSignature_Sign(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		privKey.Sign(data)
+		if _, err := privKey.Sign(data); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -277,12 +279,17 @@ func BenchmarkSignature_Sign(b *testing.B) {
 func BenchmarkSignature_Verify(b *testing.B) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	data := []byte("Message to sign")
-	signature, _ := privKey.Sign(data)
+	signature, err := privKey.Sign(data)
+	if err != nil {
+		b.Fatal(err)
+	}
 	pubKey := privKey.PublicKey()
 	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		mlsPubKey.Verify(data, signature)
+		if err := mlsPubKey.Verify(data, signature); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

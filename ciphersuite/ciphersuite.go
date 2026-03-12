@@ -102,12 +102,8 @@ import (
 	"hash"
 )
 
-// Version information.
-const (
-	MLSVersion    = "1.0"
-	LabelPrefix   = "MLS 1.0 "
-	VersionString = "MLS10"
-)
+// LabelPrefix is the prefix for all MLS 1.0 labels (RFC 9420 §8)
+const LabelPrefix = "MLS 1.0 "
 
 // CipherSuite represents an MLS ciphersuite identifier as defined in RFC 9420 §5.1.
 //
@@ -216,11 +212,12 @@ func (cs CipherSuite) AeadKeyLength() int {
 	}
 }
 
+// AeadNonceLength returns the AEAD nonce length in bytes (12 for all supported algorithms).
 func (cs CipherSuite) AeadNonceLength() int {
 	return 12 // Both AES-GCM and ChaCha20-Poly1305 use 12-byte nonces
 }
 
-// CipherSuite returns the cipher suite for the HPKE configuration.
+// HPKEConfig returns the cipher suite for the HPKE configuration.
 func (cs CipherSuite) HPKEConfig() HPKEConfig {
 	switch cs {
 	case MLS128DHKEMX25519:
@@ -273,6 +270,8 @@ func (h HashAlgorithm) String() string {
 		return fmt.Sprintf("Unknown(0x%02x)", uint8(h))
 	}
 }
+
+// Size returns the hash output size in bytes.
 func (h HashAlgorithm) Size() int {
 	switch h {
 	case SHA256:
@@ -311,6 +310,8 @@ func (a AeadAlgorithm) String() string {
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(a))
 	}
 }
+
+// KeyLength returns the key length in bytes for the AEAD algorithm.
 func (a AeadAlgorithm) KeyLength() int {
 	switch a {
 	case AES128GCM:
@@ -321,6 +322,8 @@ func (a AeadAlgorithm) KeyLength() int {
 		return 0
 	}
 }
+
+// NonceLength returns the nonce length in bytes (12 for all AEAD algorithms).
 func (a AeadAlgorithm) NonceLength() int {
 	return 12
 }

@@ -6,9 +6,9 @@ package ciphersuite
 
 import (
 	"crypto/ecdh"
+	"crypto/hpke"
 	"fmt"
 
-	"crypto/hpke"
 	"github.com/mls-go/internal/tls"
 )
 
@@ -148,8 +148,10 @@ func decryptWithLabelNative(
 		return nil, fmt.Errorf("creating HPKE private key: %w", err)
 	}
 
-	// Reconstruir enc || ciphertext para HPKE Open
-	encapsulatedAndCt := append(ciphertext.KEMOutput, ciphertext.Ciphertext...)
+	// Concat KEM output and ciphertext for HPKE Open
+	encapsulatedAndCt := make([]byte, 0, len(ciphertext.KEMOutput)+len(ciphertext.Ciphertext))
+	encapsulatedAndCt = append(encapsulatedAndCt, ciphertext.KEMOutput...)
+	encapsulatedAndCt = append(encapsulatedAndCt, ciphertext.Ciphertext...)
 
 	// Decrypt usando HPKE Open (RFC 9180 §4.1)
 	plaintext, err := hpke.Open(sk, hpke.HKDFSHA256(), aead, info, encapsulatedAndCt)

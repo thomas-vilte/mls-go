@@ -7,7 +7,7 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
 // mapPSKStore es una implementación trivial de PSKStore para tests.

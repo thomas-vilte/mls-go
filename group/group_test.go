@@ -6,7 +6,7 @@ import (
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
 	"github.com/mls-go/framing"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 	"github.com/mls-go/treesync"
 )
 
@@ -477,7 +477,7 @@ func TestProcessPrivateMessage_AddProposal(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_Commit verifica que un commit enviado como PrivateMessage
+// TestProcessPrivateMessage_Commit verifies that un commit enviado como PrivateMessage
 // es procesado correctamente: el receptor descifra, verifica la firma, aplica el commit
 // y avanza al siguiente epoch.
 func TestProcessPrivateMessage_Commit(t *testing.T) {
@@ -496,7 +496,7 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 	}
 
 	// Cifrar el commit como PrivateMessage usando los secrets de epoch 1 de alice.
-	// Tanto alice como bob comparten los mismos EpochSecrets y SecretTree (ver makeTwoMemberGroups).
+	// Tanto alice como bob comparten los sames EpochSecrets y SecretTree (ver makeTwoMemberGroups).
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		AuthContent:      sc.AuthenticatedContent,
 		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
@@ -526,11 +526,11 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_WrongEpoch verifica que mensajes de otra época son rechazados.
+// TestProcessPrivateMessage_WrongEpoch verifies that mensajes de otra época son rechazados.
 func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
 
-	// Crear un mensaje válido en epoch 1, pero luego falsificar la época en el wire.
+	// Create un mensaje válido en epoch 1, pero luego falsificar la época en el wire.
 	content := framing.FramedContent{
 		GroupID:           aliceGroup.GroupID.AsSlice(),
 		Epoch:             aliceGroup.Epoch.AsUint64(),
@@ -552,7 +552,7 @@ func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	// Alterar la época en los campos en claro del PrivateMessage.
+	// Alterar la época en los fields en claro del PrivateMessage.
 	pm.Epoch = 99
 
 	if err := aliceGroup.ProcessPrivateMessage(pm); err == nil {
@@ -560,18 +560,18 @@ func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_InvalidSignature verifica que mensajes con firma inválida
+// TestProcessPrivateMessage_InvalidSignature verifies that mensajes con firma inválida
 // son rechazados. El contenido se cifra con una clave de firma diferente a la del sender
-// en el árbol, por lo que la verificación de FramedContentTBS falla.
+// en el árbol, por lo que la verificación de FramedContentTBS fails.
 func TestProcessPrivateMessage_InvalidSignature(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := makeTwoMemberGroups(t)
 
-	// Crear una clave de firma impostora (no corresponde a ningún miembro del árbol).
+	// Create una clave de firma impostora (no corresponde a ningún miembro del árbol).
 	impostor := newTestUser(t, "impostor")
 
-	// Crear un proposal desde el punto de vista de alice (leaf 0), pero firmado
+	// Create un proposal desde el punto de vista de alice (leaf 0), pero firmado
 	// con la clave del impostor. El árbol de bob tiene la clave pública de alice
-	// en leaf 0, por lo que la verificación fallará.
+	// en leaf 0, por lo que la verificación failsrá.
 	content := framing.FramedContent{
 		GroupID:           bobGroup.GroupID.AsSlice(),
 		Epoch:             bobGroup.Epoch.AsUint64(),

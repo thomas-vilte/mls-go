@@ -64,9 +64,9 @@ var (
 	// This is typically an internal error.
 	ErrKdfSerializationError = errors.New("ciphersuite: KDF serialization error")
 
-	// ErrTlsSerializationError occurs when TLS serialization fails.
+	// ErrTLSSerializationError occurs when TLS serialization fails.
 	// This indicates invalid data structure for TLS encoding.
-	ErrTlsSerializationError = errors.New("ciphersuite: TLS serialization error")
+	ErrTLSSerializationError = errors.New("ciphersuite: TLS serialization error")
 )
 
 // Crypto library errors

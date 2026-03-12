@@ -7,7 +7,7 @@ import (
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
 	"github.com/mls-go/framing"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 	"github.com/mls-go/schedule"
 	"github.com/mls-go/secrettree"
 	"github.com/mls-go/treesync"
@@ -38,15 +38,15 @@ func newTestUser(t *testing.T, name string) *testUser {
 		sigPub:  sigPriv.PublicKey(),
 	}
 }
-func makeTwoMemberGroups(t *testing.T) (*Group, *Group, *testUser, *testUser) {
+func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob *testUser) {
 	t.Helper()
-	alice := newTestUser(t, "alice")
-	bob := newTestUser(t, "bob")
+	alice = newTestUser(t, "alice")
+	bob = newTestUser(t, "bob")
 	groupID, err := NewGroupIDRandom()
 	if err != nil {
 		t.Fatalf("NewGroupIDRandom: %v", err)
 	}
-	aliceGroup, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, alice.kp, alice.priv)
+	aliceGroup, err = NewGroup(groupID, ciphersuite.MLS128DHKEMP256, alice.kp, alice.priv)
 	if err != nil {
 		t.Fatalf("NewGroup(alice): %v", err)
 	}
@@ -79,7 +79,7 @@ func makeTwoMemberGroups(t *testing.T) (*Group, *Group, *testUser, *testUser) {
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
-	bobGroup, err := JoinFromWelcome(welcome, bob.kp, bob.priv, nil)
+	bobGroup, err = JoinFromWelcome(welcome, bob.kp, bob.priv, nil)
 	if err != nil {
 		t.Fatalf("JoinFromWelcome: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestWelcomeRoundTrip(t *testing.T) {
 	if aliceGroup.MemberCount() < 2 || bobGroup.MemberCount() < 2 {
 		t.Fatalf("expected at least 2 members (alice=%d bob=%d)", aliceGroup.MemberCount(), bobGroup.MemberCount())
 	}
-	msg := []byte("hola bob")
+	msg := []byte("hello bob")
 	pm, err := aliceGroup.SendMessage(msg, alice.sigPriv)
 	if err != nil {
 		t.Fatalf("SendMessage(alice): %v", err)
@@ -119,13 +119,13 @@ func TestWelcomeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReceiveMessage(bob): %v", err)
 	}
-	if string(got) != string(msg) {
-		t.Fatalf("plaintext mismatch: got %q want %q", string(got), string(msg))
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("plaintext sametch: got %q want %q", got, msg)
 	}
 }
 func TestPrivateMessageRoundTrip(t *testing.T) {
 	aliceGroup, bobGroup, alice, bob := makeTwoMemberGroups(t)
-	msgAB := []byte("hola bob")
+	msgAB := []byte("hello bob")
 	pmAB, err := aliceGroup.SendMessage(msgAB, alice.sigPriv)
 	if err != nil {
 		t.Fatalf("SendMessage(alice): %v", err)
@@ -134,10 +134,10 @@ func TestPrivateMessageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReceiveMessage(bob): %v", err)
 	}
-	if string(gotAB) != string(msgAB) {
-		t.Fatalf("alice->bob mismatch: got %q want %q", string(gotAB), string(msgAB))
+	if !bytes.Equal(gotAB, msgAB) {
+		t.Fatalf("alice->bob sametch: got %q want %q", gotAB, msgAB)
 	}
-	msgBA := []byte("hola alice")
+	msgBA := []byte("hello alice")
 	pmBA, err := bobGroup.SendMessage(msgBA, bob.sigPriv)
 	if err != nil {
 		t.Fatalf("SendMessage(bob): %v", err)
@@ -146,8 +146,8 @@ func TestPrivateMessageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReceiveMessage(alice): %v", err)
 	}
-	if string(gotBA) != string(msgBA) {
-		t.Fatalf("bob->alice mismatch: got %q want %q", string(gotBA), string(msgBA))
+	if !bytes.Equal(gotBA, msgBA) {
+		t.Fatalf("bob->alice sametch: got %q want %q", gotBA, msgBA)
 	}
 }
 func TestExternalCommitRoundTrip(t *testing.T) {
@@ -194,7 +194,7 @@ func TestConfirmationTagPersistence(t *testing.T) {
 	}
 
 	if !bytes.Equal(groupInfo.ConfirmationTag, aliceGroup.ConfirmationTag) {
-		t.Fatalf("group info confirmation tag mismatch")
+		t.Fatalf("group info confirmation tag sametch")
 	}
 
 	charlie := newTestUser(t, "charlie-confirmation")
@@ -288,8 +288,8 @@ func TestNewGroupFromReInit(t *testing.T) {
 	if group.GroupContext == nil {
 		t.Fatal("group context is nil")
 	}
-	if string(group.GroupContext.GroupID.AsSlice()) != string(reinit.GroupID) {
-		t.Fatal("group id mismatch")
+	if !bytes.Equal(group.GroupContext.GroupID.AsSlice(), reinit.GroupID) {
+		t.Fatal("group id sametch")
 	}
 	if group.KeySchedule == nil {
 		t.Fatal("key schedule is nil")

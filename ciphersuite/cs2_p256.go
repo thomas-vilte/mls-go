@@ -13,7 +13,7 @@ import (
 //  2. okm = HKDF.Expand(PRK, "DKEM P256", 32)
 //  3. sk = okm as P256 private key
 //  4. pk = sk.PublicKey()
-func DeriveKeyPairP256(ikm []byte) ([]byte, []byte, error) {
+func DeriveKeyPairP256(ikm []byte) (pubKey, privKey []byte, err error) {
 	hkdf := NewHKDF()
 	prk := hkdf.Extract(nil, ikm)
 
@@ -23,11 +23,11 @@ func DeriveKeyPairP256(ikm []byte) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("HKDF expand: %w", err)
 	}
 
-	privKey, err := ecdh.P256().NewPrivateKey(okm)
+	privKeyECDH, err := ecdh.P256().NewPrivateKey(okm)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	pubKey := privKey.PublicKey()
-	return pubKey.Bytes(), privKey.Bytes(), nil
+	pubKeyECDH := privKeyECDH.PublicKey()
+	return pubKeyECDH.Bytes(), privKeyECDH.Bytes(), nil
 }

@@ -5,87 +5,41 @@ import (
 
 	"github.com/mls-go/credentials"
 	"github.com/mls-go/internal/tls"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// readProposalInlineBody reads one proposal body from r based on the given type.
-// Add and Update first try VL-wrapped (our format), then fall back to inline RFC format.
-// Returns nil on success with r advanced past all proposal bytes.
-func readProposalInlineBody(r *tls.Reader, propType ProposalType) error {
-	switch propType {
-	case ProposalTypeAdd:
-		pos := r.Position()
-		if kpData, err := r.ReadVLBytes(); err == nil {
-			if _, kpErr := keypackages.UnmarshalKeyPackage(kpData); kpErr == nil {
-				return nil
-			}
-		}
-		r.SetPosition(pos)
-		if _, err := keypackages.UnmarshalKeyPackageFromReader(r); err != nil {
-			return err
-		}
-		return nil
-	case ProposalTypeUpdate:
-		pos := r.Position()
-		if lnData, err := r.ReadVLBytes(); err == nil {
-			if _, lnErr := keypackages.UnmarshalLeafNode(lnData); lnErr == nil {
-				return nil
-			}
-		}
-		r.SetPosition(pos)
-		if _, err := keypackages.UnmarshalLeafNodeFromReader(r); err != nil {
-			return err
-		}
-		return nil
-	case ProposalTypeRemove:
-		_, err := r.ReadUint32()
-		return err
-	case ProposalTypePreSharedKey:
-		pskType, err := r.ReadUint8()
-		if err != nil {
-			return err
-		}
-		if pskType == 2 { // resumption
-			if _, err := r.ReadUint8(); err != nil { // usage
-				return err
-			}
-			if _, err := r.ReadVLBytes(); err != nil { // psk_group_id
-				return err
-			}
-			if _, err := r.ReadUint64(); err != nil { // psk_epoch
-				return err
-			}
-		} else { // external (1) or branch (3)
-			if _, err := r.ReadVLBytes(); err != nil { // psk_id
-				return err
-			}
-		}
-		_, err = r.ReadVLBytes() // psk_nonce
-		return err
-	case ProposalTypeReInit:
-		if _, err := r.ReadVLBytes(); err != nil {
-			return err
-		}
-		if _, err := r.ReadUint16(); err != nil {
-			return err
-		}
-		if _, err := r.ReadUint16(); err != nil {
-			return err
-		}
-		_, err := r.ReadVLBytes()
-		return err
-	case ProposalTypeExternalInit, ProposalTypeGroupContextExtensions:
-		_, err := r.ReadVLBytes()
-		return err
-	default:
-		return fmt.Errorf("unknown proposal type: %d", propType)
-	}
-}
-
-// ProposalType identifies the type of proposal.
+// ProposalType identifies the type of MLS proposal per RFC 9420 §12.1.
+//
+// Proposal types are registered in the IANA MLS Registry.
 type ProposalType uint16
 
-// LeafNodeIndex identifies a member's position in the ratchet tree.
+// Proposal types defined in RFC 9420 §12.1.
+const (
+	// ProposalTypeAdd adds a new member to the group (RFC §12.1.1).
+	ProposalTypeAdd ProposalType = 0x0001
+
+	// ProposalTypeUpdate updates a member's leaf node (RFC §12.1.2).
+	ProposalTypeUpdate ProposalType = 0x0002
+
+	// ProposalTypeRemove removes a member from the group (RFC §12.1.3).
+	ProposalTypeRemove ProposalType = 0x0003
+
+	// ProposalTypePreSharedKey adds a PSK to the key schedule (RFC §12.1.4).
+	ProposalTypePreSharedKey ProposalType = 0x0004
+
+	// ProposalTypeReInit reinitializes the group with new parameters (RFC §12.1.5).
+	ProposalTypeReInit ProposalType = 0x0005
+
+	// ProposalTypeExternalInit allows external joiners to enter (RFC §12.1.6).
+	ProposalTypeExternalInit ProposalType = 0x0006
+
+	// ProposalTypeGroupContextExtensions updates group extensions (RFC §12.1.7).
+	ProposalTypeGroupContextExtensions ProposalType = 0x0007
+)
+
+// LeafNodeIndex identifies a member's position in the ratchet tree (RFC §4).
+//
+// Leaf indices range from 0 to NumLeaves-1.
 type LeafNodeIndex uint32
 
 // NewLeafNodeIndex creates a leaf node index.
@@ -93,19 +47,26 @@ func NewLeafNodeIndex(index uint32) LeafNodeIndex {
 	return LeafNodeIndex(index)
 }
 
-// Extension represents an MLS extension.
+// Extension represents an MLS extension per RFC 9420 §13.
+//
+// Extensions carry optional information in MLS objects.
 type Extension struct {
 	Type uint16
 	Data []byte
 }
 
-// ProposalOrRef represents a proposal or a reference to a proposal.
+// ProposalOrRef represents either a full proposal or a reference to one (RFC §12.4).
+//
+// Used in Commit messages to reference proposals either by value or by hash.
 type ProposalOrRef struct {
 	Proposal    *Proposal
 	ProposalRef []byte
 }
 
-// Proposal represents an MLS proposal.
+// Proposal represents an MLS proposal per RFC 9420 §12.1.
+//
+// Proposals are operations that modify the group state. They are created,
+// sent, and then committed in a Commit message to take effect.
 type Proposal struct {
 	Type                   ProposalType
 	Add                    *AddProposal
@@ -117,7 +78,17 @@ type Proposal struct {
 	GroupContextExtensions *GroupContextExtensionsProposal
 }
 
-// ProposalMarshal serializes a Proposal to TLS format.
+// ProposalMarshal serializes a Proposal to TLS format per RFC 9420 §12.1.
+//
+// The encoding depends on the proposal type:
+//
+//   - Add: VL-prefixed KeyPackage
+//   - Update: VL-prefixed LeafNode
+//   - Remove: uint32 leaf index
+//   - PreSharedKey: PskType + PskID fields
+//   - ReInit: group_id + version + cipher_suite + extensions
+//   - ExternalInit: VL-prefixed kem_output
+//   - GroupContextExtensions: VL-prefixed extensions vector
 func ProposalMarshal(p *Proposal) []byte {
 	w := tls.NewWriter()
 	w.WriteUint16(uint16(p.Type))
@@ -177,13 +148,13 @@ func ProposalMarshal(p *Proposal) []byte {
 	return w.Bytes()
 }
 
-// UnmarshalProposal deserializes a Proposal from TLS format.
+// UnmarshalProposal deserializes a Proposal from TLS format per RFC 9420 §12.1.
 func UnmarshalProposal(data []byte) (*Proposal, error) {
 	r := tls.NewReader(data)
 
 	propType, err := r.ReadUint16()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading proposal type: %w", err)
 	}
 
 	proposal := &Proposal{
@@ -205,9 +176,10 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		r.SetPosition(pos)
 		kp, err := keypackages.UnmarshalKeyPackage(r.BytesAfterPosition())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parsing add proposal key package: %w", err)
 		}
 		proposal.Add = &AddProposal{KeyPackage: kp}
+
 	case ProposalTypeUpdate:
 		pos := r.Position()
 		lnData, err := r.ReadVLBytes()
@@ -222,33 +194,35 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		r.SetPosition(pos)
 		ln, err := keypackages.UnmarshalLeafNode(r.BytesAfterPosition())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parsing update proposal leaf node: %w", err)
 		}
 		proposal.Update = &UpdateProposal{LeafNode: ln}
+
 	case ProposalTypeRemove:
 		removed, err := r.ReadUint32()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading remove proposal index: %w", err)
 		}
 		proposal.Remove = &RemoveProposal{Removed: LeafNodeIndex(removed)}
+
 	case ProposalTypePreSharedKey:
 		pskType, err := r.ReadUint8()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading PSK type: %w", err)
 		}
 		pskID := PskID{PskType: pskType}
 		if pskType == 2 { // resumption
 			usage, err := r.ReadUint8()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading PSK usage: %w", err)
 			}
 			pskGroupID, err := r.ReadVLBytes()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading PSK group ID: %w", err)
 			}
 			pskEpoch, err := r.ReadUint64()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading PSK epoch: %w", err)
 			}
 			pskID.Usage = usage
 			pskID.PskGroupID = pskGroupID
@@ -256,35 +230,36 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		} else { // external (1) or branch (3)
 			id, err := r.ReadVLBytes()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading PSK ID: %w", err)
 			}
 			pskID.ID = id
 		}
 		pskNonce, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading PSK nonce: %w", err)
 		}
 		pskID.Nonce = pskNonce
 		proposal.PreSharedKey = &PreSharedKeyProposal{
 			PskType: pskType,
 			PskID:   pskID,
 		}
+
 	case ProposalTypeReInit:
 		groupID, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading reinit group ID: %w", err)
 		}
 		version, err := r.ReadUint16()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading reinit version: %w", err)
 		}
 		cs, err := r.ReadUint16()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading reinit cipher suite: %w", err)
 		}
 		extData, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading reinit extensions: %w", err)
 		}
 		exts, _ := parseExtensions(extData)
 		proposal.ReInit = &ReInitProposal{
@@ -293,16 +268,18 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 			CipherSuite: keypackages.CipherSuite(cs),
 			Extensions:  exts,
 		}
+
 	case ProposalTypeExternalInit:
 		kemOutput, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading external init KEM output: %w", err)
 		}
 		proposal.ExternalInit = &ExternalInitProposal{KemOutput: kemOutput}
+
 	case ProposalTypeGroupContextExtensions:
 		extData, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading group context extensions: %w", err)
 		}
 		exts, _ := parseExtensions(extData)
 		proposal.GroupContextExtensions = &GroupContextExtensionsProposal{Extensions: exts}
@@ -317,21 +294,115 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 func unmarshalProposalFromReader(r *tls.Reader) error {
 	propType, err := r.ReadUint16()
 	if err != nil {
-		return err
+		return fmt.Errorf("reading proposal type: %w", err)
 	}
 	return readProposalInlineBody(r, ProposalType(propType))
 }
 
+// readProposalInlineBody reads one proposal body from r based on the given type.
+// Add and Update first try VL-wrapped (our format), then fall back to inline RFC format.
+// Returns nil on success with r advanced past all proposal bytes.
+func readProposalInlineBody(r *tls.Reader, propType ProposalType) error {
+	switch propType {
+	case ProposalTypeAdd:
+		pos := r.Position()
+		kpData, err := r.ReadVLBytes()
+		if err == nil {
+			if _, kpErr := keypackages.UnmarshalKeyPackage(kpData); kpErr == nil {
+				return nil
+			}
+		}
+		r.SetPosition(pos)
+		if _, err := keypackages.UnmarshalKeyPackageFromReader(r); err != nil {
+			return fmt.Errorf("parsing add proposal: %w", err)
+		}
+		return nil
+
+	case ProposalTypeUpdate:
+		pos := r.Position()
+		if lnData, err := r.ReadVLBytes(); err == nil {
+			if _, lnErr := keypackages.UnmarshalLeafNode(lnData); lnErr == nil {
+				return nil
+			}
+		}
+		r.SetPosition(pos)
+		if _, err := keypackages.UnmarshalLeafNodeFromReader(r); err != nil {
+			return fmt.Errorf("parsing update proposal: %w", err)
+		}
+		return nil
+
+	case ProposalTypeRemove:
+		_, err := r.ReadUint32()
+		return err
+
+	case ProposalTypePreSharedKey:
+		pskType, err := r.ReadUint8()
+		if err != nil {
+			return err
+		}
+		if pskType == 2 { // resumption
+			if _, err := r.ReadUint8(); err != nil { // usage
+				return err
+			}
+			if _, err := r.ReadVLBytes(); err != nil { // psk_group_id
+				return err
+			}
+			if _, err := r.ReadUint64(); err != nil { // psk_epoch
+				return err
+			}
+		} else { // external (1) or branch (3)
+			if _, err := r.ReadVLBytes(); err != nil { // psk_id
+				return err
+			}
+		}
+		_, err = r.ReadVLBytes() // psk_nonce
+		return err
+
+	case ProposalTypeReInit:
+		if _, err := r.ReadVLBytes(); err != nil {
+			return err
+		}
+		if _, err := r.ReadUint16(); err != nil {
+			return err
+		}
+		if _, err := r.ReadUint16(); err != nil {
+			return err
+		}
+		_, err := r.ReadVLBytes()
+		return err
+
+	case ProposalTypeExternalInit, ProposalTypeGroupContextExtensions:
+		_, err := r.ReadVLBytes()
+		return err
+
+	default:
+		return fmt.Errorf("unknown proposal type: %d", propType)
+	}
+}
+
 // GroupState represents the operational state of a group.
+//
+// The group transitions through states as operations occur:
+//
+//   - StateOperational: Normal operation, proposals can be created
+//   - StatePendingCommit: A commit has been staged, awaiting merge
+//   - StateInactive: Group has been reinitialized or terminated
 type GroupState int
 
 const (
+	// StateOperational indicates the group is ready for operations.
 	StateOperational GroupState = iota
+
+	// StatePendingCommit indicates a commit is staged and awaiting merge.
 	StatePendingCommit
+
+	// StateInactive indicates the group is no longer active (ReInit occurred).
 	StateInactive
 )
 
-// ProposalStore stores pending proposals.
+// ProposalStore stores pending proposals for a group.
+//
+// Proposals are accumulated until they are committed or cleared.
 type ProposalStore struct {
 	Proposals []StoredProposal
 }
@@ -354,6 +425,10 @@ func (ps *ProposalStore) Clear() {
 }
 
 // Member represents a group member.
+//
+// Each member has a position in the ratchet tree (LeafIndex),
+// a KeyPackage with their public keys, and a Credential with
+// their identity information.
 type Member struct {
 	LeafIndex  LeafNodeIndex
 	KeyPackage *keypackages.KeyPackage
@@ -361,43 +436,43 @@ type Member struct {
 	Active     bool
 }
 
-// StoredProposal guarda un proposal junto con el indice de hoja de quien lo envio
+// StoredProposal stores a proposal with the sender's leaf index.
+//
+// This is used to track who sent each proposal, which is needed
+// for proper proposal ordering and validation.
 type StoredProposal struct {
 	Proposal *Proposal
 	Sender   LeafNodeIndex
 }
 
-// ExternalSender represents an allowed external sender (RFC 9420 §12.1.8.1).
+// ExternalSender represents an allowed external sender per RFC 9420 §12.1.8.1.
 //
-//	struct {
-//	    SignaturePublicKey signature_key;
-//	    Credential credential;
-//	} ExternalSender;
+// External senders can send proposals and commits without being group members.
+// Their signing keys are listed in the ExternalSenders extension.
 type ExternalSender struct {
 	SignatureKey []byte
 	Credential   *credentials.Credential
 }
 
-// parseExternalSenders deserializes an ExternalSenders extension payload
-// (a variable-length vector of ExternalSender structs).
+// parseExternalSenders deserializes an ExternalSenders extension payload.
+//
+// The extension data is a variable-length vector of ExternalSender structs
+// per RFC 9420 §12.1.8.1.
 func parseExternalSenders(data []byte) ([]ExternalSender, error) {
 	r := tls.NewReader(data)
-	// The extension data is already the inner payload (type+data stripped by parseExtensions).
-	// RFC encodes it as ExternalSender external_senders<V>, so the outer VL wrapper
-	// has already been removed; we read individual entries until EOF.
 	var senders []ExternalSender
 	for r.Remaining() > 0 {
 		sigKey, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading external sender signature key: %w", err)
 		}
 		credBytes, err := r.ReadVLBytes()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading external sender credential: %w", err)
 		}
 		cred, err := credentials.UnmarshalCredential(credBytes)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parsing external sender credential: %w", err)
 		}
 		senders = append(senders, ExternalSender{SignatureKey: sigKey, Credential: cred})
 	}

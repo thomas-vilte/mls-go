@@ -69,9 +69,8 @@ func TestHKDF_RFC5869_TestCase2(t *testing.T) {
 // https://www.rfc-editor.org/rfc/rfc5869.html#appendix-A.3
 func TestHKDF_RFC5869_TestCase3(t *testing.T) {
 	// RFC 5869 Test Case 3 - Test with SHA-256 and zero-length salt/IKM
+	// Note: salt and info are nil in this test case
 	ikm, _ := hex.DecodeString("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
-	// salt := []byte{} // Empty salt - not used, we test with nil
-	// info := []byte{} // Empty info - not used, we test with nil
 	length := 42
 	expectedOKM, _ := hex.DecodeString("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
 	expectedPRK, _ := hex.DecodeString("19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04")
@@ -176,7 +175,9 @@ func BenchmarkHKDF_Expand(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		hkdf.Expand(prk, info, 32)
+		if _, err := hkdf.Expand(prk, info, 32); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -189,6 +190,8 @@ func BenchmarkHKDF_ExtractExpand(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		hkdf.ExtractExpand(salt, ikm, info, 32)
+		if _, err := hkdf.ExtractExpand(salt, ikm, info, 32); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

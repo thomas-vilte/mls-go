@@ -1,6 +1,7 @@
 package ciphersuite
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -348,7 +349,8 @@ func TestSecret_NilSafety(t *testing.T) {
 	}
 
 	// Equal with nil
-	if nilSecret.Equal(nilSecret) != true {
+	var nilSecret2 *Secret
+	if nilSecret.Equal(nilSecret2) != true {
 		t.Error("Equal() with both nil should return true")
 	}
 }
@@ -400,7 +402,9 @@ func TestZeroSecretCS(t *testing.T) {
 func BenchmarkSecret_Random(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewSecretRandom(32)
+		if _, err := NewSecretRandom(32); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -411,7 +415,9 @@ func BenchmarkSecret_HKDFExtract(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		salt.HKDFExtract(ikm)
+		if _, err := salt.HKDFExtract(ikm); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -422,7 +428,9 @@ func BenchmarkSecret_HKDFExpand(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		prk.HKDFExpand(info, 64)
+		if _, err := prk.HKDFExpand(info, 64); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -521,7 +529,7 @@ func TestEd25519_NewPrivateKeyFromBytes(t *testing.T) {
 	sig2, _ := privKey2.SignWithLabel("label", data)
 
 	// Signatures should be equal (Ed25519 is deterministic)
-	if string(sig1.AsSlice()) != string(sig2.AsSlice()) {
+	if !bytes.Equal(sig1.AsSlice(), sig2.AsSlice()) {
 		t.Error("Same private key should produce same signature")
 	}
 }
@@ -590,7 +598,7 @@ func TestX25519_EncapDecap(t *testing.T) {
 	}
 
 	// Shared secrets should be equal
-	if string(sharedSecret1) != string(sharedSecret2) {
+	if !bytes.Equal(sharedSecret1, sharedSecret2) {
 		t.Error("Encap/Decap should produce same shared secret")
 	}
 }
@@ -611,7 +619,7 @@ func TestDeriveKeyPairX25519(t *testing.T) {
 	}
 
 	// Should be equal (deterministic derivation)
-	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
+	if !bytes.Equal(pub1, pub2) || !bytes.Equal(priv1, priv2) {
 		t.Error("Same IKM should produce same keypair")
 	}
 }
@@ -649,7 +657,7 @@ func TestCiphersuite_Hash(t *testing.T) {
 	hash3.Write(data)
 	sum3 := hash3.Sum(nil)
 
-	if string(sum1) != string(sum3) {
+	if !bytes.Equal(sum1, sum3) {
 		t.Error("Hash should be deterministic")
 	}
 }
@@ -670,7 +678,7 @@ func TestDeriveKeyPairP256(t *testing.T) {
 	}
 
 	// Should be equal (deterministic derivation)
-	if string(pub1) != string(pub2) || string(priv1) != string(priv2) {
+	if !bytes.Equal(pub1, pub2) || !bytes.Equal(priv1, priv2) {
 		t.Error("Same IKM should produce same P256 keypair")
 	}
 }

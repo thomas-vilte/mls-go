@@ -3,7 +3,6 @@ package group
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -107,11 +106,16 @@ func parseInteropSignaturePublicKey(data []byte) (*ciphersuite.OpenMlsSignatureP
 	}
 
 	pub, ok := pubAny.(*ecdsa.PublicKey)
-	if !ok || pub.Curve != elliptic.P256() {
+	if !ok {
 		return nil, fmt.Errorf("unsupported signature public key type")
 	}
 
-	keyBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y)
+	// Use ECDH to get the raw public key bytes (avoids deprecated elliptic.Marshal).
+	ecdhKey, err := pub.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("converting to ECDH key: %w", err)
+	}
+	keyBytes := ecdhKey.Bytes()
 	if len(keyBytes) != 65 {
 		return nil, fmt.Errorf("unexpected encoded public key length: %d", len(keyBytes))
 	}
@@ -171,7 +175,6 @@ func testDecryptPrivateMessage(
 	gcBytes []byte,
 	wantType framing.ContentType,
 ) error {
-
 	mlsMsg, err := framing.UnmarshalMLSMessage(mustDecodeHexBytes(t, msgHex))
 	if err != nil {
 		return fmt.Errorf("UnmarshalMLSMessage: %w", err)
@@ -183,7 +186,7 @@ func testDecryptPrivateMessage(
 	}
 
 	if pm.ContentType != wantType {
-		return fmt.Errorf("private message content_type mismatch: got %d, want %d", pm.ContentType, wantType)
+		return fmt.Errorf("private message content_type sametch: got %d, want %d", pm.ContentType, wantType)
 	}
 
 	senderData, err := peekSenderData(pm, senderDataSecret, cs)
@@ -228,7 +231,7 @@ func testDecryptPrivateMessage(
 	}
 
 	if gotType := ac.Content.ContentType(); gotType != wantType {
-		return fmt.Errorf("content_type mismatch: got %d, want %d", gotType, wantType)
+		return fmt.Errorf("content_type sametch: got %d, want %d", gotType, wantType)
 	}
 
 	gotBody, err := framedBodyBytes(ac.Content.Body)
@@ -237,7 +240,7 @@ func testDecryptPrivateMessage(
 	}
 	wantBody := mustDecodeHexBytes(t, wantBodyHex)
 	if !bytes.Equal(gotBody, wantBody) {
-		return fmt.Errorf("private body mismatch: got %x want %x", gotBody, wantBody)
+		return fmt.Errorf("private body sametch: got %x want %x", gotBody, wantBody)
 	}
 
 	return nil
@@ -325,7 +328,7 @@ func decryptPrivateBodyBySearch(
 	return false, fmt.Errorf("no matching decryption candidate")
 }
 
-func privateContentMatches(ct framing.ContentType, plaintext []byte, wantBody []byte) bool {
+func privateContentMatches(ct framing.ContentType, plaintext, wantBody []byte) bool {
 	if len(plaintext) < len(wantBody) || !bytes.Equal(plaintext[:len(wantBody)], wantBody) {
 		return false
 	}
@@ -377,7 +380,7 @@ func testVerifyPublicMessage(
 	}
 
 	if gotType := pm.Content.ContentType(); gotType != wantType {
-		t.Fatalf("content_type mismatch: got %d, want %d", gotType, wantType)
+		t.Fatalf("content_type sametch: got %d, want %d", gotType, wantType)
 	}
 
 	ac := &framing.AuthenticatedContent{
@@ -391,7 +394,7 @@ func testVerifyPublicMessage(
 	}
 
 	if err := pm.VerifyMembershipTagWithContext(cs, membershipKey, gcBytes); err != nil {
-		t.Fatalf("membership_tag mismatch: %v", err)
+		t.Fatalf("membership_tag sametch: %v", err)
 	}
 
 	gotBody, err := framedBodyBytes(pm.Content.Body)
@@ -399,7 +402,7 @@ func testVerifyPublicMessage(
 		t.Fatalf("extract public body: %v", err)
 	}
 	if !bytes.Equal(gotBody, wantBody) {
-		t.Fatalf("public body mismatch\n  got  %x\n  want %x", gotBody, wantBody)
+		t.Fatalf("public body sametch\n  got  %x\n  want %x", gotBody, wantBody)
 	}
 }
 
@@ -443,7 +446,7 @@ func unmarshalInteropPublicMessage(data []byte, ct framing.ContentType, bodyByte
 		return nil, fmt.Errorf("reading content_type: %w", err)
 	}
 	if framing.ContentType(contentType) != ct {
-		return nil, fmt.Errorf("content_type mismatch: got %d, want %d", contentType, ct)
+		return nil, fmt.Errorf("content_type sametch: got %d, want %d", contentType, ct)
 	}
 
 	body, err := r.ReadBytes(len(bodyBytes))
@@ -498,7 +501,6 @@ func unmarshalInteropPublicMessage(data []byte, ct framing.ContentType, bodyByte
 }
 
 func framedBodyBytes(body framing.FramedContentBody) ([]byte, error) {
-
 	switch b := body.(type) {
 	case framing.ApplicationData:
 		return b.Data, nil

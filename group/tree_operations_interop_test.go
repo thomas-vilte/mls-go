@@ -76,7 +76,7 @@ func TestTreeOperationsVectors(t *testing.T) {
 			}
 
 			if got := tree.TreeHash(); !bytes.Equal(got, mustDecodeHexBytes(t, v.TreeHashBefore)) {
-				t.Fatalf("tree_hash_before mismatch\n  got  %x\n  want %x", got, mustDecodeHexBytes(t, v.TreeHashBefore))
+				t.Fatalf("tree_hash_before sametch\n  got  %x\n  want %x", got, mustDecodeHexBytes(t, v.TreeHashBefore))
 			}
 
 			proposal, err := UnmarshalProposal(proposalBytes)
@@ -90,10 +90,10 @@ func TestTreeOperationsVectors(t *testing.T) {
 			}
 
 			if got := tree.TreeHash(); !bytes.Equal(got, mustDecodeHexBytes(t, v.TreeHashAfter)) {
-				t.Fatalf("tree_hash_after mismatch\n  got  %x\n  want %x", got, mustDecodeHexBytes(t, v.TreeHashAfter))
+				t.Fatalf("tree_hash_after sametch\n  got  %x\n  want %x", got, mustDecodeHexBytes(t, v.TreeHashAfter))
 			}
 			if got, want := tree.TreeHash(), expectedAfter.TreeHash(); !bytes.Equal(got, want) {
-				t.Fatalf("tree_after parsed hash mismatch\n  got  %x\n  want %x", got, want)
+				t.Fatalf("tree_after parsed hash sametch\n  got  %x\n  want %x", got, want)
 			}
 		})
 	}

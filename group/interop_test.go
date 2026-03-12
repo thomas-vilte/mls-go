@@ -90,7 +90,7 @@ func TestKeyScheduleVectors(t *testing.T) {
 					t.Fatalf("ComputeJoinerSecret: %v", err)
 				}
 				if !bytes.Equal(joinerSecret.AsSlice(), mustHex(t, epoch.JoinerSecret)) {
-					t.Fatalf("joiner_secret mismatch")
+					t.Fatalf("joiner_secret sametch")
 				}
 
 				// Usar el psk_secret del test vector como input directo
@@ -109,7 +109,7 @@ func TestKeyScheduleVectors(t *testing.T) {
 					t.Fatalf("ComputeWelcomeSecret: %v", err)
 				}
 				if !bytes.Equal(welcomeSecret.AsSlice(), mustHex(t, epoch.WelcomeSecret)) {
-					t.Fatalf("welcome_secret mismatch")
+					t.Fatalf("welcome_secret sametch")
 				}
 
 				derived, err := ks.DeriveEpochSecrets()
@@ -118,28 +118,28 @@ func TestKeyScheduleVectors(t *testing.T) {
 				}
 
 				if !bytes.Equal(derived.SenderDataSecret.AsSlice(), mustHex(t, epoch.SenderDataSecret)) {
-					t.Fatalf("sender_data_secret mismatch")
+					t.Fatalf("sender_data_secret sametch")
 				}
 				if !bytes.Equal(derived.EncryptionSecret.AsSlice(), mustHex(t, epoch.EncryptionSecret)) {
-					t.Fatalf("encryption_secret mismatch")
+					t.Fatalf("encryption_secret sametch")
 				}
 				if !bytes.Equal(derived.ExporterSecret.AsSlice(), mustHex(t, epoch.ExporterSecret)) {
-					t.Fatalf("exporter_secret mismatch")
+					t.Fatalf("exporter_secret sametch")
 				}
 				if !bytes.Equal(derived.ConfirmationKey.AsSlice(), mustHex(t, epoch.ConfirmationKey)) {
-					t.Fatalf("confirmation_key mismatch")
+					t.Fatalf("confirmation_key sametch")
 				}
 				if !bytes.Equal(derived.MembershipKey.AsSlice(), mustHex(t, epoch.MembershipKey)) {
-					t.Fatalf("membership_key mismatch")
+					t.Fatalf("membership_key sametch")
 				}
 				if !bytes.Equal(derived.ExternalSecret.AsSlice(), mustHex(t, epoch.ExternalSecret)) {
-					t.Fatalf("external_secret mismatch")
+					t.Fatalf("external_secret sametch")
 				}
 				if !bytes.Equal(derived.ResumptionSecret.AsSlice(), mustHex(t, epoch.ResumptionPsk)) {
-					t.Fatalf("resumption_psk mismatch")
+					t.Fatalf("resumption_psk sametch")
 				}
 				if !bytes.Equal(derived.InitSecret.AsSlice(), mustHex(t, epoch.InitSecret)) {
-					t.Fatalf("init_secret mismatch")
+					t.Fatalf("init_secret sametch")
 				}
 
 				currentInitSecret = derived.InitSecret.AsSlice()

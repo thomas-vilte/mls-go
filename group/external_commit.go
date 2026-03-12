@@ -25,7 +25,7 @@ func ExternalCommit(
 		return nil, nil, fmt.Errorf("missing signature keys")
 	}
 
-	// 1. Obtain external_pub from GroupInfo extensions.
+	// Obtain external_pub from GroupInfo extensions.
 	const extTypeExternalPub = uint16(0x0001)
 	const extTypeRatchetTree = uint16(0x0002)
 
@@ -59,13 +59,13 @@ func ExternalCommit(
 		return nil, nil, err
 	}
 
-	// 2. HPKE Encap to external_pub.
+	// HPKE Encap to external_pub.
 	kemOutput, sharedSecret, err := ciphersuite.EncapToBytes(externalPubBytes, cs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("HPKE encap to external_pub: %w", err)
 	}
 
-	// 3. Build ExternalInit proposal.
+	// Build ExternalInit proposal.
 	externalInitProposal := &Proposal{
 		Type: ProposalTypeExternalInit,
 		ExternalInit: &ExternalInitProposal{
@@ -73,7 +73,7 @@ func ExternalCommit(
 		},
 	}
 
-	// 4. Clone tree and append our leaf.
+	// Clone tree and append our leaf.
 	treeDiff := tree.Clone()
 	sigPubKeyECDSA, err := sigPubKey.ToECDSA()
 	if err != nil {
@@ -112,8 +112,8 @@ func ExternalCommit(
 	ownLeafIdx, _ := treeDiff.AddLeaf(*ownLeafData)
 	ownLeafIndex := LeafNodeIndex(ownLeafIdx)
 
-	// 5. Build UpdatePath (RFC §12.4.1, filtered direct path).
-	directPath := treeDiff.DirectPath(treesync.LeafIndex(ownLeafIdx))
+	// Build UpdatePath (RFC §12.4.1, filtered direct path).
+	directPath := treeDiff.DirectPath(ownLeafIdx)
 	if len(directPath) == 0 {
 		return nil, nil, fmt.Errorf("invalid direct path for external commit")
 	}
@@ -130,7 +130,7 @@ func ExternalCommit(
 	}
 
 	// Compute filtered levels BEFORE modifying the tree.
-	_, copath, levels := filteredDirectPathLevels(treeDiff, treesync.LeafIndex(ownLeafIdx))
+	_, copath, levels := filteredDirectPathLevels(treeDiff, ownLeafIdx)
 	F := len(levels)
 
 	// RFC 9420 §12.4.2 step 6: Blank ALL intermediate nodes on the committer's
@@ -195,7 +195,7 @@ func ExternalCommit(
 		return nil, nil, fmt.Errorf("re-signing leaf node with parent hash: %w", err)
 	}
 	ownLeafData.Signature = sig2.AsSlice()
-	if err := treeDiff.SetLeaf(treesync.LeafIndex(ownLeafIdx), *ownLeafData); err != nil {
+	if err := treeDiff.SetLeaf(ownLeafIdx, *ownLeafData); err != nil {
 		return nil, nil, fmt.Errorf("setting own leaf in tree: %w", err)
 	}
 
@@ -247,7 +247,7 @@ func ExternalCommit(
 		Nodes:    nodes,
 	}
 
-	// 6. Build and sign commit.
+	// Build and sign commit.
 	groupContext := groupInfo.GroupContext
 	commit := &Commit{
 		Proposals: []ProposalOrRef{{Proposal: externalInitProposal}},
@@ -272,7 +272,7 @@ func ExternalCommit(
 	}
 	ac.Auth.Signature = acSig
 
-	// 7. Compute confirmed transcript hash and new GroupContext before key schedule.
+	// Compute confirmed transcript hash and new GroupContext before key schedule.
 	cthi, err := framing.NewConfirmedTranscriptHashInput(ac)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transcript hash input: %w", err)
@@ -330,7 +330,7 @@ func ExternalCommit(
 	ac.Auth.ConfirmationTag = confirmationTag
 	newInterimHash := schedule.ComputeInterimTranscriptHash(cs, confirmedHash, confirmationTag)
 
-	// 8. Build local group state for the new member.
+	// Build local group state for the new member.
 	group := &Group{
 		GroupID:               groupContext.GroupID,
 		Epoch:                 NewGroupEpoch(groupContext.Epoch.AsUint64() + 1),

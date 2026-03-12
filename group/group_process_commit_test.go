@@ -7,16 +7,16 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 	"github.com/mls-go/schedule"
 	"github.com/mls-go/treesync"
 )
 
-// Helper: crea un grupo de 2 miembros para tests de Commit
-func setupTwoMemberGroup(t *testing.T) (*Group, *Group, *keypackages.KeyPackagePrivateKeys, *keypackages.KeyPackagePrivateKeys) {
+// Helper: creates a 2-member group for Commit tests
+func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, bobPriv *keypackages.KeyPackagePrivateKeys) {
 	t.Helper()
 
-	// Alice crea el grupo
+	// Alice creates the group
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("Alice"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey(Alice): %v", err)
@@ -32,18 +32,19 @@ func setupTwoMemberGroup(t *testing.T) (*Group, *Group, *keypackages.KeyPackageP
 		t.Fatalf("NewGroupIDRandom: %v", err)
 	}
 
-	aliceGroup, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, aliceKP, alicePriv)
+	aliceGroup, err = NewGroup(groupID, ciphersuite.MLS128DHKEMP256, aliceKP, alicePriv)
 	if err != nil {
 		t.Fatalf("NewGroup: %v", err)
 	}
 
-	// Bob se une
+	// Bob joins
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("Bob"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey(Bob): %v", err)
 	}
 
-	bobKP, bobPriv, err := keypackages.Generate(bobCred, keypackages.MLS128DHKEMP256)
+	var bobKP *keypackages.KeyPackage
+	bobKP, bobPriv, err = keypackages.Generate(bobCred, keypackages.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("Generate KeyPackage(Bob): %v", err)
 	}
@@ -65,7 +66,7 @@ func setupTwoMemberGroup(t *testing.T) (*Group, *Group, *keypackages.KeyPackageP
 		t.Fatalf("MergeCommit: %v", err)
 	}
 
-	// Crear Welcome para Bob
+	// Create Welcome for Bob
 	initSecret := aliceGroup.EpochSecrets.InitSecret.Clone()
 	var pathSecret []byte
 	if stagedCommit.RootPathSecret != nil {
@@ -82,12 +83,12 @@ func setupTwoMemberGroup(t *testing.T) (*Group, *Group, *keypackages.KeyPackageP
 		t.Fatalf("CreateWelcome: %v", err)
 	}
 
-	bobGroup, err := JoinFromWelcome(welcome, bobKP, bobPriv, nil)
+	bobGroup, err = JoinFromWelcome(welcome, bobKP, bobPriv, nil)
 	if err != nil {
 		t.Fatalf("JoinFromWelcome: %v", err)
 	}
 
-	// Sincronizar epoch secrets de Bob con Alice
+	// Synchronize Bob's epoch secrets with Alice
 	bobGroup.EpochSecrets = &schedule.EpochSecrets{
 		InitSecret:       aliceGroup.EpochSecrets.InitSecret.Clone(),
 		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret.Clone(),
@@ -102,19 +103,19 @@ func setupTwoMemberGroup(t *testing.T) (*Group, *Group, *keypackages.KeyPackageP
 	return aliceGroup, bobGroup, alicePriv, bobPriv
 }
 
-// TestProcessCommit_Valid verifica que un commit válido se procesa correctamente
+// TestProcessCommit_Valid verifies that a valid commit is processed correctly
 func TestProcessCommit_Valid(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Guardar estado anterior de Bob
+	// Save Bob's previous state
 	oldEpoch := bobGroup.Epoch.AsUint64()
 	oldTreeHash := bobGroup.RatchetTree.TreeHash()
 
-	// Alice genera un nuevo commit (Add proposal de un tercer miembro)
+	// Alice generates a new commit (Add proposal of a third member)
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	aliceSigPub := aliceSigPriv.PublicKey()
 
-	// Crear tercer miembro
+	// Create third member
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("Charlie"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey(Charlie): %v", err)
@@ -125,7 +126,7 @@ func TestProcessCommit_Valid(t *testing.T) {
 		t.Fatalf("Generate KeyPackage(Charlie): %v", err)
 	}
 
-	// Alice agrega a Charlie
+	// Alice adds Charlie
 	_, err = aliceGroup.AddMember(charlieKP)
 	if err != nil {
 		t.Fatalf("AddMember: %v", err)
@@ -137,23 +138,23 @@ func TestProcessCommit_Valid(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Bob procesa el commit recibido
+	// Bob processes the received commit
 	err = bobGroup.ProcessCommit(stagedCommit)
 	if err != nil {
 		t.Fatalf("ProcessCommit failed: %v", err)
 	}
 
-	// Verificar que la epoch subió
+	// Verify that the epoch increased
 	if bobGroup.Epoch.AsUint64() != oldEpoch+1 {
 		t.Errorf("Epoch should increment from %d to %d, got %d", oldEpoch, oldEpoch+1, bobGroup.Epoch.AsUint64())
 	}
 
-	// Verificar que el TreeHash cambió
+	// Verify that the TreeHash changed
 	if bytes.Equal(bobGroup.RatchetTree.TreeHash(), oldTreeHash) {
 		t.Error("TreeHash should change after commit")
 	}
 
-	// Verificar que los epoch secrets no son nil
+	// Verify that the epoch secrets are not nil
 	if bobGroup.EpochSecrets == nil {
 		t.Error("EpochSecrets should not be nil after commit")
 	}
@@ -161,28 +162,28 @@ func TestProcessCommit_Valid(t *testing.T) {
 		t.Error("EncryptionSecret should not be nil after commit")
 	}
 
-	// Verificar que el proposal se aplicó (Charlie debería estar en el grupo)
+	// Verify that the proposal was applied (Charlie should be in the group)
 	if bobGroup.MemberCount() != 3 {
 		t.Errorf("MemberCount should be 3 after adding Charlie, got %d", bobGroup.MemberCount())
 	}
 }
 
-// TestProcessCommit_WrongEpoch verifica que un commit con epoch incorrecto falla.
+// TestProcessCommit_WrongEpoch verifies that a commit with incorrect epoch fails.
 // ProcessCommit no valida el epoch (solo llama a MergeCommit).
 // La validación de epoch existe únicamente en ReceiveMessage. RFC §12.4.1 gap.
 func TestProcessCommit_WrongEpoch(t *testing.T) {
 	t.Skip("epoch validation not implemented in ProcessCommit - RFC §12.4.1 gap")
 }
 
-// TestProcessCommit_CorruptedUpdatePath verifica que un commit con UpdatePath corrupto falla
+// TestProcessCommit_CorruptedUpdatePath verifies that a commit with corrupted UpdatePath fails
 func TestProcessCommit_CorruptedUpdatePath(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Crear un commit válido (primero agregamos un proposal)
+	// Create a valid commit (first add a proposal)
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	aliceSigPub := aliceSigPriv.PublicKey()
 
-	// Agregar tercer miembro para tener proposal
+	// Add third member to have a proposal
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("Charlie3"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey: %v", err)
@@ -202,16 +203,16 @@ func TestProcessCommit_CorruptedUpdatePath(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Corromper el UpdatePath si existe
+	// Corrupt the UpdatePath if it exists
 	if stagedCommit.Commit.Path != nil && len(stagedCommit.Commit.Path.Nodes) > 0 {
-		// Guardar original
+		// Save original
 		original := make([]byte, len(stagedCommit.Commit.Path.Nodes[0].EncryptionKey))
 		copy(original, stagedCommit.Commit.Path.Nodes[0].EncryptionKey)
 
-		// Corromper un byte
+		// Corrupt a byte
 		stagedCommit.Commit.Path.Nodes[0].EncryptionKey[0] ^= 0xFF
 
-		// Bob intenta procesar
+		// Bob tries to process
 		err = bobGroup.ProcessCommit(stagedCommit)
 		if err != nil {
 			t.Logf("ProcessCommit correctly detected corrupted UpdatePath: %v", err)
@@ -219,18 +220,18 @@ func TestProcessCommit_CorruptedUpdatePath(t *testing.T) {
 			t.Error("ProcessCommit should fail with corrupted UpdatePath")
 		}
 
-		// Restaurar para cleanup
+		// Restore for cleanup
 		copy(stagedCommit.Commit.Path.Nodes[0].EncryptionKey, original)
 	} else {
 		t.Skip("Commit has no UpdatePath nodes to corrupt")
 	}
 }
 
-// TestUpdateMember_Valid verifica que UpdateMember genera un proposal válido
+// TestUpdateMember_Valid verifies that UpdateMember generates a valid proposal
 func TestUpdateMember_Valid(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Guardar la encryption key original
+	// Save the original encryption key
 	oldLeaf := aliceGroup.RatchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.OwnLeafIndex))
 	if oldLeaf == nil || oldLeaf.LeafData == nil {
 		t.Fatal("Own leaf not found")
@@ -238,7 +239,7 @@ func TestUpdateMember_Valid(t *testing.T) {
 	oldEncryptionKey := make([]byte, len(oldLeaf.LeafData.EncryptionKey))
 	copy(oldEncryptionKey, oldLeaf.LeafData.EncryptionKey)
 
-	// Generar nuevo LeafNode
+	// Generate new LeafNode
 	newEncryptionKey := make([]byte, len(oldEncryptionKey))
 	if _, err := rand.Read(newEncryptionKey); err != nil {
 		t.Fatalf("Generating random key: %v", err)
@@ -252,13 +253,13 @@ func TestUpdateMember_Valid(t *testing.T) {
 		Lifetime:      oldLeaf.LeafData.Lifetime,
 	}
 
-	// Crear Update proposal
+	// Create Update proposal
 	updateProposal, err := aliceGroup.UpdateMember(newLeafNode, alicePriv)
 	if err != nil {
 		t.Fatalf("UpdateMember failed: %v", err)
 	}
 
-	// Verificar que el proposal se creó
+	// Verify that the proposal was created
 	if updateProposal == nil {
 		t.Fatal("UpdateMember should return non-nil proposal")
 	}
@@ -271,28 +272,28 @@ func TestUpdateMember_Valid(t *testing.T) {
 		t.Fatal("Update proposal body should not be nil")
 	}
 
-	// Verificar que la encryption key cambió
+	// Verify that the encryption key changed
 	if bytes.Equal(oldLeaf.LeafData.EncryptionKey, updateProposal.Update.LeafNode.EncryptionKey) {
 		t.Error("UpdateMember should generate new encryption key")
 	}
 
-	// Verificar que el proposal se almacenó
+	// Verify that the proposal was stored
 	if aliceGroup.Proposals == nil || len(aliceGroup.Proposals.Proposals) == 0 {
 		t.Error("Update proposal should be stored in proposal store")
 	}
 }
 
-// TestUpdateMember_NilCredential verifica que UpdateMember falla con credential nil
+// TestUpdateMember_NilCredential verifies that UpdateMember fails with nil credential
 func TestUpdateMember_NilCredential(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
-	// Intentar UpdateMember con LeafNode nil
+	// Try UpdateMember with nil LeafNode
 	_, err := aliceGroup.UpdateMember(nil, nil)
 	if err == nil {
 		t.Error("UpdateMember should fail with nil LeafNode")
 	}
 
-	// Crear LeafNode válido pero con private keys nil
+	// Create valid LeafNode but with nil private keys
 	leaf := aliceGroup.RatchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.OwnLeafIndex))
 	if leaf == nil || leaf.LeafData == nil {
 		t.Fatal("Own leaf not found")
@@ -312,24 +313,24 @@ func TestUpdateMember_NilCredential(t *testing.T) {
 	}
 }
 
-// TestGetMember_Valid verifica que GetMember retorna el miembro correcto
+// TestGetMember_Valid verifies that GetMember returns the correct member
 func TestGetMember_Valid(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := setupTwoMemberGroup(t)
 
-	// Obtener Alice
+	// Get Alice
 	aliceMember, ok := aliceGroup.GetMember(aliceGroup.OwnLeafIndex)
 	if !ok {
-		t.Error("GetMember should return true for own leaf")
+		t.Fatal("GetMember should return true for own leaf")
 	}
 	if aliceMember == nil {
-		t.Error("GetMember should return non-nil member")
+		t.Fatal("GetMember should return non-nil member")
 	}
 	if !aliceMember.Active {
 		t.Error("Alice member should be active")
 	}
 
-	// Obtener Bob desde la perspectiva de Alice
-	// Bob debería estar en el índice 1 (después del Add + Commit)
+	// Get Bob from Alice's perspective
+	// Bob should be at index 1 (after the Add + Commit)
 	var bobIdx LeafNodeIndex
 	for idx := range aliceGroup.Members {
 		if idx != aliceGroup.OwnLeafIndex {
@@ -340,16 +341,16 @@ func TestGetMember_Valid(t *testing.T) {
 
 	bobMember, ok := aliceGroup.GetMember(bobIdx)
 	if !ok {
-		t.Error("GetMember should return true for Bob's leaf")
+		t.Fatal("GetMember should return true for Bob's leaf")
 	}
 	if bobMember == nil {
-		t.Error("GetMember should return non-nil member for Bob")
+		t.Fatal("GetMember should return non-nil member for Bob")
 	}
 	if !bobMember.Active {
 		t.Error("Bob member should be active")
 	}
 
-	// Verificar desde Bob también
+	// Verify from Bob too
 	bobMemberFromBob, ok := bobGroup.GetMember(bobGroup.OwnLeafIndex)
 	if !ok {
 		t.Error("GetMember should return true for own leaf (Bob)")
@@ -359,28 +360,28 @@ func TestGetMember_Valid(t *testing.T) {
 	}
 }
 
-// TestGetMember_OutOfRange verifica que GetMember maneja índices fuera de rango
+// TestGetMember_OutOfRange verifies that GetMember handles out-of-range indices
 func TestGetMember_OutOfRange(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
-	// Índice muy grande
+	// Very large index
 	_, ok := aliceGroup.GetMember(9999)
 	if ok {
 		t.Error("GetMember should return false for out-of-range index")
 	}
 
-	// Índice negativo (convertido a uint32 grande)
+	// Negative index (converted to large uint32)
 	_, ok = aliceGroup.GetMember(LeafNodeIndex(0xFFFFFFFF))
 	if ok {
 		t.Error("GetMember should return false for invalid index")
 	}
 }
 
-// TestGetMembers_Count verifica que GetMembers retorna la cantidad correcta
+// TestGetMembers_Count verifies that GetMembers returns the correct count
 func TestGetMembers_Count(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := setupTwoMemberGroup(t)
 
-	// Debería haber 2 miembros
+	// There should be 2 members
 	aliceMembers := aliceGroup.GetMembers()
 	if len(aliceMembers) != 2 {
 		t.Errorf("GetMembers should return 2 members, got %d", len(aliceMembers))
@@ -391,7 +392,7 @@ func TestGetMembers_Count(t *testing.T) {
 		t.Errorf("GetMembers should return 2 members (Bob), got %d", len(bobMembers))
 	}
 
-	// Verificar que todos los miembros retornados están activos
+	// Verify that all returned members are active
 	for _, member := range aliceMembers {
 		if !member.Active {
 			t.Error("GetMembers should only return active members")
@@ -399,60 +400,23 @@ func TestGetMembers_Count(t *testing.T) {
 	}
 }
 
-// TestValidateAddProposal_DuplicateKey verifica que no se pueden agregar KeyPackages con misma InitKey
-// Nota: Este test documenta un comportamiento deseado (RFC §12.2), pero la validación
-// de InitKey duplicadas no está implementada actualmente en AddMember.
+// TestValidateAddProposal_DuplicateKey verifies that KeyPackages with same InitKey cannot be added
+// Note: This test documents a desired behavior (RFC §12.2), but the validation
+// of duplicate InitKey is not currently implemented in AddMember.
+// Test plan: Create two KeyPackages with the same InitKey (artificially forced),
+// add the first member, then verify that adding the second member with the duplicate
+// InitKey fails.
 func TestValidateAddProposal_DuplicateKey(t *testing.T) {
 	t.Skip("Duplicate InitKey validation not implemented yet")
-	/*
-		aliceGroup, _, _, _ := setupTwoMemberGroup(t)
-
-		// Crear dos KeyPackages con la misma InitKey (artificialmente)
-		cred1, _, err := credentials.GenerateCredentialWithKey([]byte("Member1"))
-		if err != nil {
-			t.Fatalf("GenerateCredentialWithKey: %v", err)
-		}
-
-		kp1, _, err := keypackages.Generate(cred1, keypackages.MLS128DHKEMP256)
-		if err != nil {
-			t.Fatalf("Generate KeyPackage: %v", err)
-		}
-
-		// Crear segunda KeyPackage con la misma InitKey
-		cred2, _, err := credentials.GenerateCredentialWithKey([]byte("Member2"))
-		if err != nil {
-			t.Fatalf("GenerateCredentialWithKey: %v", err)
-		}
-
-		kp2, _, err := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
-		if err != nil {
-			t.Fatalf("Generate KeyPackage: %v", err)
-		}
-
-		// Forzar la misma InitKey
-		kp2.InitKey = kp1.InitKey
-
-		// Agregar el primero debería funcionar
-		_, err = aliceGroup.AddMember(kp1)
-		if err != nil {
-			t.Fatalf("AddMember(kp1) should succeed: %v", err)
-		}
-
-		// Agregar el segundo debería fallar (misma InitKey)
-		_, err = aliceGroup.AddMember(kp2)
-		if err == nil {
-			t.Error("AddMember should fail for duplicate InitKey")
-		}
-	*/
 }
 
-// TestValidateUpdateProposal_InvalidLeafNode verifica que UpdateProposal con LeafNode inválido falla
+// TestValidateUpdateProposal_InvalidLeafNode verifies that UpdateProposal with invalid LeafNode fails
 func TestValidateUpdateProposal_InvalidLeafNode(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
-	// Crear UpdateProposal con LeafNode vacío (sin EncryptionKey)
+	// Create UpdateProposal with empty LeafNode (without EncryptionKey)
 	invalidLeafNode := &treesync.LeafNodeData{
-		EncryptionKey: nil, // Esto debería ser inválido
+		EncryptionKey: nil, // This should be invalid
 		SignatureKey:  nil,
 		Credential:    nil,
 	}
@@ -463,7 +427,7 @@ func TestValidateUpdateProposal_InvalidLeafNode(t *testing.T) {
 	}
 }
 
-// TestGroupContext_MarshalUnmarshal verifica roundtrip de GroupContext
+// TestGroupContext_MarshalUnmarshal verifies GroupContext roundtrip
 func TestGroupContext_MarshalUnmarshal(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
@@ -479,7 +443,7 @@ func TestGroupContext_MarshalUnmarshal(t *testing.T) {
 		t.Fatalf("UnmarshalGroupContext failed: %v", err)
 	}
 
-	// Verificar campos
+	// Verify fields
 	if !bytes.Equal(gc2.GroupID.AsSlice(), aliceGroup.GroupContext.GroupID.AsSlice()) {
 		t.Error("GroupID should match after roundtrip")
 	}
@@ -488,7 +452,7 @@ func TestGroupContext_MarshalUnmarshal(t *testing.T) {
 		t.Errorf("Epoch should match: got %d, want %d", gc2.Epoch, aliceGroup.GroupContext.Epoch)
 	}
 
-	// Verificar que el TreeHash es el mismo
+	// Verify that the TreeHash is the same
 	if !bytes.Equal(gc2.TreeHash, aliceGroup.GroupContext.TreeHash) {
 		t.Error("TreeHash should match after roundtrip")
 	}

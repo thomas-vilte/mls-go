@@ -5,10 +5,10 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// TestTreeTruncation_DirectApply verifica que applyRemoveProposal trunca el
+// TestTreeTruncation_DirectApply verifies that applyRemoveProposal trunca el
 // árbol cuando el último leaf queda en blanco.
 func TestTreeTruncation_DirectApply(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
@@ -29,10 +29,10 @@ func TestTreeTruncation_DirectApply(t *testing.T) {
 	}
 }
 
-// TestTreeTruncation_NonTrailingLeaf verifica que remover un leaf que NO es
+// TestTreeTruncation_NonTrailingLeaf verifies that remover un leaf que NO es
 // el último no trunca el árbol más allá del trailing blank.
 func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
-	// Crear grupo de 3 miembros: Alice(0), Bob(1), Charlie(2).
+	// Create grupo de 3 miembros: Alice(0), Bob(1), Charlie(2).
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("Charlie-trunc"))

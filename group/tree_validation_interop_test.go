@@ -62,27 +62,27 @@ func TestTreeValidationVectors(t *testing.T) {
 			}
 
 			if len(v.TreeHashes) != len(tree.Nodes) {
-				t.Fatalf("tree_hashes length mismatch: got %d, want %d", len(v.TreeHashes), len(tree.Nodes))
+				t.Fatalf("tree_hashes length sametch: got %d, want %d", len(v.TreeHashes), len(tree.Nodes))
 			}
 			if len(v.Resolutions) != len(tree.Nodes) {
-				t.Fatalf("resolutions length mismatch: got %d, want %d", len(v.Resolutions), len(tree.Nodes))
+				t.Fatalf("resolutions length sametch: got %d, want %d", len(v.Resolutions), len(tree.Nodes))
 			}
 
 			for j := range tree.Nodes {
 				gotHash := tree.HashNode(treesync.NodeIndex(j))
 				wantHash := mustDecodeHexBytes(t, v.TreeHashes[j])
 				if !bytes.Equal(gotHash, wantHash) {
-					t.Fatalf("tree hash mismatch at node %d\n  got  %x\n  want %x", j, gotHash, wantHash)
+					t.Fatalf("tree hash sametch at node %d\n  got  %x\n  want %x", j, gotHash, wantHash)
 				}
 
 				gotResolution := tree.Resolution(treesync.NodeIndex(j))
 				wantResolution := v.Resolutions[j]
 				if len(gotResolution) != len(wantResolution) {
-					t.Fatalf("resolution length mismatch at node %d\n  got  %v\n  want %v", j, gotResolution, wantResolution)
+					t.Fatalf("resolution length sametch at node %d\n  got  %v\n  want %v", j, gotResolution, wantResolution)
 				}
 				for k, got := range gotResolution {
 					if int(got) != wantResolution[k] {
-						t.Fatalf("resolution mismatch at node %d element %d\n  got  %v\n  want %v", j, k, gotResolution, wantResolution)
+						t.Fatalf("resolution sametch at node %d element %d\n  got  %v\n  want %v", j, k, gotResolution, wantResolution)
 					}
 				}
 			}

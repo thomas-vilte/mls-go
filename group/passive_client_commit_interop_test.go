@@ -34,8 +34,8 @@ type passiveClientCommitVector struct {
 }
 
 func TestPassiveClientHandlingCommitVectors(t *testing.T) {
-	// Nota: Estos tests usan vectores de OpenMLS Rust que pueden tener diferencias
-	// en el HPKE key schedule. Si fallan, es por incompatibilidad de implementaciones.
+	// Nota: Estos tests usan vectors de OpenMLS Rust que pueden to have diferencias
+	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
 	// Nuestra implementación de HPKE pasa tests round-trip propios.
 
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/passive-client-handling-commit.json")
@@ -134,7 +134,7 @@ func runPassiveClientCommitVector(t *testing.T, v *passiveClientCommitVector) {
 	// Verify initial epoch authenticator
 	wantInitEA := mustDecodeHex(t, v.InitialEpochAuthenticator)
 	if !bytes.Equal(group.EpochAuthenticator(), wantInitEA) {
-		t.Fatalf("initial_epoch_authenticator mismatch:\n  got  %x\n  want %x",
+		t.Fatalf("initial_epoch_authenticator sametch:\n  got  %x\n  want %x",
 			group.EpochAuthenticator(), wantInitEA)
 	}
 
@@ -173,7 +173,7 @@ func runPassiveClientCommitVector(t *testing.T, v *passiveClientCommitVector) {
 		// Verify epoch authenticator
 		wantEA := mustDecodeHex(t, epoch.EpochAuthenticator)
 		if !bytes.Equal(group.EpochAuthenticator(), wantEA) {
-			t.Fatalf("epoch %d: epoch_authenticator mismatch:\n  got  %x\n  want %x",
+			t.Fatalf("epoch %d: epoch_authenticator sametch:\n  got  %x\n  want %x",
 				epochIdx, group.EpochAuthenticator(), wantEA)
 		}
 	}

@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/asn1"
 	"fmt"
 	"math/big"
 
@@ -62,6 +61,9 @@ func (k *SignaturePublicKey) ToECDSA() (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("invalid uncompressed point format: expected 65 bytes starting with 0x04, got %d bytes", len(k.value))
 	}
 
+	// Note: crypto/elliptic is deprecated since Go 1.21, but ecdsa.PublicKey
+	// still requires Curve/X/Y fields for ecdsa.Verify compatibility.
+	// This usage is maintained for compatibility with the standard library.
 	x := new(big.Int).SetBytes(k.value[1:33])
 	y := new(big.Int).SetBytes(k.value[33:65])
 
@@ -95,6 +97,7 @@ func NewEd25519SignaturePrivateKey(priv ed25519.PrivateKey) *SignaturePrivateKey
 
 // GenerateSignaturePrivateKey generates a new P-256 private key.
 func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
+	// P-256 generation using ecdsa standard library function.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating P-256 key: %w", err)
@@ -135,10 +138,10 @@ func (k *SignaturePrivateKey) Scheme() SignatureScheme {
 func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
 	if k.scheme == ED25519 {
 		pub := k.ed25519Key.Public().(ed25519.PublicKey)
-		return NewSignaturePublicKey([]byte(pub))
+		return NewSignaturePublicKey(pub)
 	}
 
-	// ECDSA P-256: uncompressed format via crypto/ecdh (avoids deprecated .X/.Y access)
+	// ECDSA P-256: uncompressed format via crypto/ecdh
 	ecdhKey, err := k.ecdsaKey.ECDH()
 	if err != nil {
 		// Fallback should never happen for a valid P-256 key
@@ -159,18 +162,12 @@ func (k *SignaturePrivateKey) Sign(data []byte) (*Signature, error) {
 
 	// ECDSA-SHA256
 	hash := sha256.Sum256(data)
-	r, s, err := ecdsa.Sign(rand.Reader, k.ecdsaKey, hash[:])
-	if err != nil {
-		return nil, fmt.Errorf("signing: %w", err)
-	}
 
-	// Convert to ASN.1 DER format
-	type ecdsaSignature struct {
-		R, S *big.Int
-	}
-	sigDER, err := asn1.Marshal(ecdsaSignature{R: r, S: s})
+	// Use modern ecdsa.SignASN1 instead of ecdsa.Sign which is deprecated since Go 1.20
+	// for directly returning ASN.1 DER encoded signatures.
+	sigDER, err := ecdsa.SignASN1(rand.Reader, k.ecdsaKey, hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("marshaling signature: %w", err)
+		return nil, fmt.Errorf("signing with ECDSA: %w", err)
 	}
 
 	return NewSignature(sigDER), nil
@@ -216,25 +213,20 @@ func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 
 // verifyECDSA verifies an ECDSA-SHA256 signature.
 func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
+	// VerifyASN1 can directly take the raw public key bytes in Go 1.20+
+	// using the ecdsa.VerifyASN1 function which handles uncompressed keys.
+	// Sin embargo, the ecdsa.VerifyASN1 function expects an *ecdsa.PublicKey
+
 	pubKey, err := NewSignaturePublicKey(k.Value).ToECDSA()
 	if err != nil {
 		return err
 	}
 
 	hash := sha256.Sum256(data)
-
-	// Parse ASN.1 DER signature
-	type ecdsaSignature struct {
-		R, S *big.Int
-	}
-	var ecdsaSig ecdsaSignature
-	if _, err := asn1.Unmarshal(sig.AsSlice(), &ecdsaSig); err != nil {
+	if !ecdsa.VerifyASN1(pubKey, hash[:], sig.AsSlice()) {
 		return ErrInvalidSignature
 	}
 
-	if !ecdsa.Verify(pubKey, hash[:], ecdsaSig.R, ecdsaSig.S) {
-		return ErrInvalidSignature
-	}
 	return nil
 }
 

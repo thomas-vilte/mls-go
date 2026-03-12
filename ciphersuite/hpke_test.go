@@ -270,7 +270,9 @@ func BenchmarkHPKE_Encrypt(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		EncryptWithLabel(publicKey, label, context, plaintext, cs)
+		if _, err := EncryptWithLabel(publicKey, label, context, plaintext, cs); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -284,11 +286,16 @@ func BenchmarkHPKE_Decrypt(b *testing.B) {
 	cs := MLS128DHKEMP256
 
 	// Pre-encrypt
-	ciphertext, _ := EncryptWithLabel(publicKey, label, context, plaintext, cs)
+	ciphertext, err := EncryptWithLabel(publicKey, label, context, plaintext, cs)
+	if err != nil {
+		b.Fatal(err)
+	}
 	privKeyBytes := privKey.Bytes()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		DecryptWithLabel(privKeyBytes, label, context, ciphertext, cs)
+		if _, err := DecryptWithLabel(privKeyBytes, label, context, ciphertext, cs); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

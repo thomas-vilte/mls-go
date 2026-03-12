@@ -17,7 +17,7 @@ func GenerateX25519KeyPairCS3() (publicKey, privateKey []byte, err error) {
 
 // DeriveKeyPairX25519CS3 derives an X25519 key pair from IKM for CS3.
 // This is a wrapper of DeriveKeyPairX25519 for CS1.
-func DeriveKeyPairX25519CS3(ikm []byte) ([]byte, []byte, error) {
+func DeriveKeyPairX25519CS3(ikm []byte) (pubKey, privKey []byte, err error) {
 	return DeriveKeyPairX25519(ikm)
 }
 

@@ -7,12 +7,12 @@ import (
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
 	itls "github.com/mls-go/internal/tls"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
-// buildExternalSendersExtData construye el payload de la extensión ExternalSenders
-// con un único sender dado sigKey y credBytes.
-func buildExternalSendersExtData(t *testing.T, sigKey []byte, credBytes []byte) []byte {
+// buildExternalSendersExtData builds the ExternalSenders extension payload
+// with a single sender given sigKey and credBytes.
+func buildExternalSendersExtData(t *testing.T, sigKey, credBytes []byte) []byte {
 	t.Helper()
 	w := itls.NewWriter()
 	w.WriteVLBytes(sigKey)
@@ -105,7 +105,7 @@ func TestGetExternalSenderSigningKey_OutOfRange(t *testing.T) {
 		Data: buildExternalSendersExtData(t, extSigKey, extCredBytes),
 	})
 
-	// Index 1 fuera de rango (solo hay 1 sender en la extensión).
+	// Index 1 out of range (there is only 1 sender in the extension).
 	_, err = g.getExternalSenderSigningKey(1)
 	if err == nil {
 		t.Error("expected error for out-of-range sender index")
@@ -154,9 +154,9 @@ func TestGetExternalSenderSigningKey_MultipleSenders(t *testing.T) {
 	}
 
 	if !bytes.Equal(got0, key0) {
-		t.Error("sender 0 key mismatch")
+		t.Error("sender 0 key sametch")
 	}
 	if !bytes.Equal(got1, key1) {
-		t.Error("sender 1 key mismatch")
+		t.Error("sender 1 key sametch")
 	}
 }

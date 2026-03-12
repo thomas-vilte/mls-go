@@ -2,26 +2,26 @@ package group
 
 import "fmt"
 
-// PSKStore es una interfaz para resolver Pre-Shared Keys (RFC 9420 §8.4).
-// Las aplicaciones implementan esta interfaz para proveer PSKs externos.
+// PSKStore is an interface for resolving Pre-Shared Keys per RFC 9420 §8.4.
+// Applications implement this interface to provide external PSKs.
 type PSKStore interface {
-	// GetPSK retorna el PSK para el ID dado
-	// Debe retornar error si el PSK no existe o no puede ser accedido
+	// GetPSK returns the PSK for the given ID.
+	// Must return an error if the PSK does not exist or cannot be accessed.
 	GetPSK(pskID []byte) ([]byte, error)
 }
 
-// PSKResolver implementa la lógica de resolución de PSKs desde proposals.
+// PSKResolver implements PSK resolution logic from proposals.
 type PSKResolver struct {
 	store PSKStore
 }
 
-// NewPSKResolver crea un nuevo resolver con el store dado.
+// NewPSKResolver creates a new resolver with the given store.
 func NewPSKResolver(store PSKStore) *PSKResolver {
 	return &PSKResolver{store: store}
 }
 
-// ResolvePSK resuelve un PSK desde un PskID.
-// Soporta External PSKs (tipo 1) y Resumption PSKs (tipo 2).
+// ResolvePSK resolves a PSK from a PskID.
+// Supports External PSKs (type 1) and Resumption PSKs (type 2).
 func (r *PSKResolver) ResolvePSK(pskID *PskID) ([]byte, error) {
 	if pskID == nil {
 		return nil, fmt.Errorf("psk_id is nil")
@@ -30,11 +30,12 @@ func (r *PSKResolver) ResolvePSK(pskID *PskID) ([]byte, error) {
 	switch pskID.PskType {
 	case 1: // External PSK
 		return r.store.GetPSK(pskID.ID)
-	case 2: // Resumption PSK - usar compound key (group_id, epoch)
-		resumptionKey := append(pskID.PskGroupID, make([]byte, 8)...)
-		// Convertir epoch a bytes big-endian
-		for i := 7; i >= 0; i-- {
-			resumptionKey[len(resumptionKey)-8+i] = byte(pskID.PskEpoch >> (8 * (7 - i)))
+	case 2: // Resumption PSK - use compound key (group_id, epoch)
+		resumptionKey := make([]byte, len(pskID.PskGroupID)+8)
+		copy(resumptionKey, pskID.PskGroupID)
+		// Convert epoch to big-endian bytes
+		for i := 0; i < 8; i++ {
+			resumptionKey[len(pskID.PskGroupID)+i] = byte(pskID.PskEpoch >> (8 * (7 - i)))
 		}
 		return r.store.GetPSK(resumptionKey)
 	case 3: // Branch PSK

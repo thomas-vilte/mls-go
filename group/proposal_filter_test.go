@@ -31,14 +31,14 @@ func createTestGroup(t *testing.T) (*Group, *keypackages.KeyPackage) {
 	return group, kp
 }
 
-// createValidUpdateProposal crea un Update proposal válido con firma correcta.
+// createValidUpdateProposal creates a valid Update proposal with correct signature.
 func createValidUpdateProposal(t *testing.T, g *Group, sender LeafNodeIndex) *Proposal {
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("updater"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
 	}
 
-	// Crear un nuevo LeafNode para el Update
+	// Create un nuevo LeafNode para el Update
 	leafNode := &keypackages.LeafNode{
 		EncryptionKey:     []byte("new-encryption-key-32bytes-long"),
 		SignatureKey:      cred.SignatureKey,
@@ -124,7 +124,7 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 		},
 	}
 
-	// Crear capabilities que soporten todos los tipos de proposals
+	// Create capabilities que soporten todos los tipos de proposals
 	allCapabilities := &keypackages.Capabilities{
 		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
 		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
@@ -285,7 +285,7 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 		group.RatchetTree,
 	)
 
-	// Crear proposals en orden aleatorio
+	// Create proposals en orden aleatorio
 	proposals := []FilteredProposal{
 		{Proposal: NewAddProposal(kp), Sender: 0},
 		{Proposal: NewRemoveProposal(1), Sender: 0},
@@ -303,8 +303,8 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 		t.Logf("  %d: type=%d sender=%d", i, p.Proposal.Type, p.Sender)
 	}
 
-	// Verificar orden RFC §12.4.2: GroupContextExtensions, Update, Remove, Add, PreSharedKey
-	// Nota: Hay 2 Updates, así que el orden real es: GCE, Update, Update, Remove, Add, PSK
+	// Verify orden RFC §12.4.2: GroupContextExtensions, Update, Remove, Add, PreSharedKey
+	// Note: There are 2 Updates, so the actual order is: GCE, Update, Update, Remove, Add, PSK
 	expectedOrder := []ProposalType{
 		ProposalTypeGroupContextExtensions, // 7
 		ProposalTypeUpdate,                 // 2
@@ -325,19 +325,19 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 		}
 	}
 
-	// Verificar que el update del committer está al final de los updates
-	updateIndices := []int{}
+	// Verify that the committer's update is at the end of the updates
+	var updateIndices []int
 	for i, p := range sorted {
 		if p.Proposal.Type == ProposalTypeUpdate {
 			updateIndices = append(updateIndices, i)
 		}
 	}
 
-	// Debería haber 2 updates
+	// There should be 2 updates
 	if len(updateIndices) != 2 {
 		t.Errorf("expected 2 updates, got %d", len(updateIndices))
 	} else {
-		// El segundo update debería ser del committer
+		// El second update should ser del committer
 		committerUpdate := sorted[updateIndices[1]]
 		if committerUpdate.Sender != committer {
 			t.Errorf("expected committer update at position %d, got sender %d", updateIndices[1], committerUpdate.Sender)
@@ -348,7 +348,7 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	group, kp := createTestGroup(t)
 
-	// Agregar un miembro primero
+	// Agregar un miembro first
 	newCred, _, err := credentials.GenerateCredentialWithKey([]byte("new"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
@@ -357,12 +357,16 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate KeyPackage failed: %v", err)
 	}
-	_, _ = group.AddMember(newKp)
-	// Aplicar el add proposal manualmente para que esté en members
-	group.applyAddProposal(&AddProposal{KeyPackage: newKp})
+	if _, err := group.AddMember(newKp); err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
+	// Apply the add proposal manually so it's in members
+	if err := group.applyAddProposal(&AddProposal{KeyPackage: newKp}); err != nil {
+		t.Fatalf("applyAddProposal failed: %v", err)
+	}
 	group.Members[1] = &Member{LeafIndex: 1, Active: true}
 
-	// Generar un tercer key package con claves únicas para el Add proposal.
+	// Generate a third key package with unique keys for the Add proposal.
 	thirdCred, _, err := credentials.GenerateCredentialWithKey([]byte("third"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey (third) failed: %v", err)
@@ -380,7 +384,7 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 		group.RatchetTree,
 	)
 
-	// Proposals válidos: Add con key package nuevo (claves únicas), Remove + Update de miembro existente.
+	// Valid proposals: Add with new key package (unique keys), Remove + Update from existing member.
 	proposals := []FilteredProposal{
 		{Proposal: NewAddProposal(thirdKp), Sender: 0},
 		{Proposal: NewRemoveProposal(1), Sender: 0},
@@ -388,7 +392,7 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	}
 	_ = kp
 
-	// Crear capabilities que soporten todos los tipos de proposals
+	// Create capabilities que soporten todos los tipos de proposals
 	allCapabilities := &keypackages.Capabilities{
 		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
 		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
@@ -401,7 +405,7 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 		t.Fatalf("FilterAndValidateProposals failed: %v", err)
 	}
 
-	// Verificar orden
+	// Verify orden
 	expectedOrder := []ProposalType{
 		ProposalTypeUpdate,
 		ProposalTypeRemove,
@@ -420,7 +424,7 @@ func TestProposalFilter_AddInvalidSignature(t *testing.T) {
 	group, kp := createTestGroup(t)
 	_ = kp
 
-	// Crear un KeyPackage válido
+	// Create a valid KeyPackage
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("newmember"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
@@ -456,7 +460,7 @@ func TestProposalFilter_AddInvalidSignature(t *testing.T) {
 		t.Fatal("expected error for invalid KeyPackage signature, got nil")
 	}
 
-	// Verificar que el error menciona firma inválida
+	// Verify that the error mentions invalid signature
 	if !strings.Contains(err.Error(), "signature") {
 		t.Errorf("expected error to mention signature, got: %v", err)
 	}
@@ -475,12 +479,12 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 		t.Fatalf("Generate KeyPackage failed: %v", err)
 	}
 
-	// Añadir el miembro al árbol
+	// Add the member to the tree
 	group.Members[1] = &Member{LeafIndex: 1, Active: true}
 	leafData := keyPackageLeafToTreeSync(existingKp.LeafNode)
 	_, _ = group.RatchetTree.AddLeaf(*leafData)
 
-	// Crear un Update proposal con LeafNode de firma inválida
+	// Create an Update proposal with invalid signature LeafNode
 	updateLeafNode := kp.LeafNode
 	// Corromper la firma del LeafNode
 	updateLeafNode.Signature[0] ^= 0xFF
@@ -508,7 +512,7 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 		t.Fatal("expected error for invalid Update LeafNode signature, got nil")
 	}
 
-	// Verificar que el error menciona firma inválida
+	// Verify that the error mentions invalid signature
 	if !strings.Contains(err.Error(), "signature") {
 		t.Errorf("expected error to mention signature, got: %v", err)
 	}
@@ -548,7 +552,7 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 	t.Run("duplicate_encryption_key_between_adds", func(t *testing.T) {
 		kp1 := genKP("a")
 		kp2 := genKP("b")
-		// Forzar mismo encryption key
+		// Force same encryption key
 		kp2.LeafNode.EncryptionKey = kp1.LeafNode.EncryptionKey
 		proposals := []FilteredProposal{
 			{Proposal: NewAddProposal(kp1), Sender: 0},
@@ -561,7 +565,7 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 	})
 
 	t.Run("encryption_key_already_in_tree", func(t *testing.T) {
-		// existingKp tiene la encryption key que ya está en el árbol (leaf 0).
+		// existingKp has the encryption key that is already in the tree (leaf 0).
 		proposals := []FilteredProposal{
 			{Proposal: NewAddProposal(existingKp), Sender: 0},
 		}
@@ -574,7 +578,7 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 	t.Run("duplicate_init_key_between_adds", func(t *testing.T) {
 		kp1 := genKP("c")
 		kp2 := genKP("d")
-		// Forzar mismo init key
+		// Force same init key
 		kp2.InitKey = kp1.InitKey
 		proposals := []FilteredProposal{
 			{Proposal: NewAddProposal(kp1), Sender: 0},
@@ -589,7 +593,7 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 	t.Run("duplicate_signature_key_between_adds", func(t *testing.T) {
 		kp1 := genKP("e")
 		kp2 := genKP("f")
-		// Forzar mismo signature key
+		// Force same signature key
 		kp2.LeafNode.SignatureKey = kp1.LeafNode.SignatureKey
 		kp2.LeafNode.SignatureKeyBytes = kp1.LeafNode.SignatureKeyBytes
 		proposals := []FilteredProposal{

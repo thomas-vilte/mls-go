@@ -89,8 +89,8 @@ type Group struct {
 	SecretTree            *secrettree.Tree
 	CachedPsks            map[string][]byte
 	PSKStore              PSKStore
-	// MyLeafEncryptionKey es la clave HPKE privada del leaf propio, usada para
-	// descifrar path secrets en commits recibidos (RFC 9420 §12.4.2).
+	// MyLeafEncryptionKey is the private HPKE key of the own leaf, used for
+	// decrypting path secrets in received commits (RFC 9420 §12.4.2).
 	MyLeafEncryptionKey []byte
 }
 
@@ -99,7 +99,7 @@ func NewGroup(
 	groupID *GroupID,
 	cipherSuite ciphersuite.CipherSuite,
 	keyPackage *keypackages.KeyPackage,
-	privateKeys *keypackages.KeyPackagePrivateKeys,
+	_ *keypackages.KeyPackagePrivateKeys,
 ) (*Group, error) {
 	// Create ratchet tree with 1 leaf
 	ratchetTree := treesync.NewRatchetTree(1)
@@ -166,7 +166,7 @@ func NewGroup(
 		Proposals:             NewProposalStore(),
 		ProposalByRef:         make(map[string]*Proposal),
 		KeySchedule:           keySchedule,
-		InterimTranscriptHash: []byte{}, // string vacio
+		InterimTranscriptHash: []byte{},
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		CachedPsks:            make(map[string][]byte),
@@ -231,7 +231,7 @@ func (g *Group) UpdateMember(
 		return nil, fmt.Errorf("no signature key available")
 	}
 
-	// source = 2 (update); TBS incluye group_id + leaf_index per RFC §7.2.
+	// source = 2 (update); TBS includes group_id + leaf_index per RFC §7.2.
 	newLeafNode.LeafNodeSource = 2
 	sigKey := privateKeys.GetSignaturePrivateKey()
 	tbs := newLeafNode.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(g.OwnLeafIndex))
@@ -322,7 +322,7 @@ func (g *Group) CommitWithFormat(
 		return nil, fmt.Errorf("no proposals to commit")
 	}
 
-	// 1. Filtrar y validar proposals (RFC §12.2)
+	// Filter and validate proposals (RFC §12.2)
 	filtered, err := g.FilterProposalsForCommit(nil)
 	if err != nil {
 		return nil, fmt.Errorf("filtering proposals: %w", err)
@@ -333,9 +333,9 @@ func (g *Group) CommitWithFormat(
 		proposals[i] = fp.Proposal
 	}
 
-	// 2. Clonar árbol, aplicar proposals provisoriamente.
-	// Rastrear hojas recién añadidas (Add proposals) para excluirlas de la
-	// encriptación del UpdatePath (RFC §12.4.1: new members get commit_secret via Welcome).
+	// Clone tree, apply proposals provisionally.
+	// Track newly added leaves (Add proposals) to exclude them from
+	// UpdatePath encryption (RFC §12.4.1: new members get commit_secret via Welcome).
 	fmt.Printf("[DEBUG Commit] g.RatchetTree.TreeHash before proposals: %x\n", g.RatchetTree.TreeHash())
 	treeDiff := g.RatchetTree.Clone()
 	excluded := make(map[treesync.LeafIndex]bool)
@@ -351,11 +351,11 @@ func (g *Group) CommitWithFormat(
 		}
 	}
 
-	// 3. Generar UpdatePath si es necesario (RFC §12.4.1)
+	// 3. Generate UpdatePath if necessary (RFC §12.4.1)
 	var updatePath *UpdatePath
 	var commitSecret *ciphersuite.Secret
 
-	// Generar UpdatePath, excluyendo hojas recién añadidas de la encriptación.
+	// Generate UpdatePath, excluding newly added leaves from encryption.
 	updatePath, commitSecret, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded)
 	if err != nil {
 		return nil, fmt.Errorf("creating update path: %w", err)
@@ -373,7 +373,7 @@ func (g *Group) CommitWithFormat(
 		}
 	}
 
-	// 5. Crear AuthenticatedContent y firmar
+	// 5. Create AuthenticatedContent and sign
 	content := framing.FramedContent{
 		GroupID: g.GroupID.AsSlice(),
 		Epoch:   g.Epoch.AsUint64(),
@@ -388,14 +388,14 @@ func (g *Group) CommitWithFormat(
 		GroupContext: groupContextBytes,
 	}
 
-	// Firmar el TBS con label (RFC §6.1 / §5.1.2)
+	// Sign the TBS con label (RFC §6.1 / §5.1.2)
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "FramedContentTBS", ac.MarshalTBS())
 	if err != nil {
 		return nil, fmt.Errorf("signing commit: %w", err)
 	}
 	ac.Auth.Signature = sig
 
-	// 6. Calcular confirmed_transcript_hash (RFC §8.2)
+	// 6. Compute confirmed_transcript_hash (RFC §8.2)
 	cthi, err := framing.NewConfirmedTranscriptHashInput(ac)
 	if err != nil {
 		return nil, fmt.Errorf("creating transcript hash input: %w", err)
@@ -405,7 +405,7 @@ func (g *Group) CommitWithFormat(
 		return nil, fmt.Errorf("computing confirmed transcript hash: %w", err)
 	}
 
-	// Construir GroupContext provisional para el nuevo epoch
+	// Build provisional GroupContext para el nuevo epoch
 	newTreeHash := treeDiff.TreeHash()
 	newGC := &GroupContext{
 		Version:                 g.GroupContext.Version,
@@ -417,7 +417,7 @@ func (g *Group) CommitWithFormat(
 		Extensions:              g.GroupContext.Extensions,
 	}
 
-	// Avanzar key schedule para calcular confirmation_key del nuevo epoch
+	// Advance key schedule to compute confirmation_key del nuevo epoch
 	newGCBytes := newGC.Marshal()
 	fmt.Printf("[DEBUG Commit] newTreeHash: %x\n", newTreeHash)
 	fmt.Printf("[DEBUG Commit] confirmedHash: %x\n", confirmedHash)
@@ -451,7 +451,7 @@ func (g *Group) CommitWithFormat(
 
 	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
 
-	// 7. Crear StagedCommit con datos precalculados para el committer
+	// 7. Create StagedCommit with precomputed values for committer
 	stagedCommit := &StagedCommit{
 		Commit:                  commit,
 		Proposals:               proposals,
@@ -471,14 +471,14 @@ func (g *Group) CommitWithFormat(
 // filteredDirectPathLevels returns the direct path, copath, and the subset of
 // copath indices where the resolution is non-empty (RFC §12.4.1: UpdatePath.Nodes
 // only covers parents whose sibling's resolution is non-empty).
-func filteredDirectPathLevels(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex) ([]treesync.NodeIndex, []treesync.NodeIndex, []int) {
+func filteredDirectPathLevels(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex) (directPath, copath []treesync.NodeIndex, levels []int) {
 	return filteredDirectPathLevelsExcluding(tree, senderLeafIdx, nil)
 }
 
-func filteredDirectPathLevelsExcluding(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, excluded map[treesync.LeafIndex]bool) ([]treesync.NodeIndex, []treesync.NodeIndex, []int) {
-	directPath := tree.DirectPath(senderLeafIdx)
-	copath := tree.Copath(senderLeafIdx)
-	levels := make([]int, 0, len(copath))
+func filteredDirectPathLevelsExcluding(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, excluded map[treesync.LeafIndex]bool) (directPath, copath []treesync.NodeIndex, levels []int) {
+	directPath = tree.DirectPath(senderLeafIdx)
+	copath = tree.Copath(senderLeafIdx)
+	levels = make([]int, 0, len(copath))
 	for i, copathNode := range copath {
 		if len(tree.ResolutionWithExclusions(copathNode, excluded)) > 0 {
 			levels = append(levels, i)
@@ -604,7 +604,7 @@ func (g *Group) createUpdatePath(
 		LeafNodeSource:  3,
 		ParentHash:      tree.Nodes[directPath[0]].ParentHash,
 	}
-	// source=commit; TBS incluye group_id + leaf_index per RFC §7.2.
+	// source=commit; TBS includes group_id + leaf_index per RFC §7.2.
 	tbs := leafNodeData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx))
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
 	if err != nil {
@@ -614,7 +614,9 @@ func (g *Group) createUpdatePath(
 
 	fmt.Printf("[DEBUG sender] treeDiff hash before SetLeaf: %x\n", tree.TreeHash())
 	// Apply leaf to tree for provisional tree hash computation.
-	tree.SetLeaf(senderLeafIdx, *leafNodeData)
+	if err := tree.SetLeaf(senderLeafIdx, *leafNodeData); err != nil {
+		return nil, nil, fmt.Errorf("setting leaf in tree: %w", err)
+	}
 	fmt.Printf("[DEBUG sender] treeDiff hash after SetLeaf: %x\n", tree.TreeHash())
 
 	// Compute provisional GroupContext (RFC §12.4.1: next epoch + tree_hash_after).
@@ -682,7 +684,7 @@ func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Lea
 	provTree := tree.Clone()
 
 	if path.LeafNode != nil {
-		provTree.SetLeaf(senderLeafIdx, *path.LeafNode)
+		_ = provTree.SetLeaf(senderLeafIdx, *path.LeafNode)
 	}
 
 	// RFC §12.4.2 step 6: Blank ALL intermediate nodes on the committer's direct path.
@@ -752,7 +754,7 @@ func (g *Group) provisionalGroupContextBytesFromTree(provTree *treesync.RatchetT
 	return provGC.Marshal()
 }
 
-// applyProposalToTree aplica un proposal a un árbol específico.
+// applyProposalToTree applies a proposal to a specific RatchetTree.
 func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTree, senderIdx LeafNodeIndex) error {
 	switch proposal.Type {
 	case ProposalTypeAdd:
@@ -767,7 +769,9 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 	case ProposalTypeUpdate:
 		leafIdx := treesync.LeafIndex(senderIdx)
 		leafData := *keyPackageLeafToTreeSync(proposal.Update.LeafNode)
-		tree.SetLeaf(leafIdx, leafData)
+		if err := tree.SetLeaf(leafIdx, leafData); err != nil {
+			return fmt.Errorf("setting leaf for update proposal: %w", err)
+		}
 		path := tree.DirectPath(leafIdx)
 		for i := 1; i < len(path); i++ {
 			tree.BlankNode(path[i])
@@ -780,7 +784,7 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 	return nil
 }
 
-// ProcessCommit procesa un commit recibido.
+// ProcessCommit processes a received commit.
 // RFC 9420 §12.4.2
 func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 	if stagedCommit.AuthenticatedContent == nil {
@@ -789,7 +793,7 @@ func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 	return g.MergeCommit(stagedCommit)
 }
 
-// StoreProposal almacena un proposal indexado por referencia hash para resolución futura (RFC 9420 §12.4).
+// StoreProposal stores a proposal indexed by hash reference for future resolution (RFC 9420 §12.4).
 // acBytes must be the serialized AuthenticatedContent of the proposal's PublicMessage.
 func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte) []byte {
 	if g.ProposalByRef == nil {
@@ -801,9 +805,9 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 	return ref
 }
 
-// ProcessReceivedCommit procesa un commit enviado por otro miembro.
-// Descifra el path secret usando la clave HPKE privada del receptor,
-// luego avanza el estado del grupo. RFC 9420 §12.4.2
+// ProcessReceivedCommit processes a commit sent by another member.
+// Decrypts the path secret using the receiver's private HPKE key,
+// then advances the group state. RFC 9420 §12.4.2
 func (g *Group) ProcessReceivedCommit(
 	ac *framing.AuthenticatedContent,
 	senderLeafIdx treesync.LeafIndex,
@@ -940,9 +944,9 @@ func (g *Group) ProcessReceivedCommit(
 	return g.MergeCommit(staged)
 }
 
-// decryptPathSecret descifra el path secret de un UpdatePath para este receptor.
-// Recorre el copath filtrado del emisor buscando el nodo del receptor en la resolución,
-// descifra con HPKE y deriva hacia adelante para obtener el commit_secret.
+// decryptPathSecret decrypts the path secret from an UpdatePath for this receiver.
+// Traverse the sender's filtered copath looking for the receiver's node in the resolution,
+// decrypts with HPKE and derives forward to obtain the commit_secret.
 // RFC 9420 §12.4.1: UpdatePath.Nodes has F entries (filtered levels only);
 // nodes[m] encrypts pathSecrets[N-F+m], so derive F-m times to reach commitSecret.
 func (g *Group) decryptPathSecret(
@@ -992,15 +996,15 @@ func (g *Group) decryptPathSecret(
 	return nil, fmt.Errorf("own leaf not found in any copath resolution")
 }
 
-// MergeCommit aplica un commit y avanza el estado del protocolo
+// MergeCommit applies a commit and advances the protocol state
 // RFC 9420 §12.4.2
 func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit && g.state != StateOperational {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
 	}
 
-	// FASE 1.2: Validación de epoch (RFC 9420 §12.4.1)
-	// FASE 1.3: Validación de GroupID (RFC 9420 §12.4.1)
+	// PHASE 1.2: Epoch validation (RFC 9420 §12.4.1)
+	// PHASE 1.3: GroupID validation (RFC 9420 §12.4.1)
 	if stagedCommit.AuthenticatedContent != nil {
 		// Validar GroupID
 		if !bytes.Equal(stagedCommit.AuthenticatedContent.Content.GroupID, g.GroupContext.GroupID.AsSlice()) {
@@ -1014,8 +1018,8 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				stagedCommit.AuthenticatedContent.Content.Epoch, g.GroupContext.Epoch.AsUint64())
 		}
 
-		// FASE 1.1: Verificación de firma para commits de miembros
-		// (los external commits ya se verifican al procesar el UpdatePath)
+		// PHASE 1.1: Signature verification for member commits
+		// (external commits are already verified when processing the UpdatePath)
 		senderType := stagedCommit.AuthenticatedContent.Content.Sender.Type
 		if senderType == framing.SenderTypeMember {
 			senderLeafIdx := treesync.LeafIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
@@ -1040,7 +1044,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 	}
 
-	// 1. Aplicar proposals al ratchet tree
+	// 1. Apply proposals to the ratchet tree
 	senderIdx := g.OwnLeafIndex
 	if stagedCommit.AuthenticatedContent != nil {
 		if stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
@@ -1088,7 +1092,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				var ok bool
 				pskBytes, ok = g.CachedPsks[resumptionKey]
 				if !ok {
-					// Intentar resolver desde PSKStore si está disponible
+					// Try to resolve from PSKStore if available
 					if g.PSKStore != nil {
 						resolver := NewPSKResolver(g.PSKStore)
 						pskBytes, err = resolver.ResolvePSK(&pid)
@@ -1140,8 +1144,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			return fmt.Errorf("UpdatePath leaf node signature invalid: %w", err)
 		}
 
-		// Actualizar la hoja del emisor
-		g.RatchetTree.SetLeaf(senderLeafIdx, *leafNodeData)
+		// Update the sender leaf
+		if err := g.RatchetTree.SetLeaf(senderLeafIdx, *leafNodeData); err != nil {
+			return fmt.Errorf("setting sender leaf: %w", err)
+		}
 
 		// RFC §12.4.2 step 6: Blank ALL intermediate nodes on the committer's
 		// direct path before applying the UpdatePath encryption keys.
@@ -1150,7 +1156,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			g.RatchetTree.BlankNode(mergeDP[i])
 		}
 
-		// Actualizar ancestros con nuevas claves de cifrado (filtered direct path).
+		// Update ancestors with new encryption keys (filtered direct path).
 		// Re-compute filtered levels after blanking.
 		mergeDP, _, mergeLevels := filteredDirectPathLevels(g.RatchetTree, senderLeafIdx)
 		for m, level := range mergeLevels {
@@ -1165,10 +1171,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			node.UnmergedLeaves = nil
 		}
 
-		// Calcular parent hashes de arriba abajo y verificar (RFC §7.9)
-		// NOTA: Para External Commits, NO verificamos parent hashes porque el external
-		// sender los calculó sobre su árbol provisional (con su hoja agregada), que es
-		// diferente al árbol del receptor antes de aplicar el commit.
+		// Compute parent hashes de arriba abajo y verificar (RFC §7.9)
+		// NOTE: For External Commits, we do NOT verify parent hashes because the external
+		// sender computed them over their provisional RatchetTree (with their leaf added), which is
+		// different from the receiver's RatchetTree before applying the commit.
 		if len(mergeDP) > 1 && stagedCommit.AuthenticatedContent.Content.Sender.Type != framing.SenderTypeNewMemberCommit {
 			rootIdx := g.RatchetTree.Root()
 			g.RatchetTree.Nodes[rootIdx].ParentHash = []byte{}
@@ -1192,21 +1198,21 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 					ph = parent.ParentHash
 				}
 
-				// Almacenar parent hash en TODOS los nodos del direct path (incluyendo la hoja)
+				// Store parent hash in ALL nodes of the direct path (including the leaf)
 				g.RatchetTree.Nodes[nodeIdx].ParentHash = ph
 			}
 
-			// Verificar que los parent hashes del direct path coinciden con lo calculado (RFC §7.9)
+			// Verify that direct path parent hashes match with the calculated ones (RFC §7.9)
 			if err := g.RatchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
 				return fmt.Errorf("parent hash verification failed: %w", err)
 			}
 		}
 	}
 
-	// 2. Recomputar TreeHash desde treesync
+	// 2. Recompute TreeHash from treesync
 	treeHash := g.RatchetTree.TreeHash()
 
-	// 3. Calcular ConfirmedTranscriptHash nuevo
+	// 3. Compute ConfirmedTranscriptHash nuevo
 	cthi, err := framing.NewConfirmedTranscriptHashInput(stagedCommit.AuthenticatedContent)
 	if err != nil {
 		return fmt.Errorf("creating transcript hash input: %w", err)
@@ -1219,7 +1225,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if err != nil {
 		return fmt.Errorf("calculating confirmed transcript hash: %w", err)
 	}
-	// 4. Calcular InterimTranscriptHash nuevo
+	// 4. Compute InterimTranscriptHash nuevo
 	itHashInput := &framing.InterimTranscriptHashInput{
 		ConfirmationTag: stagedCommit.AuthenticatedContent.Auth.ConfirmationTag,
 	}
@@ -1229,48 +1235,49 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		confirmedTranscriptHash,
 	)
 
-	// 5. Actualizar GroupContext (RFC §8.1)
+	// 5. Update GroupContext (RFC §8.1)
 	g.GroupContext.IncrementEpoch()
 	g.GroupContext.UpdateTreeHash(treeHash)
 	g.GroupContext.UpdateConfirmedTranscriptHash(confirmedTranscriptHash)
 
-	// Actualizar también Group directamente
+	// Also update Group directly
 	g.Epoch = g.GroupContext.Epoch
 	g.InterimTranscriptHash = interimTranscriptHash
 	g.ConfirmationTag = stagedCommit.AuthenticatedContent.Auth.ConfirmationTag
-	// 6. Avanzar key schedule → nuevos EpochSecrets
+	// 6. Advance key schedule → new EpochSecrets
 	if stagedCommit.PrecomputedEpochSecrets != nil {
-		// Committer: usar epoch secrets precalculados en Commit()
+		// Committer: use precomputed epoch secrets from Commit()
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
-		// Receptor: derivar desde init_secret del epoch actual
+		// Receiver: derive from init_secret of the current epoch
 		fmt.Printf("[DEBUG MergeCommit receiver] g.EpochSecrets ptr: %p, InitSecret ptr: %p\n", g.EpochSecrets, g.EpochSecrets.InitSecret)
 		if g.EpochSecrets.InitSecret != nil {
 			fmt.Printf("[DEBUG MergeCommit receiver] InitSecret value[:4]: %x\n", g.EpochSecrets.InitSecret.AsSlice()[:min(4, len(g.EpochSecrets.InitSecret.AsSlice()))])
 		}
 		initSecretForNewEpoch := g.EpochSecrets.InitSecret
 		for _, proposal := range stagedCommit.Proposals {
-			if proposal.Type == ProposalTypeExternalInit && proposal.ExternalInit != nil {
-				externalPriv, deriveErr := ciphersuite.DeriveKeyPair(
-					g.CipherSuite,
-					g.EpochSecrets.ExternalSecret.AsSlice(),
-				)
-				if deriveErr != nil {
-					return fmt.Errorf("deriving external key pair: %w", deriveErr)
-				}
-
-				sharedSecretBytes, decapErr := ciphersuite.DecapToBytes(
-					proposal.ExternalInit.KemOutput,
-					externalPriv.Bytes(),
-					g.CipherSuite,
-				)
-				if decapErr != nil {
-					return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
-				}
-
-				initSecretForNewEpoch = ciphersuite.NewSecret(sharedSecretBytes)
-				break
+			if proposal.Type != ProposalTypeExternalInit || proposal.ExternalInit == nil {
+				continue
 			}
+			externalPriv, deriveErr := ciphersuite.DeriveKeyPair(
+				g.CipherSuite,
+				g.EpochSecrets.ExternalSecret.AsSlice(),
+			)
+			if deriveErr != nil {
+				return fmt.Errorf("deriving external key pair: %w", deriveErr)
+			}
+
+			sharedSecretBytes, decapErr := ciphersuite.DecapToBytes(
+				proposal.ExternalInit.KemOutput,
+				externalPriv.Bytes(),
+				g.CipherSuite,
+			)
+			if decapErr != nil {
+				return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
+			}
+
+			initSecretForNewEpoch = ciphersuite.NewSecret(sharedSecretBytes)
+			break
 		}
 
 		var commitSecret *ciphersuite.Secret
@@ -1303,7 +1310,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			return fmt.Errorf("deriving epoch secrets: %w", err)
 		}
 
-		// Verificar confirmation_tag del commit (RFC §12.4.2)
+		// Verify commit confirmation_tag (RFC §12.4.2)
 		expectedTag := schedule.ComputeConfirmationTag(
 			g.CipherSuite,
 			newEpochSecrets.ConfirmationKey.AsSlice(),
@@ -1335,7 +1342,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		g.CachedPsks[rKey] = append([]byte(nil), g.EpochSecrets.ResumptionSecret.AsSlice()...)
 	}
 
-	// 7. Limpiar estado
+	// 7. Clean up state
 	g.Proposals.Clear()
 	g.ProposalByRef = make(map[string]*Proposal)
 	g.PendingCommit = nil
@@ -1363,6 +1370,10 @@ func resumptionPskCacheKey(groupID []byte, epoch uint64) string {
 	return string(buf)
 }
 
+// ProcessPublicMessage processes a received PublicMessage (RFC 9420 §6).
+//
+// This handles proposals and commits sent as public messages, verifying
+// signatures and membership tags before processing the content.
 func (g *Group) ProcessPublicMessage(pm *framing.PublicMessage) error {
 	if pm == nil {
 		return fmt.Errorf("public message is nil")
@@ -1378,14 +1389,14 @@ func (g *Group) ProcessPublicMessage(pm *framing.PublicMessage) error {
 		if pm.Content.Sender.Type == framing.SenderTypeExternal {
 			sender = LeafNodeIndex(g.RatchetTree.NumLeaves + pm.Content.Sender.SenderIndex)
 		}
-		// Crear AuthenticatedContent para validación
+		// Create AuthenticatedContent for validation
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,
 			Auth:         pm.Auth,
 			GroupContext: g.GroupContext.Marshal(),
 		}
-		// Usar función compartida para procesar la propuesta
+		// Use shared function to process the proposal
 		return g.processProposalContent(ac, sender)
 	case framing.ContentTypeCommit:
 		ac := &framing.AuthenticatedContent{
@@ -1403,8 +1414,8 @@ func (g *Group) ProcessPublicMessage(pm *framing.PublicMessage) error {
 	}
 }
 
-// ProcessPrivateMessage procesa un PrivateMessage (propuesta o commit) (RFC 9420 §6.3, §12.4).
-// Extrae el sender del MLSSenderData cifrado, verifica la firma, y procesa el contenido.
+// ProcessPrivateMessage processes a PrivateMessage (proposal or commit) (RFC 9420 §6.3, §12.4).
+// Extracts the sender from the encrypted MLSSenderData, verifies the signature, and processes the content.
 func (g *Group) ProcessPrivateMessage(pm *framing.PrivateMessage) error {
 	if pm == nil {
 		return fmt.Errorf("private message is nil")
@@ -1419,13 +1430,13 @@ func (g *Group) ProcessPrivateMessage(pm *framing.PrivateMessage) error {
 		return fmt.Errorf("wrong epoch: got %d, want %d", pm.Epoch, g.GroupContext.Epoch.AsUint64())
 	}
 
-	// descifrar el mensaje y obtener sender desde MLSSenderData
+	// decrypt the message and get sender from MLSSenderData
 	ac, senderLeafIdx, err := g.decryptPrivateMessage(pm)
 	if err != nil {
 		return fmt.Errorf("decrypting private message: %w", err)
 	}
 
-	// procesar segun el tipo de contenido
+	// process according to content type
 	switch ac.Content.ContentType() {
 	case framing.ContentTypeProposal:
 		return g.processProposalContent(ac, LeafNodeIndex(senderLeafIdx))
@@ -1436,10 +1447,10 @@ func (g *Group) ProcessPrivateMessage(pm *framing.PrivateMessage) error {
 	}
 }
 
-// decryptPrivateMessage descifra un PrivateMessage y retorna el AuthenticatedContent
-// junto con el sender leaf index extraído del MLSSenderData.
+// decryptPrivateMessage decrypts a PrivateMessage and returns the AuthenticatedContent
+// along with the sender leaf index extracted from the MLSSenderData.
 func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.AuthenticatedContent, treesync.LeafIndex, error) {
-	// descifrar sin verificar firma (sender cifrado en MLSSenderData, aún desconocido)
+	// decrypt without verifying signature (sender encrypted in MLSSenderData, still unknown)
 	ac, err := framing.Decrypt(pm, framing.DecryptParams{
 		CipherSuite:      g.CipherSuite,
 		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
@@ -1451,10 +1462,10 @@ func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.Auth
 		return nil, 0, err
 	}
 
-	// extraer sender leaf index del FramedContent (que vino del MLSSenderData)
+	// extract sender leaf index from FramedContent (which came from MLSSenderData)
 	senderLeafIdx := treesync.LeafIndex(ac.Content.Sender.LeafIndex)
 
-	// verificar que el sender existe en el arbol y esta activo
+	// verify that the sender exists in the RatchetTree and is active
 	senderLeaf := g.RatchetTree.GetLeaf(senderLeafIdx)
 	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent {
 		return nil, 0, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
@@ -1473,7 +1484,7 @@ func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.Auth
 	return ac, senderLeafIdx, nil
 }
 
-// processProposalContent procesa el contenido de una propuesta (compartido entre Public y Private).
+// processProposalContent processes the content of a proposal (shared between Public and Private).
 func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender LeafNodeIndex) error {
 	body, ok := ac.Content.Body.(framing.ProposalBody)
 	if !ok {
@@ -1485,7 +1496,7 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 		return fmt.Errorf("unmarshaling proposal: %w", err)
 	}
 
-	// RFC 9420 §12.2: Validar propuesta inmediatamente al recibirla
+	// RFC 9420 §12.2: Validate proposal immediately upon receiving it
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
@@ -1496,13 +1507,13 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
 				return fmt.Errorf("invalid add proposal capabilities: %w", err)
 			}
-			// RFC §12.2: Verificar firma del KeyPackage
+			// RFC §12.2: Verify KeyPackage signature
 			if err := proposal.Add.KeyPackage.Verify(g.CipherSuite); err != nil {
 				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
 			}
 		}
 	case ProposalTypeUpdate:
-		// RFC §12.2: Verificar que el sender es un miembro activo
+		// RFC §12.2: Verify that sender is an active member
 		senderLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(sender))
 		if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent {
 			return fmt.Errorf("update proposal sender %d is not an active member", sender)
@@ -1515,7 +1526,7 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
 				return fmt.Errorf("invalid update proposal capabilities: %w", err)
 			}
-			// RFC §12.2, §7.3: Verificar firma del LeafNode con contexto
+			// RFC §12.2, §7.3: Verify LeafNode signature with context
 			if err := leafData.VerifyWithContext(g.CipherSuite, g.GroupContext.GroupID.AsSlice(), uint32(sender)); err != nil {
 				return fmt.Errorf("update leaf node signature invalid: %w", err)
 			}
@@ -1571,7 +1582,7 @@ func (g *Group) applyAddProposal(add *AddProposal) error {
 		return ErrNilKeyPackage
 	}
 
-	// Validar KeyPackage
+	// Validate KeyPackage
 	if err := add.KeyPackage.Validate(); err != nil {
 		return fmt.Errorf("invalid key package: %w", err)
 	}
@@ -1589,7 +1600,7 @@ func (g *Group) applyAddProposal(add *AddProposal) error {
 	leafIdx, _ := g.RatchetTree.AddLeaf(*leafData)
 	leafIndex := LeafNodeIndex(leafIdx)
 
-	// Agregar a Members
+	// Add to Members
 	g.Members[leafIndex] = &Member{
 		LeafIndex:  leafIndex,
 		KeyPackage: add.KeyPackage,
@@ -1856,6 +1867,10 @@ func (g *Group) buildSignedGroupInfo(
 	return groupInfo, nil
 }
 
+// VerifyPublicMessage verifies a PublicMessage signature and membership tag (RFC 9420 §6.1).
+//
+// This verifies that the message was sent by a valid group member and
+// that the membership tag is correct.
 func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 	if pm == nil {
 		return fmt.Errorf("public message is nil")
@@ -1934,7 +1949,10 @@ func (g *Group) getExternalSenderSigningKey(senderIndex uint32) ([]byte, error) 
 	return nil, fmt.Errorf("ExternalSenders extension not found in GroupContext")
 }
 
-func (g *Group) LoadPsk(pskID []byte, pskBytes []byte) {
+// LoadPsk loads a pre-shared key into the group's PSK cache.
+//
+// This is used for external PSKs that are referenced in PreSharedKey proposals.
+func (g *Group) LoadPsk(pskID, pskBytes []byte) {
 	if g.CachedPsks == nil {
 		g.CachedPsks = make(map[string][]byte)
 	}
@@ -2054,9 +2072,9 @@ func keyPackageLeafToTreeSync(leaf *keypackages.LeafNode) *treesync.LeafNodeData
 	return leafData
 }
 
-// Export deriva una clave externa usando MLS Exporter (RFC 9420 §8.5).
-// Útil para aplicaciones que necesitan derivar keys de sesión (e.g., DAVE media keys).
-// El label debe ser único para la aplicación. El contexto puede ser nil.
+// Export derives an external key using MLS Exporter (RFC 9420 §8.5).
+// Useful for applications that need to derive session keys (e.g., DAVE media keys).
+// The label should be unique for the application. The context may be nil.
 func (g *Group) Export(label string, context []byte, length int) ([]byte, error) {
 	if g.EpochSecrets == nil || g.EpochSecrets.ExporterSecret == nil {
 		return nil, fmt.Errorf("exporter_secret not available")

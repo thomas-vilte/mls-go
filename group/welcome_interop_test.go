@@ -20,8 +20,8 @@ type welcomeVector struct {
 }
 
 func TestWelcomeVectors(t *testing.T) {
-	// Nota: Estos tests usan vectores de OpenMLS Rust que pueden tener diferencias
-	// en el HPKE key schedule. Si fallan, es por incompatibilidad de implementaciones.
+	// Nota: Estos tests usan vectors de OpenMLS Rust que pueden to have diferencias
+	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
 	// Nuestra implementación de HPKE pasa tests round-trip propios.
 
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/welcome.json")
@@ -87,7 +87,7 @@ func TestWelcomeVectors(t *testing.T) {
 			signerPub := ciphersuite.NewOpenMlsSignaturePublicKey(signerPubBytes, cs.SignatureScheme())
 			sig := ciphersuite.NewSignature(welcome.GroupInfo.Signature)
 			if err := ciphersuite.VerifyWithLabel(signerPub, "GroupInfoTBS", welcome.GroupInfo.MarshalTBS(), sig); err != nil {
-				t.Fatalf("group info signature mismatch with signer_pub: %v", err)
+				t.Fatalf("group info signature sametch with signer_pub: %v", err)
 			}
 		})
 	}

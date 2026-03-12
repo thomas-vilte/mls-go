@@ -6,7 +6,7 @@ import (
 
 	"github.com/mls-go/ciphersuite"
 	"github.com/mls-go/credentials"
-	keypackages "github.com/mls-go/keypackages"
+	"github.com/mls-go/keypackages"
 )
 
 func makeReInitProposal(groupID []byte) *ReInitProposal {

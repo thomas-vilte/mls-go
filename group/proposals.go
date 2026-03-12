@@ -1,44 +1,47 @@
 package group
 
 import (
-	"errors"
+	"fmt"
 
 	"github.com/mls-go/keypackages"
 )
 
-// All proposal types according to RFC 9420 §12.1
-const (
-	ProposalTypeAdd                    ProposalType = 0x0001
-	ProposalTypeUpdate                 ProposalType = 0x0002
-	ProposalTypeRemove                 ProposalType = 0x0003
-	ProposalTypePreSharedKey           ProposalType = 0x0004
-	ProposalTypeReInit                 ProposalType = 0x0005
-	ProposalTypeExternalInit           ProposalType = 0x0006
-	ProposalTypeGroupContextExtensions ProposalType = 0x0007
-)
-
-// AddProposal - RFC 9420 §12.1.1
+// AddProposal adds a new member to the group per RFC 9420 §12.1.1.
+//
+// The KeyPackage contains the new member's identity, keys, and capabilities.
+// When committed, the new member is added to the ratchet tree.
 type AddProposal struct {
 	KeyPackage *keypackages.KeyPackage
 }
 
-// UpdateProposal - RFC 9420 §12.1.2
+// UpdateProposal updates a member's leaf node per RFC 9420 §12.1.2.
+//
+// The sender updates their own leaf with new encryption keys, providing
+// Post-Compromise Security for that member.
 type UpdateProposal struct {
 	LeafNode *keypackages.LeafNode
 }
 
-// RemoveProposal - RFC 9420 §12.1.3
+// RemoveProposal removes a member from the group per RFC 9420 §12.1.3.
+//
+// The specified leaf index is blanked in the ratchet tree, removing
+// the member's ability to participate in the group.
 type RemoveProposal struct {
 	Removed LeafNodeIndex
 }
 
-// PreSharedKeyProposal - RFC 9420 §12.1.4
+// PreSharedKeyProposal adds a pre-shared key to the key schedule per RFC 9420 §12.1.4.
+//
+// PSKs provide additional entropy to the key schedule and can be used
+// for external key agreement or group resumption.
 type PreSharedKeyProposal struct {
 	PskType uint8
 	PskID   PskID
 }
 
-// PskID represents a pre-shared key identifier (RFC 9420 §8.4 PreSharedKeyID).
+// PskID represents a pre-shared key identifier per RFC 9420 §8.4.
+//
+// ```text
 //
 //	struct {
 //	    PSKType psktype;
@@ -52,6 +55,8 @@ type PreSharedKeyProposal struct {
 //	    };
 //	    opaque psk_nonce<V>;
 //	} PreSharedKeyID;
+//
+// ```
 type PskID struct {
 	PskType uint8
 	// External PSK fields (PskType == 1)
@@ -64,7 +69,10 @@ type PskID struct {
 	Nonce []byte
 }
 
-// ReInitProposal - RFC 9420 §12.1.5
+// ReInitProposal reinitializes the group with new parameters per RFC 9420 §12.1.5.
+//
+// This allows changing the group's protocol version, cipher suite, or extensions
+// while preserving the group's membership through resumption secrets.
 type ReInitProposal struct {
 	GroupID       []byte
 	Version       keypackages.ProtocolVersion
@@ -73,33 +81,42 @@ type ReInitProposal struct {
 	Confirmations []Confirmation
 }
 
-// Confirmation for ReInit
+// Confirmation contains a member's confirmation tag for ReInit per RFC 9420 §12.1.5.
 type Confirmation struct {
 	LeafIndex LeafNodeIndex
 	Tag       []byte
 }
 
-// ExternalInitProposal - RFC 9420 §12.1.6
+// ExternalInitProposal allows external joiners to enter per RFC 9420 §12.1.6.
+//
+// The kem_output is the result of HPKE encapsulation to the group's external_pub.
+//
+// ```text
 //
 //	struct {
 //	    opaque kem_output<V>;
 //	} ExternalInit;
+//
+// ```
 type ExternalInitProposal struct {
 	KemOutput []byte
 }
 
-// GroupContextExtensionsProposal - RFC 9420 §12.1.7
+// GroupContextExtensionsProposal updates group extensions per RFC 9420 §12.1.7.
+//
+// This modifies the group's extensions in the GroupContext, affecting all members.
 type GroupContextExtensionsProposal struct {
 	Extensions []Extension
 }
 
-// ExternalProposal - RFC 9420 §12.1.8
+// ExternalProposal represents a proposal sent by an external sender per RFC 9420 §12.1.8.
+//
+// External senders can send proposals without being group members, as long as
+// their signature keys are listed in the ExternalSenders extension.
 type ExternalProposal struct {
 	Proposal     *Proposal
 	Confirmation []byte
 }
-
-// Helper functions
 
 // NewAddProposal creates a new Add proposal.
 func NewAddProposal(keyPackage *keypackages.KeyPackage) *Proposal {
@@ -184,17 +201,17 @@ func NewGroupContextExtensionsProposal(extensions []Extension) *Proposal {
 }
 
 // ValidateProposal validates a proposal according to RFC 9420 §12.2.
+//
+// Validation includes checking proposal type support and proposal-specific constraints.
 func ValidateProposal(proposal *Proposal, capabilities *keypackages.Capabilities) error {
 	if proposal == nil {
 		return ErrNilProposal
 	}
 
-	// Check if proposal type is supported
 	if !isProposalTypeSupported(proposal.Type, capabilities) {
 		return ErrUnsupportedProposalType
 	}
 
-	// Type-specific validation
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		return validateAddProposal(proposal.Add)
@@ -215,9 +232,10 @@ func ValidateProposal(proposal *Proposal, capabilities *keypackages.Capabilities
 	}
 }
 
+// isProposalTypeSupported checks if the proposal type is supported by the capabilities.
 func isProposalTypeSupported(proposalType ProposalType, capabilities *keypackages.Capabilities) bool {
 	if capabilities == nil {
-		// Default to supporting basic proposal types if no capabilities provided
+		// Default to supporting basic proposal types
 		switch proposalType {
 		case ProposalTypeAdd, ProposalTypeUpdate, ProposalTypeRemove:
 			return true
@@ -234,6 +252,7 @@ func isProposalTypeSupported(proposalType ProposalType, capabilities *keypackage
 	return false
 }
 
+// validateAddProposal validates an Add proposal.
 func validateAddProposal(add *AddProposal) error {
 	if add == nil {
 		return ErrNilAddProposal
@@ -244,6 +263,7 @@ func validateAddProposal(add *AddProposal) error {
 	return add.KeyPackage.Validate()
 }
 
+// validateUpdateProposal validates an Update proposal.
 func validateUpdateProposal(update *UpdateProposal) error {
 	if update == nil {
 		return ErrNilUpdateProposal
@@ -254,22 +274,25 @@ func validateUpdateProposal(update *UpdateProposal) error {
 	return update.LeafNode.Validate()
 }
 
+// validateRemoveProposal validates a Remove proposal.
 func validateRemoveProposal(remove *RemoveProposal) error {
 	if remove == nil {
 		return ErrNilRemoveProposal
 	}
-	// Leaf index validation would go here
+	// Leaf index validation would require tree context
 	return nil
 }
 
+// validatePreSharedKeyProposal validates a PreSharedKey proposal.
 func validatePreSharedKeyProposal(psk *PreSharedKeyProposal) error {
 	if psk == nil {
 		return ErrNilPreSharedKeyProposal
 	}
-	// PSK validation would go here
+	// Additional PSK validation could be added here
 	return nil
 }
 
+// validateReInitProposal validates a ReInit proposal.
 func validateReInitProposal(reinit *ReInitProposal) error {
 	if reinit == nil {
 		return ErrNilReInitProposal
@@ -277,24 +300,25 @@ func validateReInitProposal(reinit *ReInitProposal) error {
 	if len(reinit.GroupID) == 0 {
 		return ErrEmptyGroupID
 	}
-	// More validation would go here
 	return nil
 }
 
+// validateExternalInitProposal validates an ExternalInit proposal.
 func validateExternalInitProposal(ext *ExternalInitProposal) error {
 	if ext == nil {
 		return ErrNilExternalInitProposal
 	}
 	if len(ext.KemOutput) == 0 {
-		return errors.New("kem_output is empty")
+		return fmt.Errorf("group: KEM output is empty")
 	}
 	return nil
 }
 
+// validateGroupContextExtensionsProposal validates a GroupContextExtensions proposal.
 func validateGroupContextExtensionsProposal(ext *GroupContextExtensionsProposal) error {
 	if ext == nil {
 		return ErrNilGroupContextExtensionsProposal
 	}
-	// Extension validation would go here
+	// Extension validation could be added here
 	return nil
 }
