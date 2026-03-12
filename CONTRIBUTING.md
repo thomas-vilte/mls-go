@@ -1,91 +1,70 @@
 # Contributing to mls-go
 
-Thank you for considering contributing to mls-go! We welcome contributions from the community.
+Contributions are welcome. Here's everything you need to know.
 
-## Development Setup
+## Setup
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/mls-go.git`
-3. Install Go 1.23 or later
-4. Run tests: `go test ./...`
+1. Fork and clone the repo
+2. Install Go 1.26+
+3. Run `go test ./...` to verify everything passes
 
-## Code Style
+## Code style
 
-We follow standard Go conventions:
+Standard Go conventions apply:
 
-- Use `gofmt` or `goimports` for formatting
-- Follow the Go naming conventions
-- Write tests for all new functionality
-- Use meaningful variable and function names
-- Add godoc comments for exported types and functions
-- **All comments and error messages MUST be in English** — this is a public library
+- `gofmt` / `goimports` for formatting
+- `golangci-lint` for static analysis — config in `.golangci.yml`
+- Godoc comments on all exported types and functions
+- Meaningful names — avoid abbreviations unless the context is obvious
 
-## Language Requirements
+**All code artifacts must be in English** — this is a public library:
 
-**Important:** This is an international open-source project. All code artifacts must be in English:
+```
+✅  ErrInvalidKeyLength
+❌  ErrLongitudInvalida
 
-- ✅ `ErrInvalidKeyLength` (good)
-- ❌ `ErrLongitudInvalida` (bad)
-- ✅ `// Computes the epoch secret from commit` (good)
-- ❌ `// Computa el epoch secret desde el commit` (bad)
-- ✅ `return fmt.Errorf("failed to derive key: %w", err)` (good)
-- ❌ `return fmt.Errorf("falló derivar key: %w", err)` (bad)
+✅  // Computes the epoch secret from the commit.
+❌  // Computa el epoch secret desde el commit.
 
-This applies to:
-- Variable and function names
-- Error messages
-- Code comments
-- Test names and messages
-- Documentation
-
-## Testing
-
-All PRs must include tests. We base our tests on the OpenMLS Rust test suite:
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with coverage
-go test -cover ./...
-
-# Run with race detector (required before submitting)
-go test -race ./...
-
-# Run specific package tests
-go test ./ciphersuite/...
-go test ./group/...
+✅  return fmt.Errorf("failed to derive key: %w", err)
+❌  return fmt.Errorf("falló derivar key: %w", err)
 ```
 
-## Pull Request Process
+This applies to variable names, error messages, comments, test names, and docs.
 
-1. Create a branch for your feature/fix
-2. Write tests and ensure they pass
-3. Run `go fmt ./...` and `go vet ./...`
-4. Update documentation as needed
-5. Submit a PR with a clear description in English
-6. Address review feedback
+## Before submitting
 
-## What We're Working On
+```bash
+go mod tidy                         # keep go.mod and go.sum clean
+go build ./...                      # must build
+go test -race ./...                 # must pass with race detector
+go vet ./...                        # must be clean
+golangci-lint run --timeout=5m      # must be clean
+```
 
-### High Priority
+The CI runs all of these automatically, but catching issues locally first saves time.
 
-- Complete Commit/Proposal message handling
-- TreeKEM implementation
-- Full interoperability with OpenMLS Rust
-- Production-ready API stability
+## Tests
 
-### Areas We Need Help
+All PRs need tests. The project uses RFC 9420 interop vectors as the ground truth — if your change touches the key schedule, TreeKEM, or framing, run the relevant interop test:
 
-- Implementing remaining MLS message types
-- Additional cipher suites (MLS_256_DHKEMX25519_AES256GCM_SHA512_P256)
-- External senders support
-- Documentation and examples
+```bash
+go test ./schedule/... -run TestKeyScheduleInteropVectors -v
+go test ./group/... -run TestTreeKEMVectors -v
+go test ./group/... -run TestPassiveClientCommitVectors -v
+```
 
-## Questions?
+## Pull requests
 
-Open an issue for any questions or discussions. Please use English for all public communications.
+1. Branch off `dev`, not `master`
+2. Write tests
+3. Update relevant docs if the behavior changes
+4. PR description in English with a short explanation of what and why
 
-## Code of Conduct
+## Architecture
 
-Be respectful and inclusive. We welcome contributors from all backgrounds.
+Before diving into a big change, read `CLAUDE.md` — it documents the key invariants, the key schedule ordering, the TLS encoding quirks, and other things that are easy to get wrong.
+
+## Questions
+
+Open an issue. Please use English for public communication.
