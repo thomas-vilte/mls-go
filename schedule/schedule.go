@@ -54,6 +54,58 @@ type EpochSecrets struct {
 	InitSecret           *ciphersuite.Secret
 }
 
+// Zero securely erases all epoch secrets from memory using constant-time zeroing.
+//
+// This method is called before replacing epoch secrets to prevent sensitive
+// data from lingering in memory. It uses SecureZero() on each secret to ensure
+// the compiler doesn't optimize away the zeroing operation.
+//
+// Security best practice:
+//   - Call Zero() before assigning new epoch secrets
+//   - Prevents old secrets from being recovered from memory
+//   - Important for forward secrecy guarantees
+//
+// The method is idempotent and safe to call on nil EpochSecrets or nil fields.
+//
+// Usage in group.MergeCommit():
+//
+//	if g.EpochSecrets != nil {
+//	    g.EpochSecrets.Zero()  // Securely erase old secrets
+//	}
+//	g.EpochSecrets = newEpochSecrets
+func (e *EpochSecrets) Zero() {
+	if e == nil {
+		return
+	}
+	if e.SenderDataSecret != nil {
+		e.SenderDataSecret.SecureZero()
+	}
+	if e.EncryptionSecret != nil {
+		e.EncryptionSecret.SecureZero()
+	}
+	if e.ExporterSecret != nil {
+		e.ExporterSecret.SecureZero()
+	}
+	if e.AuthenticationSecret != nil {
+		e.AuthenticationSecret.SecureZero()
+	}
+	if e.ConfirmationKey != nil {
+		e.ConfirmationKey.SecureZero()
+	}
+	if e.MembershipKey != nil {
+		e.MembershipKey.SecureZero()
+	}
+	if e.ExternalSecret != nil {
+		e.ExternalSecret.SecureZero()
+	}
+	if e.ResumptionSecret != nil {
+		e.ResumptionSecret.SecureZero()
+	}
+	if e.InitSecret != nil {
+		e.InitSecret.SecureZero()
+	}
+}
+
 // KeySchedule implements the MLS key schedule state machine as defined in RFC 9420 §8.
 //
 // The KeySchedule manages the stateful derivation of secrets across epochs:
