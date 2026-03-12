@@ -1,6 +1,76 @@
 package group
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
+
+// Typed errors for semantic error handling
+// These errors contain context about the failure.
+
+// ErrEpochMismatch se retorna cuando un mensaje es de una epoch incorrecta.
+type ErrEpochMismatch struct {
+	Got  uint64
+	Want uint64
+}
+
+func (e *ErrEpochMismatch) Error() string {
+	return fmt.Sprintf("group: epoch mismatch: message has %d, group is at %d", e.Got, e.Want)
+}
+
+// ErrGroupIDMismatch se retorna cuando un mensaje tiene un GroupID incorrecto.
+type ErrGroupIDMismatch struct {
+	Got  []byte
+	Want []byte
+}
+
+func (e *ErrGroupIDMismatch) Error() string {
+	return fmt.Sprintf("group: group ID mismatch: message has %x, group is at %x", e.Got, e.Want)
+}
+
+// ErrInvalidSignature se retorna cuando una firma no verifica.
+type ErrInvalidSignature struct {
+	Context string
+	Err     error
+}
+
+func (e *ErrInvalidSignature) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("group: %s signature invalid: %v", e.Context, e.Err)
+	}
+	return fmt.Sprintf("group: %s signature invalid", e.Context)
+}
+
+func (e *ErrInvalidSignature) Unwrap() error {
+	return e.Err
+}
+
+// ErrUnknownMember se retorna cuando el leaf index no existe en el árbol.
+type ErrUnknownMember struct {
+	LeafIndex uint32
+}
+
+func (e *ErrUnknownMember) Error() string {
+	return fmt.Sprintf("group: unknown member or out of bounds leaf index: %d", e.LeafIndex)
+}
+
+// ErrDecryptionFailed se retorna cuando el descifrado AEAD falla.
+// Puede indicar un mensaje adulterado, una clave incorrecta o un replay.
+type ErrDecryptionFailed struct {
+	Reason string
+	Err    error
+}
+
+func (e *ErrDecryptionFailed) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("group: decryption failed (%s): %v", e.Reason, e.Err)
+	}
+	return fmt.Sprintf("group: decryption failed (%s)", e.Reason)
+}
+
+func (e *ErrDecryptionFailed) Unwrap() error {
+	return e.Err
+}
 
 // Sentinel errors for group operations.
 //

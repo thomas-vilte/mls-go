@@ -8,16 +8,11 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// SendMessage encrypts an application message as a PrivateMessage per RFC 9420 §6.3.
+// SendMessage encrypts an application message for the group.
 //
-// Application messages are encrypted using the secret tree derived from the
-// epoch secrets. Each sender gets their own encryption key from the secret tree.
-//
-// # Security
-//
-//   - Message confidentiality: Only group members can decrypt the message
-//   - Message authentication: The sender's signature is verified
-//   - Forward secrecy: Each message uses fresh encryption keys from the secret tree
+// RFC 9420 §6.3
+// The message is authenticated using the sender's signature key and encrypted
+// using the current epoch's symmetric keys (via the Secret Tree).
 func (g *Group) SendMessage(
 	data []byte,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
@@ -55,16 +50,12 @@ func (g *Group) SendMessage(
 	})
 }
 
-// ReceiveMessage decrypts a PrivateMessage and returns application data per RFC 9420 §6.3.
+// ReceiveMessage decrypts an application message from another member.
 //
-// The sender leaf index must be provided to look up the sender's public key
-// for signature verification.
-//
-// # Security
-//
-//   - Verifies message signature using sender's public key from ratchet tree
-//   - Validates sender is an active member of the group
-//   - Decrypts using the secret tree
+// RFC 9420 §6.3
+// It verifies the sender's signature, decrypts the content, and advances the
+// Secret Tree ratchets. The sender leaf index must be provided (typically
+// obtained from the unencrypted MLSSenderData if using PrivateMessage).
 func (g *Group) ReceiveMessage(
 	pm *framing.PrivateMessage,
 	senderLeafIdx LeafNodeIndex,
@@ -103,7 +94,7 @@ func (g *Group) ReceiveMessage(
 		GroupContext:     g.GroupContext.Marshal(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("decrypting message: %w", err)
+		return nil, &ErrDecryptionFailed{Reason: "message", Err: err}
 	}
 
 	data, ok := ac.Content.ApplicationData()
