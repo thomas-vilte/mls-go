@@ -742,8 +742,12 @@ func GenerateX509CredentialWithKey(certDER []byte, privKey *ecdsa.PrivateKey) (*
 //	    return err
 //	}
 func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
-	hash := sha256.Sum256(data)
-	sig, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
+	// Pre-hash with SHA-256 per RFC 9420 §5.1.2 (ECDSA_SECP256R1_SHA256).
+	hf := ciphersuite.ECDSA_SECP256R1_SHA256.HashFunction()
+	h := hf()
+	h.Write(data)
+	digest := h.Sum(nil)
+	sig, err := ecdsa.SignASN1(rand.Reader, privKey, digest)
 	if err != nil {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
@@ -761,8 +765,12 @@ func Sign(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 //	    return errors.New("invalid signature")
 //	}
 func Verify(pubKey *ecdsa.PublicKey, data, signature []byte) bool {
-	hash := sha256.Sum256(data)
-	return ecdsa.VerifyASN1(pubKey, hash[:], signature)
+	// Pre-hash with SHA-256 per RFC 9420 §5.1.2 (ECDSA_SECP256R1_SHA256).
+	hf := ciphersuite.ECDSA_SECP256R1_SHA256.HashFunction()
+	h := hf()
+	h.Write(data)
+	digest := h.Sum(nil)
+	return ecdsa.VerifyASN1(pubKey, digest, signature)
 }
 
 // IsGREASE returns true if the credential is GREASE type.

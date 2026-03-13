@@ -141,10 +141,10 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 	cs := ciphersuite.CipherSuite(state.CipherSuite)
 
 	// Restore RatchetTree
-	tree, err := treesync.UnmarshalTree(state.RatchetTree)
+	tree, err := treesync.UnmarshalTree(state.RatchetTree, cs)
 	if err != nil {
 		// Try UnmarshalTreeFromExtension for backwards compatibility
-		tree, err = treesync.UnmarshalTreeFromExtension(state.RatchetTree)
+		tree, err = treesync.UnmarshalTreeFromExtension(state.RatchetTree, cs)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
 		}

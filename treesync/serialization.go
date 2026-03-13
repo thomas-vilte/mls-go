@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
@@ -59,8 +60,18 @@ func (t *RatchetTree) MarshalTree() []byte {
 	return w.Bytes()
 }
 
+// unmarshalPublicKey parses an HPKE public key for the given cipher suite (RFC 9420 §7.1).
+// Uses cs.Curve() to avoid hardcoding X25519/P-256 selection.
+func unmarshalPublicKey(data []byte, cs ciphersuite.CipherSuite) (*ecdh.PublicKey, error) {
+	curve := cs.Curve()
+	if curve == nil {
+		return nil, fmt.Errorf("unsupported cipher suite for key parsing: %d", cs)
+	}
+	return curve.NewPublicKey(data)
+}
+
 // UnmarshalTree deserializes a RatchetTree from TLS format.
-func UnmarshalTree(data []byte) (*RatchetTree, error) {
+func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error) {
 	r := tls.NewReader(data)
 
 	numLeaves, err := r.ReadUint32()
@@ -115,7 +126,7 @@ func UnmarshalTree(data []byte) (*RatchetTree, error) {
 
 			var encKey *ecdh.PublicKey
 			if len(encKeyBytes) > 0 {
-				encKey, err = ecdh.P256().NewPublicKey(encKeyBytes)
+				encKey, err = unmarshalPublicKey(encKeyBytes, cs)
 				if err != nil {
 					return nil, fmt.Errorf("parsing enc_key at index %d: %w", i, err)
 				}
@@ -146,19 +157,20 @@ func UnmarshalTree(data []byte) (*RatchetTree, error) {
 	return &RatchetTree{
 		Nodes:     nodes,
 		NumLeaves: numLeaves,
+		cs:        cs,
 	}, nil
 }
 
 // UnmarshalTreeFromExtension parses the RFC 9420 ratchet_tree extension wire format.
 // Format: nodes<V>, each node encoded as presence(u8) [node_type(u8) fields...].
-func UnmarshalTreeFromExtension(data []byte) (*RatchetTree, error) {
+func UnmarshalTreeFromExtension(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error) {
 	r := tls.NewReader(data)
 	nodesData, err := r.ReadVLBytes()
 	if err != nil {
-		return UnmarshalTree(data)
+		return UnmarshalTree(data, cs)
 	}
 	if r.Remaining() != 0 {
-		return UnmarshalTree(data)
+		return UnmarshalTree(data, cs)
 	}
 
 	nodeReader := tls.NewReader(nodesData)
@@ -202,7 +214,7 @@ func UnmarshalTreeFromExtension(data []byte) (*RatchetTree, error) {
 
 			var encKey *ecdh.PublicKey
 			if len(encKeyBytes) > 0 {
-				encKey, err = ecdh.P256().NewPublicKey(encKeyBytes)
+				encKey, err = unmarshalPublicKey(encKeyBytes, cs)
 				if err != nil {
 					return nil, fmt.Errorf("parsing parent encryption key: %w", err)
 				}
@@ -231,7 +243,7 @@ func UnmarshalTreeFromExtension(data []byte) (*RatchetTree, error) {
 	}
 
 	if len(nodes) == 0 {
-		return UnmarshalTree(data)
+		return UnmarshalTree(data, cs)
 	}
 
 	return &RatchetTree{

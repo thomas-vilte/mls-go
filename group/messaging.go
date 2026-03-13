@@ -78,12 +78,14 @@ func (g *Group) ReceiveMessage(
 		return nil, fmt.Errorf("sender index %d out of bounds (tree has %d leaves)", senderLeafIdx, g.RatchetTree.NumLeaves)
 	}
 
-	// Resolve sender signature pubkey from ratchet tree
+	// Resolve sender signature pubkey from ratchet tree.
+	// Use SigKeyBytes() to handle both ECDSA (SignatureKey) and Ed25519 (SignatureKeyRaw).
 	senderLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(senderLeafIdx))
 	var sigPubKey *ciphersuite.OpenMlsSignaturePublicKey
-	if senderLeaf != nil && senderLeaf.LeafData != nil && senderLeaf.LeafData.SignatureKey != nil {
-		raw := treesync.MarshalSignatureKey(senderLeaf.LeafData.SignatureKey)
-		sigPubKey = ciphersuite.NewOpenMlsSignaturePublicKey(raw, ciphersuite.ECDSA_SECP256R1_SHA256)
+	if senderLeaf != nil && senderLeaf.LeafData != nil {
+		if raw := senderLeaf.LeafData.SigKeyBytes(); len(raw) > 0 {
+			sigPubKey = ciphersuite.NewOpenMlsSignaturePublicKey(raw, g.CipherSuite.SignatureScheme())
+		}
 	}
 
 	ac, err := framing.Decrypt(pm, framing.DecryptParams{

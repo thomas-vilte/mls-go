@@ -1,7 +1,6 @@
 package framing
 
 import (
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -101,9 +100,9 @@ func (i *InterimTranscriptHashInput) Compute(cs ciphersuite.CipherSuite, confirm
 	return hashByCipherSuite(cs, data)
 }
 
-// hashByCipherSuite applies the cipher suite's hash to the input.
-// Currently only supports SHA-256 (MLS_128_DHKEMP256_AES128GCM_SHA256_P256).
-func hashByCipherSuite(_ ciphersuite.CipherSuite, data []byte) []byte {
-	h := sha256.Sum256(data)
-	return h[:]
+// hashByCipherSuite applies the cipher suite's hash function to the input.
+func hashByCipherSuite(cs ciphersuite.CipherSuite, data []byte) []byte {
+	h := cs.HashFunction()()
+	h.Write(data)
+	return h.Sum(nil)
 }

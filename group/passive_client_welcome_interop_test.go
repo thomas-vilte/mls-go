@@ -26,10 +26,6 @@ type passiveClientWelcomeVector struct {
 }
 
 func TestPassiveClientWelcomeVectors(t *testing.T) {
-	// Nota: Estos tests usan vectors de other implementation que pueden to have diferencias
-	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
-	// Nuestra implementación de HPKE pasa tests round-trip propios.
-
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/passive-client-welcome.json")
 	if err != nil {
 		t.Skipf("passive-client-welcome.json not found: %v", err)
@@ -41,7 +37,8 @@ func TestPassiveClientWelcomeVectors(t *testing.T) {
 	}
 
 	for i, v := range vectors {
-		if ciphersuite.CipherSuite(v.CipherSuite) != ciphersuite.MLS128DHKEMP256 {
+		cs := ciphersuite.CipherSuite(v.CipherSuite)
+		if !cs.IsSupported() {
 			continue
 		}
 
@@ -56,7 +53,12 @@ func TestPassiveClientWelcomeVectors(t *testing.T) {
 			}
 
 			initPrivBytes := mustDecodeHexBytes(t, v.InitPriv)
-			initPrivKey, err := ecdh.P256().NewPrivateKey(initPrivBytes)
+			var initPrivKey *ecdh.PrivateKey
+			if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
+				initPrivKey, err = ecdh.X25519().NewPrivateKey(initPrivBytes)
+			} else {
+				initPrivKey, err = ecdh.P256().NewPrivateKey(initPrivBytes)
+			}
 			if err != nil {
 				t.Fatalf("parse init_priv: %v", err)
 			}

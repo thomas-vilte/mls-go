@@ -74,11 +74,8 @@ func TestSecretTreeVectors(t *testing.T) {
 			continue
 		}
 
-		// TODO: Fix HPKE key schedule for cs=1 and cs=3
-		if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
-			t.Logf("Skipping cs=%d (HPKE key schedule issue)", v.CipherSuite)
-			continue
-		}
+		// All implemented cipher suites (CS1, CS2, CS3) are now fully supported
+		// including proper HPKE key schedule and AEAD dispatch.
 
 		t.Run(fmt.Sprintf("cs%d-v%d", v.CipherSuite, i), func(t *testing.T) {
 			testSecretTreeVector(t, v, cs)

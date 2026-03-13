@@ -1,10 +1,10 @@
 package group
 
 import (
-	"crypto/ecdh"
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/secrettree"
@@ -31,13 +31,10 @@ func ExternalCommit(
 		return nil, nil, fmt.Errorf("missing signature keys")
 	}
 
-	// Obtain external_pub from GroupInfo extensions.
-	const extTypeExternalPub = uint16(0x0001)
-	const extTypeRatchetTree = uint16(0x0002)
-
+	// Obtain external_pub from GroupInfo extensions (RFC 9420 §11.2.4, type=0x0004).
 	var externalPubBytes []byte
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == extTypeExternalPub {
+		if ext.Type == uint16(mlsext.ExtensionTypeExternalPub) {
 			externalPubBytes = ext.Data
 			break
 		}
@@ -49,8 +46,8 @@ func ExternalCommit(
 	// Rebuild ratchet tree from extension if needed.
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == extTypeRatchetTree {
-			parsed, err := treesync.UnmarshalTree(ext.Data)
+		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+			parsed, err := treesync.UnmarshalTree(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if err != nil {
 				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
 			}
@@ -160,7 +157,7 @@ func ExternalCommit(
 		pubKeys[m] = privKey.PublicKey().Bytes()
 
 		nodeIdx := directPath[level+1]
-		treeDiff.Nodes[nodeIdx].EncryptionKey, err = ecdh.P256().NewPublicKey(pubKeys[m])
+		treeDiff.Nodes[nodeIdx].EncryptionKey, err = cs.Curve().NewPublicKey(pubKeys[m])
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing update path public key: %w", err)
 		}
@@ -186,7 +183,7 @@ func ExternalCommit(
 			if parent.EncryptionKey != nil {
 				parentKey = parent.EncryptionKey.Bytes()
 			}
-			ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+			ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash, cs.HashFunction())
 		} else {
 			ph = parent.ParentHash
 		}

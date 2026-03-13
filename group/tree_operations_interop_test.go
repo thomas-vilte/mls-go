@@ -208,8 +208,10 @@ func unmarshalInteropTree(data []byte, cs ciphersuite.CipherSuite) (*treesync.Ra
 		numLeaves = next
 	}
 
-	return &treesync.RatchetTree{
+	tree := &treesync.RatchetTree{
 		Nodes:     nodes,
 		NumLeaves: numLeaves,
-	}, nil
+	}
+	tree.SetCipherSuite(cs)
+	return tree, nil
 }

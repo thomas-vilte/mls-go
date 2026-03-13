@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
@@ -34,10 +35,6 @@ type passiveClientCommitVector struct {
 }
 
 func TestPassiveClientHandlingCommitVectors(t *testing.T) {
-	// Nota: Estos tests usan vectors de other implementation que pueden to have diferencias
-	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
-	// Nuestra implementación de HPKE pasa tests round-trip propios.
-
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/passive-client-handling-commit.json")
 	if err != nil {
 		t.Fatalf("reading test vectors: %v", err)
@@ -49,27 +46,9 @@ func TestPassiveClientHandlingCommitVectors(t *testing.T) {
 	}
 
 	tested := 0
-	// Vectors that fail signature verification due to keypackage signature format changes
-	// See: Block 1 - KeyPackage signature verification implementation
-	skipVectors := map[int]bool{
-		19: true, // Add proposal signature verification fails
-		20: true, // Unknown proposal reference
-		21: true, // Unknown proposal reference
-		22: true, // Unknown proposal reference
-		23: true, // Unknown proposal reference
-		24: true, // Unknown proposal reference
-		25: true, // Add proposal signature verification fails
-	}
-
 	for i, v := range vecs {
-		if v.CipherSuite != 2 {
-			continue
-		}
-		if skipVectors[i] {
-			t.Run(fmt.Sprintf("vector-%d", i), func(t *testing.T) {
-				t.Skipf("Skipping vector %d: incompatible with signature verification (Block 1)", i)
-			})
-			tested++
+		cs := ciphersuite.CipherSuite(v.CipherSuite)
+		if !cs.IsSupported() {
 			continue
 		}
 		t.Run(fmt.Sprintf("vector-%d", i), func(t *testing.T) {
@@ -78,7 +57,7 @@ func TestPassiveClientHandlingCommitVectors(t *testing.T) {
 		tested++
 	}
 	if tested == 0 {
-		t.Fatal("no cs=2 vectors found")
+		t.Fatal("no supported cipher suite vectors found")
 	}
 }
 
@@ -93,14 +72,22 @@ func runPassiveClientCommitVector(t *testing.T, v *passiveClientCommitVector) {
 	}
 
 	// Build private keys
+	cs := ciphersuite.CipherSuite(v.CipherSuite)
+	var curve ecdh.Curve
+	if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
+		curve = ecdh.X25519()
+	} else {
+		curve = ecdh.P256()
+	}
+
 	initPrivBytes := mustDecodeHex(t, v.InitPriv)
-	initPrivKey, err := ecdh.P256().NewPrivateKey(initPrivBytes)
+	initPrivKey, err := curve.NewPrivateKey(initPrivBytes)
 	if err != nil {
 		t.Fatalf("init_priv: %v", err)
 	}
 
 	encPrivBytes := mustDecodeHex(t, v.EncryptionPriv)
-	encPrivKey, err := ecdh.P256().NewPrivateKey(encPrivBytes)
+	encPrivKey, err := curve.NewPrivateKey(encPrivBytes)
 	if err != nil {
 		t.Fatalf("encryption_priv: %v", err)
 	}

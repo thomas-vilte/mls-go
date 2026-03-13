@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -183,19 +184,19 @@ func TestNodeIndexToLeafIndex(t *testing.T) {
 // ============================================================================
 
 func TestComputeParentHash(t *testing.T) {
-	hash := ComputeParentHash([]byte("key"), []byte("ph"), []byte("sh"))
+	hash := ComputeParentHash([]byte("key"), []byte("ph"), []byte("sh"), sha256.New)
 	if len(hash) == 0 {
 		t.Fatal("ComputeParentHash() returned empty hash")
 	}
 
-	hash2 := ComputeParentHash([]byte("key"), []byte("ph"), []byte("sh"))
+	hash2 := ComputeParentHash([]byte("key"), []byte("ph"), []byte("sh"), sha256.New)
 	if !bytes.Equal(hash, hash2) {
 		t.Error("Not deterministic")
 	}
 }
 
 func TestComputeLeafNodeHash(t *testing.T) {
-	hash := ComputeLeafNodeHash(0, &LeafNodeData{EncryptionKey: []byte("key")})
+	hash := ComputeLeafNodeHash(0, &LeafNodeData{EncryptionKey: []byte("key")}, sha256.New)
 	if len(hash) == 0 {
 		t.Fatal("ComputeLeafNodeHash() returned empty hash")
 	}
@@ -312,7 +313,6 @@ func TestValidateLeafNodeSignature_EmptySig(t *testing.T) {
 		t.Fatal("expected error for empty signature")
 	}
 }
-
 
 // ============================================================================
 // LeafNodeData.Verify Tests - RFC 9420 §7.2
@@ -725,7 +725,7 @@ func TestMarshalUnmarshalTree_Roundtrip(t *testing.T) {
 		t.Fatal("MarshalTree() returned empty")
 	}
 
-	got, err := UnmarshalTree(data)
+	got, err := UnmarshalTree(data, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("UnmarshalTree() failed: %v", err)
 	}
@@ -740,7 +740,7 @@ func TestMarshalUnmarshalTree_Roundtrip(t *testing.T) {
 }
 
 func TestUnmarshalTree_EmptyData(t *testing.T) {
-	_, err := UnmarshalTree([]byte{})
+	_, err := UnmarshalTree([]byte{}, ciphersuite.MLS128DHKEMP256)
 	if err == nil {
 		t.Fatal("expected error for empty data")
 	}
@@ -751,7 +751,7 @@ func TestUnmarshalTreeFromExtension_FallsBackToUnmarshalTree(t *testing.T) {
 	tree := createTestTreeExt(t, 2)
 	data := tree.MarshalTree()
 
-	got, err := UnmarshalTreeFromExtension(data)
+	got, err := UnmarshalTreeFromExtension(data, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("UnmarshalTreeFromExtension() failed: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestUnmarshalTreeFromExtension_FallsBackToUnmarshalTree(t *testing.T) {
 func TestUnmarshalTree_ZeroLeaves(t *testing.T) {
 	// Write num_leaves=0
 	w := make([]byte, 4) // 0 as uint32 big-endian
-	_, err := UnmarshalTree(w)
+	_, err := UnmarshalTree(w, ciphersuite.MLS128DHKEMP256)
 	if err == nil {
 		t.Fatal("expected error for num_leaves=0")
 	}
@@ -1013,7 +1013,7 @@ func TestMarshalTree_WithParents(t *testing.T) {
 	// After adding 2 leaves there's 1 parent node (root)
 	data := tree.MarshalTree()
 
-	got, err := UnmarshalTree(data)
+	got, err := UnmarshalTree(data, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("UnmarshalTree() failed: %v", err)
 	}
@@ -1033,7 +1033,7 @@ func TestMarshalTree_ParentWithEncKey(t *testing.T) {
 	tree.Nodes[1].UnmergedLeaves = []LeafIndex{0, 1}
 
 	data := tree.MarshalTree()
-	got, err := UnmarshalTree(data)
+	got, err := UnmarshalTree(data, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("UnmarshalTree() with parent enckey failed: %v", err)
 	}
