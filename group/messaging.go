@@ -50,6 +50,48 @@ func (g *Group) SendMessage(
 	})
 }
 
+// SendApplicationMessage encrypts an application message with caller-supplied
+// authenticated data. Unlike SendMessage, the authenticated_data field is
+// not hardcoded to empty — required by the MLSWG interop gRPC interface
+// (ProtectRequest.authenticated_data, RFC 9420 §6.3.1).
+func (g *Group) SendApplicationMessage(
+	data []byte,
+	authenticatedData []byte,
+	sigPrivKey *ciphersuite.SignaturePrivateKey,
+) (*framing.PrivateMessage, error) {
+	if g.state != StateOperational {
+		return nil, fmt.Errorf("group not operational")
+	}
+	if sigPrivKey == nil {
+		return nil, fmt.Errorf("signature private key is nil")
+	}
+	if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
+		return nil, fmt.Errorf("sender_data_secret not available")
+	}
+	if g.SecretTree == nil {
+		return nil, fmt.Errorf("secret tree not available")
+	}
+
+	content := framing.FramedContent{
+		GroupID:           g.GroupID.AsSlice(),
+		Epoch:             g.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.OwnLeafIndex)},
+		AuthenticatedData: authenticatedData,
+		Body:              framing.ApplicationData{Data: data},
+	}
+
+	return framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  uint32(g.OwnLeafIndex),
+		CipherSuite:      g.CipherSuite,
+		PaddingSize:      0,
+		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
+		SecretTree:       g.SecretTree,
+		SigKey:           sigPrivKey,
+		GroupContext:     g.GroupContext.Marshal(),
+	})
+}
+
 // ReceiveMessage decrypts an application message from another member.
 //
 // RFC 9420 §6.3
@@ -104,4 +146,45 @@ func (g *Group) ReceiveMessage(
 		return nil, fmt.Errorf("received message is not application data")
 	}
 	return data, nil
+}
+
+// ReceiveApplicationMessage decrypts an application PrivateMessage without
+// requiring the caller to supply the sender's leaf index. The leaf index is
+// extracted from the encrypted SenderData (RFC 9420 §6.3.2). Signature
+// verification is skipped; use ReceiveMessage when the sender is known.
+//
+// This is the entry point used by the MLSWG interop gRPC Unprotect RPC,
+// where the ciphertext is opaque and the sender is determined at decrypt time.
+func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext, authenticatedData []byte, err error) {
+	if g.state != StateOperational {
+		return nil, nil, fmt.Errorf("group not operational")
+	}
+	if pm == nil {
+		return nil, nil, fmt.Errorf("private message is nil")
+	}
+	if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
+		return nil, nil, fmt.Errorf("sender_data_secret not available")
+	}
+	if g.SecretTree == nil {
+		return nil, nil, fmt.Errorf("secret tree not available")
+	}
+
+	// Decrypt without signature verification — sender identity is not available
+	// before decrypting SenderData. SigPubKey: nil skips the verify step in
+	// framing.Decrypt while still advancing the SecretTree ratchet correctly.
+	ac, decErr := framing.Decrypt(pm, framing.DecryptParams{
+		CipherSuite:      g.CipherSuite,
+		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
+		SecretTree:       g.SecretTree,
+		GroupContext:     g.GroupContext.Marshal(),
+	})
+	if decErr != nil {
+		return nil, nil, &ErrDecryptionFailed{Reason: "message", Err: decErr}
+	}
+
+	data, ok := ac.Content.ApplicationData()
+	if !ok {
+		return nil, nil, fmt.Errorf("received message is not application data")
+	}
+	return data, ac.Content.AuthenticatedData, nil
 }
