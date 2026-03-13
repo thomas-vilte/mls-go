@@ -100,7 +100,7 @@ func (ac *AuthenticatedContent) MarshalTBS() []byte {
 	w.WriteRaw(ac.Content.Marshal())
 	// RFC §6.1: GroupContext included when sender_type == member or new_member_commit
 	st := ac.Content.Sender.Type
-	if (st == SenderTypeMember || st == SenderTypeNewMemberCommit) && len(ac.GroupContext) > 0 {
+	if st == SenderTypeMember || st == SenderTypeNewMemberCommit {
 		w.WriteRaw(ac.GroupContext)
 	}
 	return w.Bytes()
@@ -205,7 +205,7 @@ func unmarshalPrivateMessageContent(data []byte, ct ContentType) (*PrivateMessag
 			return nil, fmt.Errorf("framing: reading padding: %w", err)
 		}
 		if b != 0 {
-			return nil, fmt.Errorf("%w: non-zero padding byte", ErrInvalidMessage)
+			return nil, fmt.Errorf("%w: non-zero padding byte", ErrInvalidPadding)
 		}
 	}
 

@@ -40,6 +40,16 @@ func NewPublicMessage(
 	membershipKey *ciphersuite.Secret,
 	cs ciphersuite.CipherSuite,
 ) (*PublicMessage, error) {
+	// RFC §6.1: sender/content-type compatibility
+	if err := validateSenderContentType(content.Sender.Type, content.ContentType()); err != nil {
+		return nil, err
+	}
+	// RFC §6.1: GroupContext required for member and new_member_commit senders
+	st := content.Sender.Type
+	if (st == SenderTypeMember || st == SenderTypeNewMemberCommit) && len(gc) == 0 {
+		return nil, fmt.Errorf("%w: required when signing for sender type %d", ErrMissingGroupContext, st)
+	}
+
 	ac := &AuthenticatedContent{
 		WireFormat:   WireFormatPublicMessage,
 		Content:      content,
