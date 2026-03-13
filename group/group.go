@@ -415,7 +415,7 @@ func (g *Group) CommitWithContext(
 	ac := &framing.AuthenticatedContent{
 		WireFormat:   format,
 		Content:      content,
-		Auth:         framing.FramedContentAuthData{}, // Aún sin firma
+		Auth:         framing.FramedContentAuthData{},
 		GroupContext: groupContextBytes,
 	}
 
@@ -1161,6 +1161,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		senderLeafIdx := treesync.LeafIndex(senderIdx)
 		leafNodeData := stagedCommit.Commit.Path.LeafNode
 
+		// RFC §7.2 + §12.4.2: leaf_node_source MUST be commit (3) in an UpdatePath
+		if leafNodeData.LeafNodeSource != 3 {
+			return fmt.Errorf("UpdatePath leaf node has leaf_node_source %d, want 3 (commit)",
+				leafNodeData.LeafNodeSource)
+		}
 		// RFC §12.4.2: verify signature of the new committer leaf node (source=commit,
 		// TBS includes group_id and leaf_index per RFC §7.2).
 		if err := leafNodeData.VerifyWithContext(g.CipherSuite, g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx)); err != nil {
@@ -1532,7 +1537,7 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
 				return fmt.Errorf("invalid add proposal lifetime: %w", err)
 			}
-			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
+			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities, nil); err != nil {
 				return fmt.Errorf("invalid add proposal capabilities: %w", err)
 			}
 			// RFC §12.2: Verify KeyPackage signature
@@ -1551,7 +1556,7 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
 				return fmt.Errorf("invalid update proposal lifetime: %w", err)
 			}
-			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities); err != nil {
+			if err := validateCapabilitiesCompatible(g.CipherSuite, leafData.Capabilities, nil); err != nil {
 				return fmt.Errorf("invalid update proposal capabilities: %w", err)
 			}
 			// RFC §12.2, §7.3: Verify LeafNode signature with context

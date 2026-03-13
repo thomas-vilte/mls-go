@@ -486,6 +486,8 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 
 	// Create an Update proposal with invalid signature LeafNode
 	updateLeafNode := kp.LeafNode
+	// RFC §7.3: Update proposals must have leaf_node_source = 2 (update)
+	updateLeafNode.LeafNodeSource = 2
 	// Corromper la firma del LeafNode
 	updateLeafNode.Signature[0] ^= 0xFF
 
