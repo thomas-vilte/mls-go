@@ -7,7 +7,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -67,7 +66,7 @@ func TestLeafNodeCapabilities_MarshalUnmarshal(t *testing.T) {
 func TestValidateLeafNode_EmptyEncryptionKey(t *testing.T) {
 	leaf := createTestLeafExt(t, "Invalid")
 	leaf.EncryptionKey = []byte{}
-	if err := ValidateLeafNode(&leaf); err == nil {
+	if err := ValidateLeafNode(&leaf, ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Fatal("Should fail for empty encryption key")
 	}
 }
@@ -75,7 +74,7 @@ func TestValidateLeafNode_EmptyEncryptionKey(t *testing.T) {
 func TestValidateLeafNode_NilSignatureKey(t *testing.T) {
 	leaf := createTestLeafExt(t, "Invalid")
 	leaf.SignatureKey = nil
-	if err := ValidateLeafNode(&leaf); err == nil {
+	if err := ValidateLeafNode(&leaf, ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Fatal("Should fail for nil signature key")
 	}
 }
@@ -83,7 +82,7 @@ func TestValidateLeafNode_NilSignatureKey(t *testing.T) {
 func TestValidateLeafNode_NilCredential(t *testing.T) {
 	leaf := createTestLeafExt(t, "Invalid")
 	leaf.Credential = nil
-	if err := ValidateLeafNode(&leaf); err == nil {
+	if err := ValidateLeafNode(&leaf, ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Fatal("Should fail for nil credential")
 	}
 }
@@ -91,7 +90,7 @@ func TestValidateLeafNode_NilCredential(t *testing.T) {
 func TestValidateLeafNode_InvalidSource(t *testing.T) {
 	leaf := createTestLeafExt(t, "Invalid")
 	leaf.LeafNodeSource = 99
-	if err := ValidateLeafNode(&leaf); err == nil {
+	if err := ValidateLeafNode(&leaf, ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Fatal("Should fail for invalid leaf_node_source")
 	}
 }
@@ -256,64 +255,64 @@ func TestLargeTree(t *testing.T) {
 // ============================================================================
 
 func TestValidateLeafNodeSignature_Valid(t *testing.T) {
-	sigPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cs := ciphersuite.MLS128DHKEMP256
+	sigPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
 	leaf := createTestLeafExt(t, "signed")
 	leaf.SignatureKey = &sigPriv.PublicKey
 
-	tbsBytes := leaf.MarshalTBS()
-	hash := sha256sum(tbsBytes)
-	r, s, _ := ecdsa.Sign(rand.Reader, sigPriv, hash)
+	tbsBytes := leaf.MarshalTBSWithContext(nil, 0)
+	privWrapper := ciphersuite.NewSignaturePrivateKey(sigPriv)
+	sig, err := ciphersuite.SignWithLabel(privWrapper, "LeafNodeTBS", tbsBytes)
+	if err != nil {
+		t.Fatalf("SignWithLabel: %v", err)
+	}
 
-	// Pack r||s as 32-byte big-endian each
-	sig := make([]byte, 64)
-	rb := r.Bytes()
-	sb := s.Bytes()
-	copy(sig[32-len(rb):32], rb)
-	copy(sig[64-len(sb):64], sb)
-
-	if err := ValidateLeafNodeSignature(&leaf, sig); err != nil {
+	if err := ValidateLeafNodeSignature(&leaf, sig.AsSlice(), cs); err != nil {
 		t.Fatalf("ValidateLeafNodeSignature() failed: %v", err)
 	}
 }
 
 func TestValidateLeafNodeSignature_BadSig(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
 	sigPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	leaf := createTestLeafExt(t, "signed")
 	leaf.SignatureKey = &sigPriv.PublicKey
 
 	badSig := make([]byte, 64)
 	badSig[0] = 0x01 // garbage
-	if err := ValidateLeafNodeSignature(&leaf, badSig); err == nil {
+	if err := ValidateLeafNodeSignature(&leaf, badSig, cs); err == nil {
 		t.Fatal("expected error for bad signature")
 	}
 }
 
 func TestValidateLeafNodeSignature_TooShort(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
 	leaf := createTestLeafExt(t, "signed")
-	if err := ValidateLeafNodeSignature(&leaf, []byte{0x01, 0x02}); err == nil {
+	if err := ValidateLeafNodeSignature(&leaf, []byte{0x01, 0x02}, cs); err == nil {
 		t.Fatal("expected error for short signature")
 	}
 }
 
 func TestValidateLeafNodeSignature_NilKey(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
 	leaf := createTestLeafExt(t, "signed")
 	leaf.SignatureKey = nil
-	if err := ValidateLeafNodeSignature(&leaf, make([]byte, 64)); err == nil {
+	if err := ValidateLeafNodeSignature(&leaf, make([]byte, 64), cs); err == nil {
 		t.Fatal("expected error for nil key")
 	}
 }
 
 func TestValidateLeafNodeSignature_EmptySig(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
 	leaf := createTestLeafExt(t, "signed")
-	if err := ValidateLeafNodeSignature(&leaf, nil); err == nil {
+	if err := ValidateLeafNodeSignature(&leaf, nil, cs); err == nil {
 		t.Fatal("expected error for empty signature")
 	}
 }
 
-func sha256sum(b []byte) []byte {
-	h := sha256.Sum256(b)
-	return h[:]
-}
 
 // ============================================================================
 // LeafNodeData.Verify Tests - RFC 9420 §7.2
