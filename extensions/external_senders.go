@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -377,12 +378,13 @@ func FromExternalSendersExtension(ext *Extension) (*ExternalSendersExtension, er
 // Helper functions
 
 func unmarshalECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
-	if len(data) != 65 || data[0] != 0x04 {
-		return nil, errors.New("invalid ECDSA public key format: must be 65 bytes starting with 0x04")
+	// ECDSA P-256 uncompressed point: 0x04 || 32-byte X || 32-byte Y = 65 bytes
+	// (ciphersuite.P256UncompressedKeySize, SEC 1 §2.3.3, RFC 9420 §5.1.2).
+	if len(data) != ciphersuite.P256UncompressedKeySize || data[0] != 0x04 {
+		return nil, fmt.Errorf("invalid ECDSA public key format: must be %d bytes starting with 0x04, got %d",
+			ciphersuite.P256UncompressedKeySize, len(data))
 	}
 	// Use crypto/ecdh for on-curve validation (RFC 9420 §5.1.1).
-	// ecdh.P256().NewPublicKey accepts uncompressed format (0x04 || X || Y)
-	// and rejects points not on the curve.
 	if _, err := ecdh.P256().NewPublicKey(data); err != nil {
 		return nil, fmt.Errorf("ECDSA public key not on curve P-256: %w", err)
 	}

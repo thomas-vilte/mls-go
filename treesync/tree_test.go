@@ -3,6 +3,7 @@ package treesync
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"math/big"
 	"testing"
 
@@ -53,7 +54,7 @@ func setParentHashChain(t *testing.T, tree *RatchetTree, leafIdx LeafIndex) {
 		if parent.EncryptionKey != nil {
 			parentKey = parent.EncryptionKey.Bytes()
 		}
-		ph := ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+		ph := ComputeParentHash(parentKey, parent.ParentHash, siblingHash, sha256.New)
 		if IsLeaf(nodeIdx) {
 			if tree.Nodes[nodeIdx].LeafData == nil {
 				t.Fatalf("leaf %d has nil LeafData", nodeIdx)

@@ -150,7 +150,11 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		return nil, err
 	}
 	l.SignatureKeyRaw = append([]byte(nil), sigKeyBytes...)
-	if len(sigKeyBytes) == 65 && sigKeyBytes[0] == 0x04 {
+	// Heuristic detection of ECDSA P-256 keys by wire format (RFC 9420 §5.1.2):
+	// uncompressed SEC 1 point = 0x04 || 32-byte X || 32-byte Y = 65 bytes total.
+	// Ed25519 keys are always 32 bytes and never start with 0x04.
+	// cs.SignatureKeyLength() returns 65 for ECDSA-P256, 32 for Ed25519.
+	if len(sigKeyBytes) == ciphersuite.P256UncompressedKeySize && sigKeyBytes[0] == 0x04 {
 		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
 		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
 		l.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
@@ -205,16 +209,29 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
 	}
 
-	// 7. extensions<V> - This is a vector of Extension structs, not just VLBytes
-	// Each Extension is: extension_type (2 bytes) + extension_data (VLBytes)
-	// The whole vector is VL-prefixed
+	// 7. extensions<V>: VL-prefixed vector of Extension structs (RFC 9420 §7.2).
+	// Each Extension encodes as: extension_type(u16) || extension_data<V>.
+	// Parse into separate raw-encoded entries so callers can look up by type.
 	extsData, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
-	// For now, store the raw extension data
-	// TODO: Parse individual extensions if needed
-	l.Extensions = [][]byte{extsData}
+	extsReader := tls.NewReader(extsData)
+	for extsReader.Remaining() > 0 {
+		extType, err := extsReader.ReadUint16()
+		if err != nil {
+			return nil, fmt.Errorf("reading extension_type: %w", err)
+		}
+		extBody, err := extsReader.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading extension_data: %w", err)
+		}
+		// Re-encode as type(u16) || data<V> for lossless round-trip storage.
+		extBuf := tls.NewWriter()
+		extBuf.WriteUint16(extType)
+		extBuf.WriteVLBytes(extBody)
+		l.Extensions = append(l.Extensions, extBuf.Bytes())
+	}
 
 	// 8. signature<V>
 	l.Signature, err = r.ReadVLBytes()

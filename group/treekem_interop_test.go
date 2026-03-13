@@ -114,7 +114,7 @@ func unmarshalInteropUpdatePath(data []byte) (*interopUpdatePath, error) {
 //     encryption_key and clears unmerged_leaves.
 //  3. Recomputes parent_hash fields down the direct path so that tree hashes
 //     computed afterwards are correct.
-func applyUpdatePathToTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, up *interopUpdatePath) error {
+func applyUpdatePathToTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, up *interopUpdatePath, cs ciphersuite.CipherSuite) error {
 	// 1. Replace sender's leaf.
 	senderNodeIdx := treesync.LeafIndexToNodeIndex(senderLeafIdx)
 	tree.Nodes[senderNodeIdx] = treesync.Node{State: treesync.NodeStatePresent, LeafData: up.LeafNode}
@@ -159,7 +159,7 @@ func applyUpdatePathToTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Le
 				// Non-blank parent: compute parent_hash normally.
 				siblingIdx := tree.GetSibling(childIdx)
 				siblingHash := tree.HashNode(siblingIdx)
-				parentHash = treesync.ComputeParentHash(parent.EncryptionKey.Bytes(), parent.ParentHash, siblingHash)
+				parentHash = treesync.ComputeParentHash(parent.EncryptionKey.Bytes(), parent.ParentHash, siblingHash, cs.HashFunction())
 			} else {
 				// Blank parent: child inherits parent's parent_hash (transparent pass-through).
 				parentHash = parent.ParentHash
@@ -315,7 +315,7 @@ func TestTreeKEMVectors(t *testing.T) {
 				// Apply the UpdatePath to a fresh clone of the original tree.
 				treeCopy := originalTree.Clone()
 				senderLeafIdx := treesync.LeafIndex(entry.Sender)
-				if err := applyUpdatePathToTree(treeCopy, senderLeafIdx, up); err != nil {
+				if err := applyUpdatePathToTree(treeCopy, senderLeafIdx, up, cs); err != nil {
 					t.Fatalf("apply update_path[%d]: %v", upIndex, err)
 				}
 

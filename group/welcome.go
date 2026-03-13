@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/schedule"
@@ -374,13 +375,74 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
 }
 
-// CreateWelcome generates a Welcome message for new members.
-// RFC 9420 §12.4.3.1
-// CreateWelcome creates a Welcome message for new members added in the commit.
+// CreateWelcome generates a Welcome message for new members per RFC 9420 §12.4.3.1.
 //
-// RFC 9420 §11.2.2
-// It encrypts the GroupInfo and GroupSecrets for each new member using their
-// KeyPackage's InitKey. The resulting Welcome message should be sent to the new members.
+// The Welcome message allows new members to join an existing group by providing
+// them with the necessary cryptographic state to participate in the group.
+//
+// # Welcome Message Structure (RFC 9420 §11.2.2)
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│                    Welcome Message                               │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│  ProtocolVersion version = mls10                                │
+//	│  CipherSuite cipher_suite                                       │
+//	│  EncryptedGroupSecrets secrets<V>                               │
+//	│    ├─ opaque key_package_ref<V>     - Hash of member's KeyPkg   │
+//	│    └─ HPKECiphertext encrypted_group_secrets                    │
+//	│  opaque encrypted_group_info<V>     - Encrypted GroupInfo       │
+//	└─────────────────────────────────────────────────────────────────┘
+//
+// # Key Schedule for Welcome (RFC 9420 §8, §12.4.3.1)
+//
+//	joiner_secret (from UpdatePath)
+//	    │
+//	    │  HKDF-Extract(joiner_secret, psk_secret=0^Nh)
+//	    ▼
+//	member_secret
+//	    │
+//	    │  DeriveSecret("welcome")
+//	    ▼
+//	welcome_secret
+//	    │
+//	    ├─► KdfExpandLabel("key")   ──► welcome_key (AES-128-GCM key)
+//	    └─► KdfExpandLabel("nonce")  ──► welcome_nonce (12 bytes)
+//
+// # Encryption Flow
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│              Welcome Encryption Process                         │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│                                                                 │
+//	│  1. Derive welcome_secret from joiner_secret                    │
+//	│                                                                 │
+//	│  2. Encrypt GroupInfo:                                          │
+//	│     encrypted_group_info = AES-GCM-Seal(                        │
+//	│       welcome_key, welcome_nonce, GroupInfo, aad=[]            │
+//	│     )                                                           │
+//	│                                                                 │
+//	│  3. For each new member:                                        │
+//	│     a. Build GroupSecrets {joiner_secret, path_secret, psks}   │
+//	│     b. Encrypt with HPKE using member's InitKey:               │
+//	│        HPKE.Encrypt(init_key, "Welcome", encrypted_group_info)  │
+//	│     c. Add to secrets vector with key_package_ref              │
+//	│                                                                 │
+//	└─────────────────────────────────────────────────────────────────┘
+//
+// Parameters:
+//   - newMemberKeyPackages: KeyPackages of members being added
+//   - joinerSecret: joiner_secret from the commit's UpdatePath
+//   - pathSecret: Optional path_secret for the joining members
+//   - signerPrivKey: Private key to sign the GroupInfo
+//
+// Returns:
+//   - Welcome message ready to send to new members
+//   - Error if key derivation or encryption fails
+//
+// RFC 9420 References:
+//   - §11.2.2: Welcome Message Structure
+//   - §12.4.3.1: Creating a Welcome
+//   - §8: Key Schedule for Welcome
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
@@ -391,10 +453,10 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
 	}
 
-	// 1. Compute welcome_secret (RFC §8, §12.4.3.1):
+	// Compute welcome_secret per RFC 9420 §8, §12.4.3.1:
 	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret=0^Nh)
 	//    welcome_secret = DeriveSecret(member_secret, "welcome")
-	// We use a copy to not destroy joiner_secret (needed for GroupSecrets).
+	// We use a copy to preserve joiner_secret (needed for GroupSecrets).
 	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
 	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(
 		ciphersuite.ZeroSecret(g.CipherSuite.HashLength()),
@@ -412,7 +474,7 @@ func (g *Group) CreateWelcome(
 		return nil, err
 	}
 
-	// 3. Encriptar GroupInfo completo (con firma) con welcome_secret (RFC §11.2.2)
+	// Encrypt GroupInfo (including signature) with welcome_secret per RFC 9420 §11.2.2
 	groupInfoBytes := groupInfo.Marshal()
 	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.CipherSuite.AeadKeyLength())
 	if err != nil {
@@ -434,7 +496,7 @@ func (g *Group) CreateWelcome(
 		return nil, fmt.Errorf("encrypting group info: %w", err)
 	}
 
-	// 4. For each new member, encrypt GroupSecrets
+	// For each new member, encrypt GroupSecrets
 	var encryptedSecrets []EncryptedGroupSecrets
 
 	for _, kp := range newMemberKeyPackages {
@@ -500,10 +562,10 @@ func JoinFromWelcomeWithContext(
 	default:
 	}
 
-	// 1. Compute my key_package_ref
+	// Compute my key_package_ref
 	myRef := keyPackageRef(myKeyPackage, welcome.CipherSuite)
 
-	// 2. Find my encrypted GroupSecrets
+	// Find my encrypted GroupSecrets
 	var myEncryptedSecrets *EncryptedGroupSecrets
 	for i := range welcome.Secrets {
 		if bytes.Equal(welcome.Secrets[i].NewMember, myRef) {
@@ -516,7 +578,7 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("no encrypted secrets found for this key package")
 	}
 
-	// 3. Decrypt GroupSecrets with my HPKE private key
+	// Decrypt GroupSecrets with my HPKE private key
 	privKeyBytes := myPrivateKeys.InitKey.Bytes()
 	secretsData, err := ciphersuite.DecryptWithLabel(
 		privKeyBytes,
@@ -548,10 +610,10 @@ func JoinFromWelcomeWithContext(
 		}
 	}
 
-	// 4. Derive welcome_secret (RFC §8, §12.4.3.1):
-	//    psk_secret     = ComputePskSecret(psks)           (0^Nh if no PSKs)
-	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret)
-	//    welcome_secret = DeriveSecret(member_secret, "welcome")
+	// Derive welcome_secret (RFC §8, §12.4.3.1):
+	// psk_secret     = ComputePskSecret(psks)           (0^Nh if no PSKs)
+	// member_secret  = HKDF-Extract(joiner_secret, psk_secret)
+	// welcome_secret = DeriveSecret(member_secret, "welcome")
 	//
 	// We use a COPY of joiner_secret so that HKDFExtract (which zeroes its inputs)
 	// does not destroy the original, which the key schedule needs later.
@@ -599,14 +661,13 @@ func JoinFromWelcomeWithContext(
 	}
 	welcome.GroupInfo = groupInfo
 
-	// 6. Reconstruct ratchet tree: first look for ratchet_tree extension,
+	// Reconstruct ratchet tree: first look for ratchet_tree extension,
 	// otherwise use the tree in memory (for tests), otherwise create empty tree
-	const extTypeRatchetTree = 0x0002
 	ratchetTree := groupInfo.RatchetTree
 	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == extTypeRatchetTree {
-			parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data)
+		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+			parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if parseErr == nil {
 				ratchetTree = parsed
 				break
@@ -618,25 +679,30 @@ func JoinFromWelcomeWithContext(
 		if ratchetTreeParseErr != nil {
 			return nil, fmt.Errorf("parsing ratchet_tree extension: %w", ratchetTreeParseErr)
 		}
-		ratchetTree = treesync.NewRatchetTree(1)
+		ratchetTree = treesync.NewRatchetTree(1, groupInfo.GroupContext.CipherSuite)
 	}
 	groupInfo.RatchetTree = ratchetTree
 
-	// 7. Verify GroupInfo signature when the signer leaf is available in the tree.
+	// Verify GroupInfo signature when the signer leaf is available in the tree.
+	// Use SigKeyBytes() to support both ECDSA (stored in SignatureKey) and Ed25519 (stored in SignatureKeyRaw).
+	// Use the cipher suite's SignatureScheme() to select the correct algorithm.
 	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
-	if signerLeaf != nil && signerLeaf.LeafData != nil && signerLeaf.LeafData.SignatureKey != nil {
-		rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
-		sig := ciphersuite.NewSignature(groupInfo.Signature)
-		if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
-			return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
+	if signerLeaf != nil && signerLeaf.LeafData != nil {
+		rawKey := signerLeaf.LeafData.SigKeyBytes()
+		if len(rawKey) > 0 {
+			cs := groupInfo.GroupContext.CipherSuite
+			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
+			sig := ciphersuite.NewSignature(groupInfo.Signature)
+			if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
+				return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
+			}
 		}
 	}
 
-	// 8. Initialize GroupContext from GroupInfo
+	// Initialize GroupContext from GroupInfo
 	groupContext := groupInfo.GroupContext
 
-	// 9. Advance key schedule from joiner_secret provided by Welcome.
+	// Advance key schedule from joiner_secret provided by Welcome.
 	keySchedule := schedule.NewKeySchedule(
 		welcome.CipherSuite,
 		ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()),
@@ -659,7 +725,7 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
-	// 9b. Determine OwnLeafIndex by looking for our key in the tree.
+	// Determine OwnLeafIndex by looking for our key in the tree.
 	// It searches by LeafNode.EncryptionKey (TreeKEM key of the leaf), which may differ
 	// from the InitKey of the KeyPackage (HPKE key for the Welcome).
 	var ownLeafIndex LeafNodeIndex
@@ -676,7 +742,7 @@ func JoinFromWelcomeWithContext(
 			}
 		}
 	}
-	// 10. Create Group
+	// Create Group
 	group := &Group{
 		GroupID:      groupContext.GroupID,
 		Epoch:        groupContext.Epoch,
@@ -742,11 +808,15 @@ func verifyGroupInfoSignature(groupInfo *GroupInfo, tree *treesync.RatchetTree) 
 		return fmt.Errorf("ratchet tree is nil")
 	}
 	signerLeaf := tree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
-	if signerLeaf == nil || signerLeaf.LeafData == nil || signerLeaf.LeafData.SignatureKey == nil {
+	if signerLeaf == nil || signerLeaf.LeafData == nil {
 		return fmt.Errorf("missing signer leaf in ratchet tree")
 	}
-	rawKey := treesync.MarshalSignatureKey(signerLeaf.LeafData.SignatureKey)
-	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, ciphersuite.ECDSA_SECP256R1_SHA256)
+	rawKey := signerLeaf.LeafData.SigKeyBytes()
+	if len(rawKey) == 0 {
+		return fmt.Errorf("missing signature key for signer leaf")
+	}
+	cs := groupInfo.GroupContext.CipherSuite
+	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
 	sig := ciphersuite.NewSignature(groupInfo.Signature)
 	if err := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); err != nil {
 		return fmt.Errorf("invalid group info signature: %w", err)

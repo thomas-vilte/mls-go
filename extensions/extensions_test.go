@@ -218,13 +218,6 @@ func TestExternalSendersExtension(t *testing.T) {
 	}
 }
 
-// TestRatchetTreeExtension tests the RatchetTree extension.
-func TestRatchetTreeExtension(t *testing.T) {
-	t.Skip("RatchetTree test requires full treesync implementation")
-
-	// TODO: Implement when treesync is complete
-}
-
 // TestExtensionClone tests cloning extensions.
 func TestExtensionClone(t *testing.T) {
 	exts := extensions.NewExtensions()

@@ -520,9 +520,8 @@ func validateCapabilitiesCompatible(
 // extractRequiredCapabilities looks for a required_capabilities extension (type 0x0003)
 // in the GroupContext and parses it. Returns nil if not present or unparseable.
 func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapabilitiesExtension {
-	const requiredCapsExtType = uint16(0x0003) // extensions.ExtensionTypeRequiredCapabilities
 	for _, ext := range pf.groupContext.Extensions {
-		if ext.Type == requiredCapsExtType {
+		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
 			caps, err := extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {
 				return nil
@@ -536,10 +535,9 @@ func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapa
 // validateGCEMemberCompatibility checks that all current tree members support any
 // required_capabilities present in the proposed new GroupContext extensions (RFC §12.1.7).
 func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) error {
-	const requiredCapsExtType = uint16(0x0003)
 	var reqCaps *extensions.RequiredCapabilitiesExtension
 	for _, ext := range newExts {
-		if ext.Type == requiredCapsExtType {
+		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
 			var err error
 			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {

@@ -221,7 +221,7 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 		ac.Content.AuthenticatedData,
 	)
 	plaintext := marshalPrivateMessageContent(ac.Content.Body, ac.Auth, p.PaddingSize)
-	ciphertext, err := ciphersuite.AESEncrypt(contentKey, contentNonce, plaintext, aad)
+	ciphertext, err := ciphersuite.EncryptWithCipherSuite(contentKey, contentNonce, plaintext, aad, p.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("framing: encrypting content: %w", err)
 	}
@@ -254,9 +254,9 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	copy(senderData.ReuseGuard[:], guard)
 
 	sdAAD := buildSenderDataAAD(ac.Content.GroupID, ac.Content.Epoch, ac.Content.ContentType())
-	encryptedSD, err := ciphersuite.AESEncrypt(
+	encryptedSD, err := ciphersuite.EncryptWithCipherSuite(
 		sdKey.AsSlice(), sdNonce.AsSlice(),
-		senderData.Marshal(), sdAAD,
+		senderData.Marshal(), sdAAD, p.CipherSuite,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("framing: encrypting sender_data: %w", err)
@@ -309,9 +309,9 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 
 	// Decrypt MLSSenderData
 	sdAAD := buildSenderDataAAD(pm.GroupID, pm.Epoch, pm.ContentType)
-	sdPlain, err := ciphersuite.AESDecrypt(
+	sdPlain, err := ciphersuite.DecryptWithCipherSuite(
 		sdKey.AsSlice(), sdNonce.AsSlice(),
-		pm.EncryptedSenderData, sdAAD,
+		pm.EncryptedSenderData, sdAAD, p.CipherSuite,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: sender_data: %v", ErrDecryptionFailed, err)
@@ -360,7 +360,7 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 			nonce[i] ^= senderData.ReuseGuard[i]
 		}
 
-		return ciphersuite.AESDecrypt(key, nonce, pm.Ciphertext, aad)
+		return ciphersuite.DecryptWithCipherSuite(key, nonce, pm.Ciphertext, aad, p.CipherSuite)
 	}
 
 	var plaintext []byte

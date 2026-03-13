@@ -14,8 +14,10 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"math/bits"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -68,6 +70,16 @@ const (
 type RatchetTree struct {
 	Nodes     []Node
 	NumLeaves uint32
+	cs        ciphersuite.CipherSuite
+}
+
+// hashFunc returns the hash constructor for this tree's cipher suite,
+// defaulting to SHA-256 for trees created without an explicit cipher suite.
+func (t *RatchetTree) hashFunc() func() hash.Hash {
+	if hf := t.cs.HashFunction(); hf != nil {
+		return hf
+	}
+	return sha256.New
 }
 
 // Node represents a node in the ratchet tree.
@@ -187,20 +199,30 @@ type LeafNodeLifetime struct {
 //
 // Parameters:
 //   - numLeaves: Number of leaves (group members) the tree should support
+//   - cs: Optional cipher suite for hash computation (defaults to SHA-256)
 //
 // Returns a new RatchetTree, or a tree with 1 leaf if numLeaves < 1.
 //
 // RFC Appendix C:
 //
 //	num_nodes = 2 * num_leaves - 1
-func NewRatchetTree(numLeaves uint32) *RatchetTree {
+func NewRatchetTree(numLeaves uint32, cs ...ciphersuite.CipherSuite) *RatchetTree {
 	if numLeaves < 1 {
 		numLeaves = 1
 	}
-	return &RatchetTree{
+	t := &RatchetTree{
 		Nodes:     make([]Node, numLeaves*2-1),
 		NumLeaves: numLeaves,
 	}
+	if len(cs) > 0 {
+		t.cs = cs[0]
+	}
+	return t
+}
+
+// SetCipherSuite sets the cipher suite used for tree hash computation.
+func (t *RatchetTree) SetCipherSuite(cs ciphersuite.CipherSuite) {
+	t.cs = cs
 }
 
 // LeafCount returns the number of leaves in the tree.
@@ -486,7 +508,7 @@ func (t *RatchetTree) HashNode(idx NodeIndex) []byte {
 
 	if node.State == NodeStateEmpty {
 		if IsLeaf(idx) {
-			return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), nil)
+			return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), nil, t.hashFunc())
 		}
 		return t.hashParent(idx)
 	}
@@ -501,7 +523,7 @@ func (t *RatchetTree) HashNode(idx NodeIndex) []byte {
 // hashLeaf computes leaf hash.
 func (t *RatchetTree) hashLeaf(idx NodeIndex) []byte {
 	node := &t.Nodes[idx]
-	return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), node.LeafData)
+	return ComputeLeafNodeHash(LeafIndex(uint32(idx)/2), node.LeafData, t.hashFunc())
 }
 
 // hashParent computes parent hash.
@@ -538,8 +560,10 @@ func (t *RatchetTree) hashParent(idx NodeIndex) []byte {
 	w.WriteVLBytes(leftHash)
 	w.WriteVLBytes(rightHash)
 
-	hash := sha256.Sum256(w.Bytes())
-	return hash[:]
+	hf := t.hashFunc()
+	h := hf()
+	h.Write(w.Bytes())
+	return h.Sum(nil)
 }
 
 // GetSibling returns the sibling of a node.
@@ -638,7 +662,7 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 			}
 			siblingIdx := t.GetSibling(nodeIdx)
 			siblingHash := t.HashNode(siblingIdx)
-			expected = ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+			expected = ComputeParentHash(parentKey, parent.ParentHash, siblingHash, t.hashFunc())
 		} else {
 			expected = parent.ParentHash
 		}
@@ -666,6 +690,7 @@ func (t *RatchetTree) Clone() *RatchetTree {
 	cloned := &RatchetTree{
 		Nodes:     make([]Node, len(t.Nodes)),
 		NumLeaves: t.NumLeaves,
+		cs:        t.cs,
 	}
 	copy(cloned.Nodes, t.Nodes)
 	return cloned

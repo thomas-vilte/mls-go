@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
 	"math/big"
 
@@ -55,10 +54,11 @@ func (k *SignaturePublicKey) AsSlice() []byte {
 }
 
 // ToECDSA converts to an ECDSA public key (P-256).
-// Expects uncompressed point format: 0x04 || X || Y (65 bytes total).
+// Expects uncompressed SEC 1 point: 0x04 || X || Y (P256UncompressedKeySize = 65 bytes, RFC 5480 §2.2).
 func (k *SignaturePublicKey) ToECDSA() (*ecdsa.PublicKey, error) {
-	if len(k.value) != 65 || k.value[0] != 0x04 {
-		return nil, fmt.Errorf("invalid uncompressed point format: expected 65 bytes starting with 0x04, got %d bytes", len(k.value))
+	if len(k.value) != P256UncompressedKeySize || k.value[0] != 0x04 {
+		return nil, fmt.Errorf("invalid uncompressed point format: expected %d bytes starting with 0x04, got %d bytes",
+			P256UncompressedKeySize, len(k.value))
 	}
 
 	// Note: crypto/elliptic is deprecated since Go 1.21, but ecdsa.PublicKey
@@ -154,20 +154,23 @@ func (k *SignaturePrivateKey) PublicKey() *SignaturePublicKey {
 
 // Sign signs the given data as defined in RFC 9420 §5.1.2.
 //
-// For ECDSA: uses ECDSA-SHA256, returns ASN.1 DER format as specified in RFC 5480 §2.2.3.
-// For Ed25519: returns raw 64-byte signature as specified in RFC 8410 §3.
+// For ECDSA: pre-hashes with the scheme's hash function (SHA-256 for P-256),
+// then signs the digest in ASN.1 DER format (RFC 5480 §2.2.3).
+// For Ed25519: signs the raw message without pre-hashing (RFC 8032 §5.1).
 func (k *SignaturePrivateKey) Sign(data []byte) (*Signature, error) {
 	if k.scheme == ED25519 {
 		sig := ed25519.Sign(k.ed25519Key, data)
 		return NewSignature(sig), nil
 	}
 
-	// ECDSA-SHA256
-	hash := sha256.Sum256(data)
+	// ECDSA: pre-hash with the scheme's hash function (RFC 9420 §5.1.2).
+	hf := k.scheme.HashFunction()
+	h := hf()
+	h.Write(data)
+	digest := h.Sum(nil)
 
-	// Use modern ecdsa.SignASN1 instead of ecdsa.Sign which is deprecated since Go 1.20
-	// for directly returning ASN.1 DER encoded signatures.
-	sigDER, err := ecdsa.SignASN1(rand.Reader, k.ecdsaKey, hash[:])
+	// Use modern ecdsa.SignASN1 (returns ASN.1 DER encoded signature, RFC 5480 §2.2.3).
+	sigDER, err := ecdsa.SignASN1(rand.Reader, k.ecdsaKey, digest)
 	if err != nil {
 		return nil, fmt.Errorf("signing with ECDSA: %w", err)
 	}
@@ -213,19 +216,21 @@ func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 	}
 }
 
-// verifyECDSA verifies an ECDSA-SHA256 signature.
+// verifyECDSA verifies an ECDSA signature by pre-hashing with the scheme's hash function
+// (SHA-256 for ECDSA-P256, RFC 9420 §5.1.2) and then calling ecdsa.VerifyASN1.
 func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
-	// VerifyASN1 can directly take the raw public key bytes in Go 1.20+
-	// using the ecdsa.VerifyASN1 function which handles uncompressed keys.
-	// Sin embargo, the ecdsa.VerifyASN1 function expects an *ecdsa.PublicKey
-
 	pubKey, err := NewSignaturePublicKey(k.Value).ToECDSA()
 	if err != nil {
 		return err
 	}
 
-	hash := sha256.Sum256(data)
-	if !ecdsa.VerifyASN1(pubKey, hash[:], sig.AsSlice()) {
+	// Pre-hash with the scheme's digest algorithm (RFC 9420 §5.1.2).
+	hf := k.SignatureScheme.HashFunction()
+	h := hf()
+	h.Write(data)
+	digest := h.Sum(nil)
+
+	if !ecdsa.VerifyASN1(pubKey, digest, sig.AsSlice()) {
 		return ErrInvalidSignature
 	}
 
@@ -234,13 +239,14 @@ func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) err
 
 // verifyEd25519 verifies an Ed25519 signature.
 func (k *OpenMlsSignaturePublicKey) verifyEd25519(data []byte, sig *Signature) error {
-	// Ed25519 public keys are 32 bytes
-	if len(k.Value) != 32 {
+	// Ed25519 public keys are Ed25519KeySize = 32 bytes (RFC 8410 §3).
+	if len(k.Value) != Ed25519KeySize {
 		return fmt.Errorf("invalid Ed25519 public key length: %d", len(k.Value))
 	}
 
-	// Ed25519 signatures are 64 bytes
-	if len(sig.AsSlice()) != 64 {
+	// Ed25519 signatures are 64 bytes (RFC 8032 §5.1.6).
+	const ed25519SignatureSize = 64
+	if len(sig.AsSlice()) != ed25519SignatureSize {
 		return fmt.Errorf("invalid Ed25519 signature length: %d", len(sig.AsSlice()))
 	}
 

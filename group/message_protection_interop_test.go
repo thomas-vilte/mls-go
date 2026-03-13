@@ -49,7 +49,8 @@ func TestMessageProtectionVectors(t *testing.T) {
 	}
 
 	for i, v := range vectors {
-		if ciphersuite.CipherSuite(v.CipherSuite) != ciphersuite.MLS128DHKEMP256 {
+		cs := ciphersuite.CipherSuite(v.CipherSuite)
+		if !cs.IsSupported() {
 			continue
 		}
 
@@ -60,7 +61,7 @@ func TestMessageProtectionVectors(t *testing.T) {
 			senderDataSecret := ciphersuite.NewSecret(mustDecodeHexBytes(t, v.SenderDataSecret))
 			membershipKey := ciphersuite.NewSecret(mustDecodeHexBytes(t, v.MembershipKey))
 			encryptionSecret := mustDecodeHexBytes(t, v.EncryptionSecret)
-			sigPub, err := parseInteropSignaturePublicKey(mustDecodeHexBytes(t, v.SignaturePub))
+			sigPub, err := parseInteropSignaturePublicKey(mustDecodeHexBytes(t, v.SignaturePub), cs)
 			if err != nil {
 				t.Fatalf("parse signature_pub: %v", err)
 			}
@@ -95,7 +96,16 @@ func buildMessageProtectionGroupContextBytes(t *testing.T, v messageProtectionVe
 	return gc.Marshal()
 }
 
-func parseInteropSignaturePublicKey(data []byte) (*ciphersuite.OpenMlsSignaturePublicKey, error) {
+func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*ciphersuite.OpenMlsSignaturePublicKey, error) {
+	if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
+		// Ed25519 keys are just 32 bytes
+		if len(data) == 32 {
+			return ciphersuite.NewOpenMlsSignaturePublicKey(data, ciphersuite.ED25519), nil
+		}
+		return nil, fmt.Errorf("unexpected ed25519 public key length: %d", len(data))
+	}
+
+	// ECDSA P-256
 	if len(data) == 65 && data[0] == 0x04 {
 		return ciphersuite.NewOpenMlsSignaturePublicKey(data, ciphersuite.ECDSA_SECP256R1_SHA256), nil
 	}
@@ -143,7 +153,7 @@ func peekSenderData(pm *framing.PrivateMessage, senderDataSecret *ciphersuite.Se
 	defer sdNonce.SecureZero()
 
 	aad := buildInteropSenderDataAAD(pm.GroupID, pm.Epoch, pm.ContentType)
-	plain, err := ciphersuite.AESDecrypt(sdKey.AsSlice(), sdNonce.AsSlice(), pm.EncryptedSenderData, aad)
+	plain, err := ciphersuite.DecryptWithCipherSuite(sdKey.AsSlice(), sdNonce.AsSlice(), pm.EncryptedSenderData, aad, cs)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt sender_data: %w", err)
 	}
@@ -313,7 +323,7 @@ func decryptPrivateBodyBySearch(
 					nonce[i] ^= senderData.ReuseGuard[i]
 				}
 
-				plaintext, err := ciphersuite.AESDecrypt(key, nonce, pm.Ciphertext, aad)
+				plaintext, err := ciphersuite.DecryptWithCipherSuite(key, nonce, pm.Ciphertext, aad, cs)
 				if err != nil {
 					continue
 				}

@@ -61,7 +61,7 @@ func GenerateEd25519KeyPair() (*Ed25519PrivateKey, *Ed25519PublicKey, error) {
 //   - 64 bytes: full private key (seed + public key)
 //
 // Per RFC 8410 §3, Ed25519 private keys are 64 bytes.
-func NewEd25519PrivateKey(key interface{}) (*Ed25519PrivateKey, error) {
+func NewEd25519PrivateKey(key any) (*Ed25519PrivateKey, error) {
 	switch k := key.(type) {
 	case []byte:
 		if len(k) == 32 {

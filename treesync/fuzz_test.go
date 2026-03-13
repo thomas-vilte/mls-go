@@ -2,6 +2,8 @@ package treesync
 
 import (
 	"testing"
+
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 func FuzzUnmarshalRatchetTree(f *testing.F) {
@@ -9,6 +11,6 @@ func FuzzUnmarshalRatchetTree(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
-		_, _ = UnmarshalTreeFromExtension(data)
+		_, _ = UnmarshalTreeFromExtension(data, ciphersuite.MLS128DHKEMP256)
 	})
 }

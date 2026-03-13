@@ -10,6 +10,9 @@ import (
 	"fmt"
 )
 
+// ErrBufferUnderrun is returned when a read exceeds the available buffer data.
+var ErrBufferUnderrun = errors.New("buffer underrun")
+
 // Writer writes TLS presentation language format.
 type Writer struct {
 	buf []byte
@@ -123,7 +126,7 @@ func (r *Reader) BytesAfterPosition() []byte {
 // ReadUint8 reads an 8-bit unsigned integer.
 func (r *Reader) ReadUint8() (uint8, error) {
 	if r.pos >= len(r.buf) {
-		return 0, errors.New("buffer underrun")
+		return 0, ErrBufferUnderrun
 	}
 	v := r.buf[r.pos]
 	r.pos++
@@ -133,7 +136,7 @@ func (r *Reader) ReadUint8() (uint8, error) {
 // ReadUint16 reads a 16-bit unsigned integer in big-endian.
 func (r *Reader) ReadUint16() (uint16, error) {
 	if r.pos+2 > len(r.buf) {
-		return 0, errors.New("buffer underrun")
+		return 0, ErrBufferUnderrun
 	}
 	v := binary.BigEndian.Uint16(r.buf[r.pos:])
 	r.pos += 2
@@ -143,7 +146,7 @@ func (r *Reader) ReadUint16() (uint16, error) {
 // ReadUint32 reads a 32-bit unsigned integer in big-endian.
 func (r *Reader) ReadUint32() (uint32, error) {
 	if r.pos+4 > len(r.buf) {
-		return 0, errors.New("buffer underrun")
+		return 0, ErrBufferUnderrun
 	}
 	v := binary.BigEndian.Uint32(r.buf[r.pos:])
 	r.pos += 4
@@ -153,7 +156,7 @@ func (r *Reader) ReadUint32() (uint32, error) {
 // ReadUint64 reads a 64-bit unsigned integer in big-endian.
 func (r *Reader) ReadUint64() (uint64, error) {
 	if r.pos+8 > len(r.buf) {
-		return 0, errors.New("buffer underrun")
+		return 0, ErrBufferUnderrun
 	}
 	v := binary.BigEndian.Uint64(r.buf[r.pos:])
 	r.pos += 8
@@ -181,7 +184,7 @@ func (r *Reader) ReadVLBytes() ([]byte, error) {
 // ReadMLSVarint reads an unsigned integer in MLS variable-length encoding (RFC 9420 §3.5).
 func (r *Reader) ReadMLSVarint() (uint32, error) {
 	if r.pos >= len(r.buf) {
-		return 0, errors.New("buffer underrun")
+		return 0, ErrBufferUnderrun
 	}
 
 	b0 := r.buf[r.pos]
@@ -193,14 +196,14 @@ func (r *Reader) ReadMLSVarint() (uint32, error) {
 		return uint32(b0 & 0x3F), nil
 	case 1: // 2-byte: 64–16383
 		if r.pos+2 > len(r.buf) {
-			return 0, errors.New("buffer underrun")
+			return 0, ErrBufferUnderrun
 		}
 		v := uint32(b0&0x3F)<<8 | uint32(r.buf[r.pos+1])
 		r.pos += 2
 		return v, nil
 	case 2: // 4-byte: 16384–1073741823
 		if r.pos+4 > len(r.buf) {
-			return 0, errors.New("buffer underrun")
+			return 0, ErrBufferUnderrun
 		}
 		v := uint32(b0&0x3F)<<24 | uint32(r.buf[r.pos+1])<<16 | uint32(r.buf[r.pos+2])<<8 | uint32(r.buf[r.pos+3])
 		r.pos += 4
@@ -213,7 +216,7 @@ func (r *Reader) ReadMLSVarint() (uint32, error) {
 // ReadBytes reads n bytes.
 func (r *Reader) ReadBytes(n int) ([]byte, error) {
 	if r.pos+n > len(r.buf) {
-		return nil, errors.New("buffer underrun")
+		return nil, ErrBufferUnderrun
 	}
 
 	data := make([]byte, n)
