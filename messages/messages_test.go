@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/messages"
 )
 
@@ -176,7 +177,7 @@ func TestEncryptDecryptGroupInfo(t *testing.T) {
 	welcomeKey := bytes.Repeat([]byte{0x42}, 16)
 	welcomeNonce := bytes.Repeat([]byte{0x24}, 12)
 
-	ciphertext, err := messages.EncryptGroupInfo(gi, welcomeKey, welcomeNonce)
+	ciphertext, err := messages.EncryptGroupInfo(gi, welcomeKey, welcomeNonce, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("EncryptGroupInfo: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestEncryptDecryptGroupInfo(t *testing.T) {
 		t.Fatal("EncryptGroupInfo returned empty ciphertext")
 	}
 
-	decrypted, err := messages.DecryptGroupInfo(ciphertext, welcomeKey, welcomeNonce)
+	decrypted, err := messages.DecryptGroupInfo(ciphertext, welcomeKey, welcomeNonce, ciphersuite.MLS128DHKEMP256)
 	if err != nil {
 		t.Fatalf("DecryptGroupInfo: %v", err)
 	}
@@ -211,10 +212,10 @@ func TestDecryptGroupInfo_WrongKey(t *testing.T) {
 	}
 	key := bytes.Repeat([]byte{0x42}, 16)
 	nonce := bytes.Repeat([]byte{0x24}, 12)
-	ct, _ := messages.EncryptGroupInfo(gi, key, nonce)
+	ct, _ := messages.EncryptGroupInfo(gi, key, nonce, ciphersuite.MLS128DHKEMP256)
 
 	wrongKey := bytes.Repeat([]byte{0xFF}, 16)
-	if _, err := messages.DecryptGroupInfo(ct, wrongKey, nonce); err == nil {
+	if _, err := messages.DecryptGroupInfo(ct, wrongKey, nonce, ciphersuite.MLS128DHKEMP256); err == nil {
 		t.Fatal("DecryptGroupInfo should fail with wrong key")
 	}
 }

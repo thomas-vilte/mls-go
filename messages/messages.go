@@ -2,14 +2,13 @@ package messages
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash"
 
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
@@ -470,52 +469,32 @@ func unmarshalExtensions(data []byte) ([]Extension, error) {
 // EncryptGroupInfo encrypts a GroupInfo for inclusion in a Welcome message
 // as specified in RFC 9420 §11.2.2.
 //
-// The encryption uses AES-128-GCM with the provided welcome_key and welcome_nonce,
-// which are derived from the welcome_secret using HKDF-Expand-Label:
-//   - welcome_key = HKDF-Expand-Label(welcome_secret, "welcome", 16)
-//   - welcome_nonce = HKDF-Expand-Label(welcome_secret, "nonce", 12)
+// The AEAD algorithm is selected based on cs (AES-128-GCM for CS1/CS2,
+// ChaCha20-Poly1305 for CS3). welcome_key and welcome_nonce must be derived
+// from welcome_secret using HKDF-Expand-Label:
+//   - welcome_key = HKDF-Expand-Label(welcome_secret, "key", "", AEAD.Nk)
+//   - welcome_nonce = HKDF-Expand-Label(welcome_secret, "nonce", "", AEAD.Nn)
 //
 // The GroupInfo is serialized and encrypted with no associated data (AAD).
-func EncryptGroupInfo(groupInfo *GroupInfo, welcomeKey, welcomeNonce []byte) ([]byte, error) {
+func EncryptGroupInfo(groupInfo *GroupInfo, welcomeKey, welcomeNonce []byte, cs ciphersuite.CipherSuite) ([]byte, error) {
 	groupInfoBytes := groupInfo.Marshal()
-
-	block, err := aes.NewCipher(welcomeKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("creating GCM: %w", err)
-	}
-
-	ciphertext := gcm.Seal(nil, welcomeNonce, groupInfoBytes, []byte{})
-	return ciphertext, nil
+	return ciphersuite.EncryptWithCipherSuite(welcomeKey, welcomeNonce, groupInfoBytes, []byte{}, cs)
 }
 
 // DecryptGroupInfo decrypts a GroupInfo from a Welcome message.
 //
 // This function reverses the encryption performed by EncryptGroupInfo,
 // using the same welcome_key and welcome_nonce derived from welcome_secret.
+// The AEAD algorithm is selected based on cs.
 //
 // Returns an error if decryption fails (e.g., wrong key, tampered ciphertext)
 // or if the decrypted data cannot be parsed as a valid GroupInfo.
-func DecryptGroupInfo(encryptedGroupInfo, welcomeKey, welcomeNonce []byte) (*GroupInfo, error) {
+func DecryptGroupInfo(encryptedGroupInfo, welcomeKey, welcomeNonce []byte, cs ciphersuite.CipherSuite) (*GroupInfo, error) {
 	if len(encryptedGroupInfo) < 16 {
 		return nil, errors.New("encrypted group info too short")
 	}
 
-	block, err := aes.NewCipher(welcomeKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("creating GCM: %w", err)
-	}
-
-	plaintext, err := gcm.Open(nil, welcomeNonce, encryptedGroupInfo, []byte{})
+	plaintext, err := ciphersuite.DecryptWithCipherSuite(welcomeKey, welcomeNonce, encryptedGroupInfo, []byte{}, cs)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting: %w", err)
 	}
