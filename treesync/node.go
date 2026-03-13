@@ -33,13 +33,13 @@ func (l *LeafNodeData) Marshal() []byte {
 func (l *LeafNodeData) MarshalTBS() []byte {
 	buf := tls.NewWriter()
 
-	// 1. HPKEPublicKey encryption_key<V>
+	// HPKEPublicKey encryption_key<V>
 	buf.WriteVLBytes(l.EncryptionKey)
 
-	// 2. SignaturePublicKey signature_key<V>
+	// SignaturePublicKey signature_key<V>
 	buf.WriteVLBytes(l.marshalSignatureKey())
 
-	// 3. Credential credential (inline struct, no outer VL wrapper)
+	// Credential credential (inline struct, no outer VL wrapper)
 	// RFC 9420 §5.3: credential_type (uint16) + body. Type 0 is a nil placeholder.
 	if l.Credential != nil {
 		buf.WriteRaw(l.Credential.Marshal())
@@ -48,17 +48,17 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 		buf.WriteVLBytes(nil) // empty body
 	}
 
-	// 4. Capabilities capabilities (inline struct, each field is VL-prefixed internally)
+	// Capabilities capabilities (inline struct, each field is VL-prefixed internally)
 	caps := l.Capabilities
 	if caps == nil {
 		caps = &LeafNodeCapabilities{}
 	}
 	caps.Marshal(buf)
 
-	// 5. LeafNodeSource leaf_node_source
+	// LeafNodeSource leaf_node_source
 	buf.WriteUint8(l.LeafNodeSource)
 
-	// 6. Conditional on source (RFC 9420 §7.2)
+	// Conditional on source (RFC 9420 §7.2)
 	switch l.LeafNodeSource {
 	case 1: // key_package: Lifetime { not_before, not_after }
 		if l.Lifetime != nil {
@@ -82,7 +82,7 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 		}
 	}
 
-	// 7. Extension extensions<V>
+	// Extension extensions<V>
 	extBuf := tls.NewWriter()
 	for _, extData := range l.Extensions {
 		extBuf.WriteRaw(extData)
@@ -138,13 +138,13 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	l := &LeafNodeData{}
 	var err error
 
-	// 1. encryption_key<V>
+	// encryption_key<V>
 	l.EncryptionKey, err = r.ReadVLBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. signature_key<V>
+	// signature_key<V>
 	sigKeyBytes, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -160,25 +160,25 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	}
 
-	// 3. Credential (inline struct)
+	// Credential (inline struct)
 	l.Credential, err = credentials.UnmarshalCredentialFromReader(r)
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Capabilities (inline struct)
+	// Capabilities (inline struct)
 	l.Capabilities, err = UnmarshalCapabilities(r)
 	if err != nil {
 		return nil, err
 	}
 
-	// 5. leaf_node_source
+	// leaf_node_source
 	l.LeafNodeSource, err = r.ReadUint8()
 	if err != nil {
 		return nil, err
 	}
 
-	// 6. Conditional on source
+	// Conditional on source
 	switch l.LeafNodeSource {
 	case 1: // key_package: Lifetime
 		nb, err := r.ReadUint64()
@@ -209,7 +209,7 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.Lifetime = &LeafNodeLifetime{NotBefore: nb, NotAfter: na}
 	}
 
-	// 7. extensions<V>: VL-prefixed vector of Extension structs (RFC 9420 §7.2).
+	// extensions<V>: VL-prefixed vector of Extension structs (RFC 9420 §7.2).
 	// Each Extension encodes as: extension_type(u16) || extension_data<V>.
 	// Parse into separate raw-encoded entries so callers can look up by type.
 	extsData, err := r.ReadVLBytes()
@@ -233,7 +233,7 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 		l.Extensions = append(l.Extensions, extBuf.Bytes())
 	}
 
-	// 8. signature<V>
+	// signature<V>
 	l.Signature, err = r.ReadVLBytes()
 	if err != nil {
 		return nil, err
