@@ -347,9 +347,10 @@ func TestTranscriptHashes(t *testing.T) {
 
 func TestPSKCombination(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
+	nonce := bytes.Repeat([]byte{0xAB}, 32) // KDF.Nh = 32 for CS2
 	psks := []Psk{
-		{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")},
-		{PskType: PskTypeExternal, PskID: []byte("psk2"), Psk: []byte("secret2")},
+		{PskType: PskTypeExternal, PskID: []byte("psk1"), PskNonce: nonce, Psk: []byte("secret1")},
+		{PskType: PskTypeExternal, PskID: []byte("psk2"), PskNonce: nonce, Psk: []byte("secret2")},
 	}
 
 	pskInput, err := ComputePskInput(psks, cs)
@@ -361,7 +362,7 @@ func TestPSKCombination(t *testing.T) {
 	}
 
 	// Single PSK → hash-length output
-	single := []Psk{{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")}}
+	single := []Psk{{PskType: PskTypeExternal, PskID: []byte("psk1"), PskNonce: nonce, Psk: []byte("secret1")}}
 	singleInput, err := ComputePskInput(single, cs)
 	if err != nil {
 		t.Fatalf("ComputePskInput (single): %v", err)
@@ -391,9 +392,10 @@ func TestComputePskSecret_WithPSKs(t *testing.T) {
 	}
 
 	// PSKs externas
+	nonce := bytes.Repeat([]byte{0xAB}, 32) // KDF.Nh = 32 for CS2
 	psks := []Psk{
-		{PskType: PskTypeExternal, PskID: []byte("psk1"), Psk: []byte("secret1")},
-		{PskType: PskTypeExternal, PskID: []byte("psk2"), Psk: []byte("secret2")},
+		{PskType: PskTypeExternal, PskID: []byte("psk1"), PskNonce: nonce, Psk: []byte("secret1")},
+		{PskType: PskTypeExternal, PskID: []byte("psk2"), PskNonce: nonce, Psk: []byte("secret2")},
 	}
 
 	// ComputePskSecret con PSKs
@@ -432,6 +434,7 @@ func TestPskInput_ResumptionType(t *testing.T) {
 		{
 			PskType:    PskTypeResumption,
 			PskID:      []byte("resumption-psk-id"),
+			PskNonce:   bytes.Repeat([]byte{0xAB}, 32), // KDF.Nh = 32 for CS2
 			Psk:        []byte("resumption-secret"),
 			Usage:      0x01, // ResumptionPskUsageReinit
 			PskGroupID: []byte("test-group"),
@@ -454,12 +457,15 @@ func TestPskInput_ResumptionType(t *testing.T) {
 func TestPskMarshal_Roundtrip(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 
+	nonce := bytes.Repeat([]byte{0xAB}, 32) // KDF.Nh = 32 for CS2
+
 	// PSK externa
 	psks := []Psk{
 		{
-			PskType: PskTypeExternal,
-			PskID:   []byte("external-psk-id"),
-			Psk:     []byte("external-secret"),
+			PskType:  PskTypeExternal,
+			PskID:    []byte("external-psk-id"),
+			PskNonce: nonce,
+			Psk:      []byte("external-secret"),
 		},
 	}
 
@@ -477,6 +483,7 @@ func TestPskMarshal_Roundtrip(t *testing.T) {
 		{
 			PskType:    PskTypeResumption,
 			PskID:      []byte("resumption-id"),
+			PskNonce:   nonce,
 			Psk:        []byte("resumption-secret"),
 			Usage:      0x01,
 			PskGroupID: []byte("group-123"),
