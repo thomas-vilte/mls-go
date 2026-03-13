@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.3.0] - 2026-03-13
+
+[v0.3.0]: https://github.com/thomas-vilte/mls-go/compare/v0.2.0...v0.3.0
+
+We have achieved significant alignment with the RFC 9420 standard, introducing comprehensive validation rules and multi-suite cryptographic support. This update also strengthens the library's reliability through advanced testing methodologies and refined error handling.
+
+### 🛡️ RFC 9420 Compliance & Security
+
+- Enforced strict psk_nonce requirements and sender/content-type rules as per RFC 9420.
+- Implemented distinct HPKE keys and LeafNode TBS context to ensure protocol integrity.
+- Enhanced proposal and capability validation to strictly follow RFC compliance standards.
+- Added EpochAuthenticator and improved signature verification for group messages.
+
+### 🔐 Cryptographic Enhancements
+
+- Added support for multiple ciphersuites, including Ed25519 and ChaCha20Poly1305.
+- Integrated native Go crypto/hpke for Ciphersuite 1 and 3 implementations.
+- Standardized ECDSA signature and public key encoding to match RFC specifications.
+- Transitioned to ciphersuite-agnostic hash references across all cryptographic modules.
+
+### ⚙️ Group & State Management
+
+- Implemented resumption PSKs and logic for handling unmerged leaves in the group state.
+- Refined commit processing and update path logic to align with the latest protocol requirements.
+- Improved secret hygiene and secret tree management for better security and performance.
+
+### 🛠️ Developer Experience & Testing
+
+- Introduced property-based testing for framing and tree synchronization to catch edge cases.
+- Added fuzzing and benchmarking workflows to ensure long-term stability and performance.
+- Enhanced API documentation and added context support for better integration flexibility.
+- Adopted typed errors to provide more semantic and actionable error handling for developers.
+
+### 🩹 Bug Fixes & Stability
+
+- Fixed TreeKEM interoperability issues by correctly accumulating path secrets during tests.
+- Adjusted Welcome message processing to ensure compatibility across different ciphersuites.
+- Improved the robustness of external sender unmarshalling and extension parsing.
+
+### ⚠️ Breaking Changes
+
+- Refactored core operations to be ciphersuite-agnostic, which may require updates to custom implementations.
+- Introduced typed errors for more granular error handling, replacing some generic error returns.
+- Updated signature validation and public key encoding to strictly follow RFC 9420, which may affect interoperability with non-compliant implementations.
+
 ## [v0.2.0] - 2026-03-09
 
 [v0.2.0]: https://github.com/thomas-vilte/mls-go/compare/v0.1.0...v0.2.0
