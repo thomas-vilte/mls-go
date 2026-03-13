@@ -155,6 +155,10 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 		if p.Content.Sender.Type != SenderTypeMember {
 			return nil, fmt.Errorf("%w: PrivateMessage sender must be member", ErrInvalidMessage)
 		}
+		// RFC §6.1: GroupContext required for member senders
+		if len(p.GroupContext) == 0 {
+			return nil, fmt.Errorf("%w: required for member sender in PrivateMessage", ErrMissingGroupContext)
+		}
 
 		ac = &AuthenticatedContent{
 			WireFormat:   WireFormatPrivateMessage,

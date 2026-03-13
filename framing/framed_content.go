@@ -85,6 +85,31 @@ func (fc *FramedContent) Marshal() []byte {
 	return w.Bytes()
 }
 
+// validateSenderContentType enforces RFC §6.1 sender/content-type compatibility.
+//
+// Restrictions:
+//   - external → proposal only
+//   - new_member_commit → commit only
+//   - new_member_proposal → proposal only
+//   - member → unrestricted
+func validateSenderContentType(st SenderType, ct ContentType) error {
+	switch st {
+	case SenderTypeExternal:
+		if ct != ContentTypeProposal {
+			return fmt.Errorf("%w: external sender must send proposals, got content_type %d", ErrInvalidContentType, ct)
+		}
+	case SenderTypeNewMemberCommit:
+		if ct != ContentTypeCommit {
+			return fmt.Errorf("%w: new_member_commit sender must send commits, got content_type %d", ErrInvalidContentType, ct)
+		}
+	case SenderTypeNewMemberProposal:
+		if ct != ContentTypeProposal {
+			return fmt.Errorf("%w: new_member_proposal sender must send proposals, got content_type %d", ErrInvalidContentType, ct)
+		}
+	}
+	return nil
+}
+
 // UnmarshalFramedContent parses bytes into a FramedContent.
 func UnmarshalFramedContent(data []byte) (*FramedContent, error) {
 	r := tls.NewReader(data)
