@@ -1,7 +1,36 @@
-// Package ciphersuite - HPKE operations for MLS (RFC 9420 §5.1.3, RFC 9180)
+// Package ciphersuite implements HPKE operations for MLS per RFC 9420 §5.1.3 and RFC 9180.
 //
-// Implementación nativa usando crypto/hpke de Go 1.26.
-// Sigue RFC 9180 (HPKE) y RFC 9420 (MLS) al pie de la letra.
+// This package provides native HPKE (Hybrid Public Key Encryption) operations
+// using Go 1.26's crypto/hpke package. It implements RFC 9180 (HPKE) and
+// RFC 9420 (MLS) specifications for encrypted key encapsulation.
+//
+// # HPKE in MLS
+//
+// HPKE is used throughout MLS for:
+//   - Welcome messages: Encrypt group secrets to new members (§11.2.2)
+//   - UpdatePath: Encrypt path secrets in commits (§12.4.3.1)
+//   - External senders: Encrypt to external sender keys (§8.3)
+//
+// # Domain Separation (RFC 9420 §5.1.3)
+//
+// All HPKE operations use the "MLS 1.0 " prefix to prevent cross-protocol attacks:
+//
+//	info = Serialize(VL("MLS 1.0 " + label) || VL(context))
+//
+// This ensures that keys derived for MLS cannot be reused in other protocols
+// even if the same underlying keys are used.
+//
+// # Supported Cipher Suites
+//
+//   - MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (0x0002) - Mandatory for MLS 1.0
+//   - MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (0x0001)
+//   - MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 (0x0003)
+//
+// # References
+//
+//   - RFC 9180: Hybrid Public Key Encryption (HPKE)
+//   - RFC 9420 §5.1.3: Public Key Encryption
+//   - RFC 9420 §11.2.2: Welcome Messages
 package ciphersuite
 
 import (
@@ -32,21 +61,55 @@ func EncryptWithLabel(
 	label string,
 	context []byte,
 	plaintext []byte,
-	ciphersuite CipherSuite,
+	cs CipherSuite,
 ) (*HpkeCiphertext, error) {
-	switch ciphersuite {
-	case MLS128DHKEMX25519:
-		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.AES128GCM())
-	case MLS128DHKEMX25519ChaCha20:
-		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.X25519(), hpke.ChaCha20Poly1305())
-	case MLS128DHKEMP256:
-		return encryptWithLabelNative(publicKey, label, context, plaintext, ecdh.P256(), hpke.AES128GCM())
-	default:
-		return nil, fmt.Errorf("unsupported cipher suite: %d", ciphersuite)
+	curve := cs.Curve()
+	if curve == nil {
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
+	aead, err := hpkeAEAD(cs)
+	if err != nil {
+		return nil, err
+	}
+	return encryptWithLabelNative(publicKey, label, context, plaintext, curve, aead)
 }
 
 // encryptWithLabelNative is the native implementation using crypto/hpke.
+//
+// This function implements RFC 9180 §4.1 (HPKE Base Mode) with MLS-specific
+// labeling per RFC 9420 §5.1.3.
+//
+// HPKE Encryption Flow:
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│                    HPKE Encryption                               │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│                                                                 │
+//	│  Sender                          Receiver                       │
+//	│    │                              │                              │
+//	│    │  pkR (public key)            │                              │
+//	│    │◄─────────────────────────────│                              │
+//	│    │                              │                              │
+//	│    │  [enc, shared_secret]        │                              │
+//	│    │  = Encapsulate(pkR)          │                              │
+//	│    │                              │                              │
+//	│    │  info = "MLS 1.0 " + label   │                              │
+//	│    │  Context = Hash(context)     │                              │
+//	│    │                              │                              │
+//	│    │  DeriveKeyingMaterial(...)   │                              │
+//	│    │                              │                              │
+//	│    │  ciphertext = AEAD.Seal(...) │                              │
+//	│    │──────────────────────────────►│                              │
+//	│    │                              │                              │
+//	│    │                   shared_secret = Decapsulate(skR, enc)     │
+//	│    │                   DeriveKeyingMaterial(...)                 │
+//	│    │                   plaintext = AEAD.Open(...)                │
+//	│                                                                 │
+//	└─────────────────────────────────────────────────────────────────┘
+//
+// KEM Output Lengths:
+//   - X25519: 32 bytes
+//   - P-256: 65 bytes (uncompressed point: 0x04 || X || Y)
 func encryptWithLabelNative(
 	publicKey []byte,
 	label string,
@@ -55,12 +118,12 @@ func encryptWithLabelNative(
 	curve ecdh.Curve,
 	aead hpke.AEAD,
 ) (*HpkeCiphertext, error) {
-	// Construir info = Serialize(VL("MLS 1.0 " + label) || VL(context))
-	// Según RFC 9420 §5.1.3, ambos campos llevan length prefix
+	// Build info = Serialize(VL("MLS 1.0 " + label) || VL(context))
+	// Per RFC 9420 §5.1.3, both fields are length-prefixed
 	encContext := NewEncryptContext(label, context)
 	info := encContext.Marshal()
 
-	// Parsear public key
+	// Parse public key
 	pubKey, err := curve.NewPublicKey(publicKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing public key: %w", err)
@@ -70,18 +133,18 @@ func encryptWithLabelNative(
 		return nil, fmt.Errorf("creating HPKE public key: %w", err)
 	}
 
-	// Encrypt usando HPKE Seal (RFC 9180 §4.1)
-	// Seal retorna enc || ciphertext concatenado
+	// Encrypt using HPKE Seal (RFC 9180 §4.1)
+	// Seal returns enc || ciphertext concatenated
 	encapsulatedAndCt, err := hpke.Seal(pk, hpke.HKDFSHA256(), aead, info, plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("HPKE seal: %w", err)
 	}
 
-	// Separar KEM output del ciphertext
-	// El largo del KEM output depende de la curva:
+	// Separate KEM output from ciphertext
+	// KEM output length depends on the curve:
 	// - X25519: 32 bytes
-	// - P256: 65 bytes (punto sin comprimir: 0x04 + 32 + 32)
-	kemOutputLen := len(publicKey) // Mismo largo que la public key
+	// - P-256: 65 bytes (uncompressed point: 0x04 || X || Y)
+	kemOutputLen := len(publicKey) // Same length as the public key
 	if len(encapsulatedAndCt) < kemOutputLen {
 		return nil, fmt.Errorf("HPKE output too short: %d bytes", len(encapsulatedAndCt))
 	}
@@ -110,21 +173,48 @@ func DecryptWithLabel(
 	label string,
 	context []byte,
 	ciphertext *HpkeCiphertext,
-	ciphersuite CipherSuite,
+	cs CipherSuite,
 ) ([]byte, error) {
-	switch ciphersuite {
-	case MLS128DHKEMX25519:
-		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.AES128GCM())
-	case MLS128DHKEMX25519ChaCha20:
-		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.X25519(), hpke.ChaCha20Poly1305())
-	case MLS128DHKEMP256:
-		return decryptWithLabelNative(privateKey, label, context, ciphertext, ecdh.P256(), hpke.AES128GCM())
-	default:
-		return nil, fmt.Errorf("unsupported cipher suite: %d", ciphersuite)
+	curve := cs.Curve()
+	if curve == nil {
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
+	aead, err := hpkeAEAD(cs)
+	if err != nil {
+		return nil, err
+	}
+	return decryptWithLabelNative(privateKey, label, context, ciphertext, curve, aead)
 }
 
 // decryptWithLabelNative is the native implementation using crypto/hpke.
+//
+// This function implements RFC 9180 §4.1 (HPKE Base Mode) decryption with
+// MLS-specific labeling per RFC 9420 §5.1.3.
+//
+// HPKE Decryption Flow:
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│                    HPKE Decryption                               │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│                                                                 │
+//	│  Receive: enc || ciphertext                                     │
+//	│    │                                                            │
+//	│    │  skR (private key)                                         │
+//	│    │                                                            │
+//	│    │  shared_secret = Decapsulate(skR, enc)                     │
+//	│    │                                                            │
+//	│    │  info = "MLS 1.0 " + label                                 │
+//	│    │  Context = Hash(context)                                   │
+//	│    │                                                            │
+//	│    │  DeriveKeyingMaterial(...)                                 │
+//	│    │                                                            │
+//	│    │  plaintext = AEAD.Open(...)                                │
+//	│                                                                 │
+//	└─────────────────────────────────────────────────────────────────┘
+//
+// Returns:
+//   - Decrypted plaintext
+//   - Error if decapsulation fails, AEAD open fails, or key parsing fails
 func decryptWithLabelNative(
 	privateKey []byte,
 	label string,
@@ -133,12 +223,12 @@ func decryptWithLabelNative(
 	curve ecdh.Curve,
 	aead hpke.AEAD,
 ) ([]byte, error) {
-	// Construir info = Serialize(VL("MLS 1.0 " + label) || VL(context))
-	// Según RFC 9420 §5.1.3, ambos campos llevan length prefix
+	// Build info = Serialize(VL("MLS 1.0 " + label) || VL(context))
+	// Per RFC 9420 §5.1.3, both fields are length-prefixed
 	encContext := NewEncryptContext(label, context)
 	info := encContext.Marshal()
 
-	// Parsear private key
+	// Parse private key
 	privKey, err := curve.NewPrivateKey(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
@@ -148,12 +238,12 @@ func decryptWithLabelNative(
 		return nil, fmt.Errorf("creating HPKE private key: %w", err)
 	}
 
-	// Concat KEM output and ciphertext for HPKE Open
+	// Concatenate KEM output and ciphertext for HPKE Open
 	encapsulatedAndCt := make([]byte, 0, len(ciphertext.KEMOutput)+len(ciphertext.Ciphertext))
 	encapsulatedAndCt = append(encapsulatedAndCt, ciphertext.KEMOutput...)
 	encapsulatedAndCt = append(encapsulatedAndCt, ciphertext.Ciphertext...)
 
-	// Decrypt usando HPKE Open (RFC 9180 §4.1)
+	// Decrypt using HPKE Open (RFC 9180 §4.1)
 	plaintext, err := hpke.Open(sk, hpke.HKDFSHA256(), aead, info, encapsulatedAndCt)
 	if err != nil {
 		return nil, fmt.Errorf("HPKE open: %w", err)
@@ -173,33 +263,34 @@ func decryptWithLabelNative(
 //
 // See also: RFC 9420 §5.1.3 for HPKE usage in MLS
 func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
-	var kem hpke.KEM
-	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
-		kem = hpke.DHKEM(ecdh.X25519())
-	case MLS128DHKEMP256:
-		kem = hpke.DHKEM(ecdh.P256())
-	default:
-		return nil, fmt.Errorf("unsupported cipher suite: %d", cs)
+	curve := cs.Curve()
+	if curve == nil {
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
 
+	kem := hpke.DHKEM(curve)
 	privKey, err := kem.DeriveKeyPair(ikm)
 	if err != nil {
 		return nil, fmt.Errorf("DeriveKeyPair: %w", err)
 	}
 
-	// hpke.PrivateKey → *ecdh.PrivateKey via bytes round-trip
+	// hpke.PrivateKey → *ecdh.PrivateKey via bytes round-trip.
 	privBytes, err := privKey.Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("DeriveKeyPair marshal: %w", err)
 	}
-	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
-		return ecdh.X25519().NewPrivateKey(privBytes)
-	case MLS128DHKEMP256:
-		return ecdh.P256().NewPrivateKey(privBytes)
+	return curve.NewPrivateKey(privBytes)
+}
+
+// hpkeAEAD returns the crypto/hpke AEAD algorithm for the cipher suite (RFC 9420 §5.1.3).
+func hpkeAEAD(cs CipherSuite) (hpke.AEAD, error) {
+	switch cs.AeadAlgorithm() {
+	case AES128GCM:
+		return hpke.AES128GCM(), nil
+	case ChaCha20Poly1305:
+		return hpke.ChaCha20Poly1305(), nil
 	default:
-		return nil, fmt.Errorf("unsupported cipher suite: %d", cs)
+		return nil, fmt.Errorf("%w: no HPKE AEAD for cipher suite %d", ErrUnsupportedSuite, cs)
 	}
 }
 

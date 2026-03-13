@@ -1,7 +1,7 @@
 package treesync
 
 import (
-	"crypto/sha256"
+	"hash"
 
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -17,6 +17,7 @@ func ComputeParentHash(
 	publicKey []byte,
 	parentHash []byte,
 	originalSiblingTreeHash []byte,
+	hashFunc func() hash.Hash,
 ) []byte {
 	buf := tls.NewWriter()
 
@@ -24,8 +25,9 @@ func ComputeParentHash(
 	buf.WriteVLBytes(parentHash)
 	buf.WriteVLBytes(originalSiblingTreeHash)
 
-	hash := sha256.Sum256(buf.Bytes())
-	return hash[:]
+	h := hashFunc()
+	h.Write(buf.Bytes())
+	return h.Sum(nil)
 }
 
 // ComputeLeafNodeHash computes the hash of a leaf node (RFC 9420 §7.8).
@@ -34,7 +36,7 @@ func ComputeParentHash(
 //	    uint32 leaf_index;
 //	    optional<LeafNode> leaf_node;
 //	} LeafNodeHashInput;
-func ComputeLeafNodeHash(leafIndex LeafIndex, leafData *LeafNodeData) []byte {
+func ComputeLeafNodeHash(leafIndex LeafIndex, leafData *LeafNodeData, hashFunc func() hash.Hash) []byte {
 	buf := tls.NewWriter()
 	buf.WriteUint8(nodeTypeLeaf)
 
@@ -47,6 +49,7 @@ func ComputeLeafNodeHash(leafIndex LeafIndex, leafData *LeafNodeData) []byte {
 		buf.WriteUint8(0) // not present
 	}
 
-	hash := sha256.Sum256(buf.Bytes())
-	return hash[:]
+	h := hashFunc()
+	h.Write(buf.Bytes())
+	return h.Sum(nil)
 }

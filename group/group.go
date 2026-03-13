@@ -13,13 +13,13 @@ package group
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
 	"sort"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/keypackages"
@@ -112,7 +112,7 @@ func NewGroup(
 	privKeys *keypackages.KeyPackagePrivateKeys,
 ) (*Group, error) {
 	// Create ratchet tree with 1 leaf
-	ratchetTree := treesync.NewRatchetTree(1)
+	ratchetTree := treesync.NewRatchetTree(1, cipherSuite)
 
 	// Add our leaf
 	leafData := treesync.LeafNodeData{
@@ -561,7 +561,7 @@ func (g *Group) createUpdatePath(
 		pubKeys[m] = privKey.PublicKey().Bytes()
 
 		nodeIdx := directPath[level+1]
-		tree.Nodes[nodeIdx].EncryptionKey, _ = ecdh.P256().NewPublicKey(pubKeys[m])
+		tree.Nodes[nodeIdx].EncryptionKey, _ = g.CipherSuite.Curve().NewPublicKey(pubKeys[m])
 		tree.Nodes[nodeIdx].State = treesync.NodeStatePresent
 		tree.Nodes[nodeIdx].UnmergedLeaves = nil
 	}
@@ -582,7 +582,7 @@ func (g *Group) createUpdatePath(
 			}
 			siblingIdx := tree.GetSibling(nodeIdx)
 			siblingHash := tree.HashNode(siblingIdx)
-			ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+			ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash, g.CipherSuite.HashFunction())
 		} else {
 			ph = parent.ParentHash
 		}
@@ -706,7 +706,7 @@ func (g *Group) createUpdatePath(
 // 3. Apply UpdatePath encryption keys at filtered levels
 // 4. Recompute parent_hash fields
 // The returned tree is a clone — the input tree is not modified.
-func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, path *UpdatePath, excluded map[treesync.LeafIndex]bool) *treesync.RatchetTree {
+func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, path *UpdatePath, excluded map[treesync.LeafIndex]bool, cs ciphersuite.CipherSuite) *treesync.RatchetTree {
 	provTree := tree.Clone()
 
 	if path.LeafNode != nil {
@@ -728,7 +728,7 @@ func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Lea
 		dpNodeIdx := provDP[level+1]
 		encKeyBytes := path.Nodes[m].EncryptionKey
 		if len(encKeyBytes) > 0 {
-			if pubKey, err := ecdh.P256().NewPublicKey(encKeyBytes); err == nil {
+			if pubKey, err := cs.Curve().NewPublicKey(encKeyBytes); err == nil {
 				provTree.Nodes[dpNodeIdx].EncryptionKey = pubKey
 				provTree.Nodes[dpNodeIdx].State = treesync.NodeStatePresent
 				provTree.Nodes[dpNodeIdx].UnmergedLeaves = nil
@@ -752,7 +752,7 @@ func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Lea
 				}
 				siblingIdx := provTree.GetSibling(childIdx)
 				siblingHash := provTree.HashNode(siblingIdx)
-				parentHash = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+				parentHash = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash, cs.HashFunction())
 			} else {
 				parentHash = parent.ParentHash
 			}
@@ -942,14 +942,14 @@ func (g *Group) ProcessReceivedCommit(
 		}
 		extLeafIdx, _ := treeAfterProposals.AddLeaf(*commit.Path.LeafNode)
 		senderLeafIdx = extLeafIdx
-		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded)
+		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded, g.CipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, myHpkePrivKeyBytes, provGCBytes, excluded)
 		if err != nil {
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
-		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded)
+		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded, g.CipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, myHpkePrivKeyBytes, provGCBytes, excluded)
 		if err != nil {
@@ -1199,7 +1199,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			nodeIdx := mergeDP[level+1]
 			updateNode := stagedCommit.Commit.Path.Nodes[m]
 			node := &g.RatchetTree.Nodes[nodeIdx]
-			node.EncryptionKey, _ = ecdh.P256().NewPublicKey(updateNode.EncryptionKey)
+			node.EncryptionKey, _ = g.CipherSuite.Curve().NewPublicKey(updateNode.EncryptionKey)
 			node.State = treesync.NodeStatePresent
 			node.UnmergedLeaves = nil
 		}
@@ -1226,7 +1226,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 					}
 					siblingIdx := g.RatchetTree.GetSibling(nodeIdx)
 					siblingHash := g.RatchetTree.HashNode(siblingIdx)
-					ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash)
+					ph = treesync.ComputeParentHash(parentKey, parent.ParentHash, siblingHash, g.CipherSuite.HashFunction())
 				} else {
 					ph = parent.ParentHash
 				}
@@ -1572,8 +1572,9 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 	}
 
 	// RFC 9420 §12.4: ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent))
+	// WireFormat must match how the proposal was sent (Public or Private).
 	acForRef := &framing.AuthenticatedContent{
-		WireFormat: framing.WireFormatPrivateMessage,
+		WireFormat: ac.WireFormat,
 		Content:    ac.Content,
 		Auth:       ac.Auth,
 	}
@@ -1768,7 +1769,7 @@ func NewGroupFromReInit(
 	}
 
 	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
-	ratchetTree := treesync.NewRatchetTree(1)
+	ratchetTree := treesync.NewRatchetTree(1, cs)
 	leafData := treesync.LeafNodeData{
 		EncryptionKey:   myKP.LeafNode.EncryptionKey, // RFC §10.1: use LeafNode.encryption_key for TreeKEM
 		SignatureKey:    myKP.LeafNode.SignatureKey,
@@ -1887,13 +1888,13 @@ func (g *Group) buildSignedGroupInfo(
 		RatchetTree:     g.RatchetTree,
 	}
 
-	// ratchet_tree 0x0002
+	// ratchet_tree extension (RFC 9420 §11.2.2)
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: 0x0002,
+		Type: uint16(mlsext.ExtensionTypeRatchetTree),
 		Data: g.RatchetTree.MarshalTree(),
 	})
 
-	// external_pub 0x0001
+	// external_pub extension (RFC 9420 §11.2.4)
 	externalPriv, err := ciphersuite.DeriveKeyPair(
 		g.CipherSuite,
 		g.EpochSecrets.ExternalSecret.AsSlice(),
@@ -1902,7 +1903,7 @@ func (g *Group) buildSignedGroupInfo(
 		return nil, fmt.Errorf("deriving external key pair: %w", err)
 	}
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: 0x0001,
+		Type: uint16(mlsext.ExtensionTypeExternalPub),
 		Data: externalPriv.PublicKey().Bytes(),
 	})
 
@@ -2041,7 +2042,7 @@ func treeSyncToKeyPackageCapabilities(caps *treesync.LeafNodeCapabilities) *keyp
 
 	cipherSuites := make([]keypackages.CipherSuite, len(caps.CipherSuites))
 	for i, cs := range caps.CipherSuites {
-		cipherSuites[i] = keypackages.CipherSuite(cs)
+		cipherSuites[i] = ciphersuite.CipherSuite(cs)
 	}
 
 	return &keypackages.Capabilities{

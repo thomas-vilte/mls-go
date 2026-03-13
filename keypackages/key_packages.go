@@ -19,16 +19,16 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// CipherSuite represents an MLS cipher suite.
-type CipherSuite uint16
+// CipherSuite is an alias for ciphersuite.CipherSuite.
+// Using a type alias (=) instead of a distinct type eliminates the need for
+// explicit casts between keypackages.CipherSuite and ciphersuite.CipherSuite.
+type CipherSuite = ciphersuite.CipherSuite
 
+// Re-export cipher suite constants for convenience.
 const (
-	// MLS128DHKEMX25519 is cipher suite 1: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
-	MLS128DHKEMX25519 CipherSuite = 0x0001
-	// MLS128DHKEMP256 is cipher suite 2: MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (baseline for MLS 1.0)
-	MLS128DHKEMP256 CipherSuite = 0x0002
-	// MLS128DHKEMX25519ChaCha20 is cipher suite 3: MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
-	MLS128DHKEMX25519ChaCha20 CipherSuite = 0x0003
+	MLS128DHKEMX25519         = ciphersuite.MLS128DHKEMX25519
+	MLS128DHKEMP256           = ciphersuite.MLS128DHKEMP256
+	MLS128DHKEMX25519ChaCha20 = ciphersuite.MLS128DHKEMX25519ChaCha20
 )
 
 // ProtocolVersion represents the MLS protocol version.
@@ -98,7 +98,7 @@ type Extension struct {
 func DefaultCapabilities() *Capabilities {
 	return &Capabilities{
 		ProtocolVersions: []ProtocolVersion{MLS10},
-		CipherSuites:     []CipherSuite{MLS128DHKEMP256},
+		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20},
 		Extensions:       []uint16{},
 		Proposals:        []uint16{},
 		Credentials:      []uint16{0x0001}, // BasicCredential
@@ -219,30 +219,15 @@ func (k *KeyPackagePrivateKeys) GetSignaturePrivateKey() *ciphersuite.SignatureP
 	return ciphersuite.NewSignaturePrivateKey(k.SignatureKey)
 }
 
-// generateHPKEKeyPair generates a P-256 HPKE key pair.
-func generateHPKEKeyPair() (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
-	privKey, err := ecdh.P256().GenerateKey(rand.Reader)
+// generateHPKEKeyPairForCS generates an HPKE key pair for the given cipher suite.
+// CS1/CS3 use X25519; CS2 uses P-256.
+func generateHPKEKeyPairForCS(cs ciphersuite.CipherSuite) (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
+	privKey, err := cs.Curve().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
 	pubKey := privKey.PublicKey()
 	return privKey, pubKey, nil
-}
-
-// generateHPKEKeyPairForCS generates an HPKE key pair appropriate for the cipher suite.
-// CS1/CS3 use X25519; CS2 uses P-256.
-func generateHPKEKeyPairForCS(cs ciphersuite.CipherSuite) (*ecdh.PrivateKey, *ecdh.PublicKey, error) {
-	switch cs {
-	case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS128DHKEMX25519ChaCha20:
-		privKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, nil, err
-		}
-		pubKey := privKey.PublicKey()
-		return privKey, pubKey, nil
-	default: // CS2 P-256
-		return generateHPKEKeyPair()
-	}
 }
 
 // marshalTBS serializes the KeyPackage TBS (To Be Signed).
@@ -536,7 +521,10 @@ func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 		return nil, fmt.Errorf("reading signature_key: %w", err)
 	}
 	leafNode.SignatureKeyBytes = append([]byte(nil), sigKeyBytes...)
-	if len(sigKeyBytes) == 65 && sigKeyBytes[0] == 0x04 {
+	// Detect ECDSA P-256 keys by wire format: uncompressed SEC 1 point
+	// 0x04 || X || Y = 65 bytes (ciphersuite.P256UncompressedKeySize, RFC 5480 §2.2).
+	// Ed25519 keys are 32 bytes and never start with 0x04.
+	if len(sigKeyBytes) == ciphersuite.P256UncompressedKeySize && sigKeyBytes[0] == 0x04 {
 		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
 		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
 		leafNode.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}

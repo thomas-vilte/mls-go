@@ -96,14 +96,25 @@
 package ciphersuite
 
 import (
+	"crypto/ecdh"
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"hash"
 )
 
-// LabelPrefix is the prefix for all MLS 1.0 labels (RFC 9420 §8)
+// LabelPrefix is the prefix for all MLS 1.0 labels (RFC 9420 §8).
 const LabelPrefix = "MLS 1.0 "
+
+// Key size constants for signature public keys (RFC 9420 §5.1.2).
+const (
+	// P256UncompressedKeySize is the length of an uncompressed ECDSA P-256 public key
+	// in SEC 1 format: 0x04 || 32-byte X || 32-byte Y = 65 bytes (RFC 5480 §2.2).
+	P256UncompressedKeySize = 65
+
+	// Ed25519KeySize is the length of an Ed25519 public key (RFC 8410 §3).
+	Ed25519KeySize = 32
+)
 
 // CipherSuite represents an MLS ciphersuite identifier as defined in RFC 9420 §5.1.
 //
@@ -178,7 +189,19 @@ func (cs CipherSuite) AeadAlgorithm() AeadAlgorithm {
 	}
 }
 
-// SignatureScheme returns the signature scheme for the cipher suite.
+// Curve returns the ECDH curve for the cipher suite's KEM, or nil if unsupported.
+func (cs CipherSuite) Curve() ecdh.Curve {
+	switch cs {
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
+		return ecdh.X25519()
+	case MLS128DHKEMP256:
+		return ecdh.P256()
+	default:
+		return nil
+	}
+}
+
+// SignatureScheme returns the signature scheme for the cipher suite (RFC 9420 §5.1.2).
 func (cs CipherSuite) SignatureScheme() SignatureScheme {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
@@ -190,7 +213,25 @@ func (cs CipherSuite) SignatureScheme() SignatureScheme {
 	}
 }
 
-// HashLength returns the hash output length in bytes.
+// SignatureKeyLength returns the public signature key length in bytes (RFC 9420 §5.1.2).
+//
+// For ECDSA P-256: 65 bytes (uncompressed SEC 1 point: 0x04 || X || Y).
+// For Ed25519: 32 bytes (RFC 8410 §3).
+func (cs CipherSuite) SignatureKeyLength() int {
+	switch cs.SignatureScheme() {
+	case ECDSA_SECP256R1_SHA256:
+		return 65 // 0x04 + 32-byte X + 32-byte Y (SEC 1 uncompressed)
+	case ED25519:
+		return 32
+	default:
+		return 0
+	}
+}
+
+// HashLength returns the hash output length in bytes (Nh in RFC 9420 §5.1).
+//
+// CS1/CS2/CS3: 32 bytes (SHA-256).
+// CS4 would be 48 (SHA-384); CS5 would be 64 (SHA-512) — not yet implemented.
 func (cs CipherSuite) HashLength() int {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20, MLS128DHKEMP256:
@@ -350,6 +391,20 @@ func (s SignatureScheme) String() string {
 		return "ed25519"
 	default:
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(s))
+	}
+}
+
+// HashFunction returns the hash constructor used for pre-hashing in this signature scheme
+// (RFC 9420 §5.1.2). Returns nil for schemes that do not pre-hash (Ed25519).
+//
+// ECDSA-P256 pre-hashes with SHA-256 before signing (RFC 9420 §5.1.2 table).
+// Ed25519 does not pre-hash — the message is passed directly to the signing function.
+func (s SignatureScheme) HashFunction() func() hash.Hash {
+	switch s {
+	case ECDSA_SECP256R1_SHA256:
+		return sha256.New
+	default:
+		return nil // Ed25519 and unknown schemes: no pre-hashing
 	}
 }
 
