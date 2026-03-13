@@ -1,20 +1,22 @@
 package treesync
 
 import (
-	"crypto/ecdsa"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
+
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // ValidateLeafNodeSignature validates the signature on a LeafNode.
+// Uses the RFC 9420 §7.2 "LeafNodeTBS" label and the cipher suite's
+// signature scheme, supporting both ECDSA and Ed25519.
 func ValidateLeafNodeSignature(
 	leafData *LeafNodeData,
 	signature []byte,
+	cs ciphersuite.CipherSuite,
 ) error {
-	if leafData.SignatureKey == nil {
+	if leafData.SignatureKey == nil && len(leafData.SignatureKeyRaw) == 0 {
 		return errors.New("signature_key is nil")
 	}
 
@@ -22,21 +24,10 @@ func ValidateLeafNodeSignature(
 		return errors.New("signature is empty")
 	}
 
-	tbsBytes := leafData.MarshalTBS()
-	hash := sha256.Sum256(tbsBytes)
-
-	if len(signature) < 64 {
-		return errors.New("signature too short")
-	}
-
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-
-	if !ecdsa.Verify(leafData.SignatureKey, hash[:], r, s) {
-		return errors.New("signature verification failed")
-	}
-
-	return nil
+	tbs := leafData.MarshalTBSWithContext(nil, 0)
+	pubKeyBytes := leafData.SigKeyBytes()
+	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
+	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(signature))
 }
 
 // ValidateLeafNodeLifetime validates the lifetime of a LeafNode.
@@ -90,7 +81,7 @@ func ValidateLeafNodeCapabilities(caps *LeafNodeCapabilities) error {
 }
 
 // ValidateLeafNode performs comprehensive validation of a LeafNode.
-func ValidateLeafNode(leafData *LeafNodeData) error {
+func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error {
 	if leafData == nil {
 		return errors.New("leaf node is nil")
 	}
@@ -119,7 +110,7 @@ func ValidateLeafNode(leafData *LeafNodeData) error {
 		return fmt.Errorf("lifetime validation failed: %w", err)
 	}
 
-	if err := ValidateLeafNodeSignature(leafData, leafData.Signature); err != nil {
+	if err := ValidateLeafNodeSignature(leafData, leafData.Signature, cs); err != nil {
 		return fmt.Errorf("signature validation failed: %w", err)
 	}
 

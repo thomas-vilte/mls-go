@@ -70,6 +70,7 @@ type Tree struct {
 // The ratchet advances forward-only (generation increases monotonically).
 // To move to generation G, call ratchetTo(G) or use Advance() for sequential steps.
 type LeafSecret struct {
+	cs                       ciphersuite.CipherSuite
 	leafIndex                uint32
 	generation               uint64 // current ratchet generation (both ratchets stay in sync)
 	leafSecret               *ciphersuite.Secret
@@ -149,8 +150,6 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 		leafSecret = t.deriveLeafSecret(leafIndex)
 	}
 
-	nh := t.cs.HashLength()
-
 	// RFC 9420 §9, Figure 26: derive two ratchet roots from leaf_secret
 	handshakeRatchetSecret, err := leafSecret.DeriveSecret(t.cs, "handshake")
 	if err != nil {
@@ -164,6 +163,7 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 
 	// Advance both ratchets to the tree's current epoch generation.
 	ls := &LeafSecret{
+		cs:                       t.cs,
 		leafIndex:                leafIndex,
 		generation:               0,
 		leafSecret:               leafSecret,
@@ -174,7 +174,6 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 	if err := ls.ratchetTo(uint32(t.generation)); err != nil {
 		return nil, fmt.Errorf("advancing to epoch generation %d: %w", t.generation, err)
 	}
-	_ = nh // reserved for future use with multi-suite support
 	return ls, nil
 }
 
@@ -253,7 +252,7 @@ func prevPow2(n uint32) uint32 {
 // Returns an error if gen < current generation (can't go backwards).
 // This is a no-op if already at the target generation.
 func (ls *LeafSecret) ratchetTo(gen uint32) error {
-	nh := 32 // SHA-256 output length; matches KDF.Nh for CS=2
+	nh := ls.cs.HashLength()
 	for ls.generation < uint64(gen) {
 		g := uint32(ls.generation)
 		genBytes := uint32ToBytes(g)
@@ -262,12 +261,14 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 		if err != nil {
 			return fmt.Errorf("advance application ratchet (gen %d): %w", g, err)
 		}
+		ls.applicationRatchetSecret.SecureZero() // RFC §9.2: delete consumed secret
 		ls.applicationRatchetSecret = next
 
 		nextHs, err := ls.handshakeRatchetSecret.KdfExpandLabel("secret", genBytes, nh)
 		if err != nil {
 			return fmt.Errorf("advance handshake ratchet (gen %d): %w", g, err)
 		}
+		ls.handshakeRatchetSecret.SecureZero() // RFC §9.2: delete consumed secret
 		ls.handshakeRatchetSecret = nextHs
 
 		ls.generation++
@@ -320,7 +321,7 @@ func (ls *LeafSecret) ApplicationKey(generation uint32) ([]byte, error) {
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
-	key, err := ls.applicationRatchetSecret.KdfExpandLabel("key", uint32ToBytes(generation), 16)
+	key, err := ls.applicationRatchetSecret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AeadKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving application key: %w", err)
 	}
@@ -346,7 +347,7 @@ func (ls *LeafSecret) ApplicationNonce(generation uint32) ([]byte, error) {
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
-	nonce, err := ls.applicationRatchetSecret.KdfExpandLabel("nonce", uint32ToBytes(generation), 12)
+	nonce, err := ls.applicationRatchetSecret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AeadNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving application nonce: %w", err)
 	}
@@ -376,7 +377,7 @@ func (ls *LeafSecret) HandshakeKey(generation uint32) ([]byte, error) {
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
-	key, err := ls.handshakeRatchetSecret.KdfExpandLabel("key", uint32ToBytes(generation), 16)
+	key, err := ls.handshakeRatchetSecret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AeadKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving handshake key: %w", err)
 	}
@@ -402,7 +403,7 @@ func (ls *LeafSecret) HandshakeNonce(generation uint32) ([]byte, error) {
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
-	nonce, err := ls.handshakeRatchetSecret.KdfExpandLabel("nonce", uint32ToBytes(generation), 12)
+	nonce, err := ls.handshakeRatchetSecret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AeadNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving handshake nonce: %w", err)
 	}
@@ -467,13 +468,16 @@ func (ls *LeafSecret) SetSequenceNumber(seq uint64) {
 // Any subsequent key derivation will use zeroed secrets and produce invalid keys.
 func (ls *LeafSecret) DeleteLeaf() {
 	if ls.leafSecret != nil {
-		ls.leafSecret = ciphersuite.ZeroSecret(ls.leafSecret.Len())
+		ls.leafSecret.SecureZero() // RFC §9.2: MUST delete secret values from memory
+		ls.leafSecret = nil
 	}
 	if ls.handshakeRatchetSecret != nil {
-		ls.handshakeRatchetSecret = ciphersuite.ZeroSecret(ls.handshakeRatchetSecret.Len())
+		ls.handshakeRatchetSecret.SecureZero()
+		ls.handshakeRatchetSecret = nil
 	}
 	if ls.applicationRatchetSecret != nil {
-		ls.applicationRatchetSecret = ciphersuite.ZeroSecret(ls.applicationRatchetSecret.Len())
+		ls.applicationRatchetSecret.SecureZero()
+		ls.applicationRatchetSecret = nil
 	}
 	ls.sequenceNumber = 0
 }
@@ -504,7 +508,7 @@ func (ls *LeafSecret) Encrypt(plaintext []byte, aad []byte, seqNum uint64) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("getting nonce: %w", err)
 	}
-	return ciphersuite.AESEncrypt(key, nonce, plaintext, aad)
+	return ciphersuite.EncryptWithCipherSuite(key, nonce, plaintext, aad, ls.cs)
 }
 
 // Decrypt decrypts a message for the given generation using the application ratchet.
@@ -534,7 +538,7 @@ func (ls *LeafSecret) Decrypt(ciphertext []byte, aad []byte, seqNum uint64) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("getting nonce: %w", err)
 	}
-	return ciphersuite.AESDecrypt(key, nonce, ciphertext, aad)
+	return ciphersuite.DecryptWithCipherSuite(key, nonce, ciphertext, aad, ls.cs)
 }
 
 // Helper functions

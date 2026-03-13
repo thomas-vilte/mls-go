@@ -14,6 +14,7 @@
 package schedule
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -82,6 +83,20 @@ type Psk struct {
 	PskEpoch   uint64
 }
 
+// Validate checks that the Psk fields satisfy RFC 9420 §8.4 requirements.
+//
+// The psk_nonce MUST be a fresh random value of length KDF.Nh (RFC §8.4).
+// The psk value itself MUST be non-empty.
+func (p *Psk) Validate(cs ciphersuite.CipherSuite) error {
+	if len(p.Psk) == 0 {
+		return errors.New("psk: psk value is empty")
+	}
+	if nh := cs.HashLength(); len(p.PskNonce) != nh {
+		return fmt.Errorf("psk: psk_nonce must be %d bytes (KDF.Nh), got %d (RFC §8.4)", nh, len(p.PskNonce))
+	}
+	return nil
+}
+
 // ComputePskInput computes psk_secret according to RFC 9420 §8.4.
 //
 // Multiple PSKs are combined using iterated HKDF-Extract:
@@ -109,8 +124,8 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	pskSecret := ciphersuite.ZeroSecret(cs.HashLength())
 	count := uint16(len(psks))
 	for i, psk := range psks {
-		if len(psk.Psk) == 0 {
-			return nil, fmt.Errorf("empty PSK at index %d", i)
+		if err := psk.Validate(cs); err != nil {
+			return nil, fmt.Errorf("PSK at index %d: %w", i, err)
 		}
 		zeroSalt := ciphersuite.ZeroSecret(cs.HashLength())
 		extracted, err := zeroSalt.HKDFExtract(ciphersuite.NewSecret(psk.Psk))

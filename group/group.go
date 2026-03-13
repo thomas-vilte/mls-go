@@ -1809,10 +1809,15 @@ func NewGroupFromReInit(
 		return nil, fmt.Errorf("computing joiner secret: %w", err)
 	}
 
+	pskNonce := make([]byte, cs.HashLength()) // RFC §8.4: fresh random nonce of length KDF.Nh
+	if _, err := rand.Read(pskNonce); err != nil {
+		return nil, fmt.Errorf("generating reinit psk_nonce: %w", err)
+	}
 	resumptionPsk := schedule.Psk{
-		PskType: schedule.PskTypeResumption,
-		PskID:   oldGroupID,
-		Psk:     resumptionSecret.AsSlice(),
+		PskType:  schedule.PskTypeResumption,
+		PskID:    oldGroupID,
+		PskNonce: pskNonce,
+		Psk:      resumptionSecret.AsSlice(),
 	}
 	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {
 		return nil, fmt.Errorf("computing reinit psk secret: %w", err)

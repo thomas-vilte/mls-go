@@ -3,6 +3,7 @@ package treesync
 import (
 	"crypto/ecdh"
 	"fmt"
+	"sort"
 
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -43,8 +44,12 @@ func (t *RatchetTree) MarshalTree() []byte {
 			}
 			w.WriteVLBytes(node.ParentHash)
 
+			// RFC §7.1: unmerged_leaves MUST be sorted in increasing order.
+			sortedUnmerged := make([]LeafIndex, len(node.UnmergedLeaves))
+			copy(sortedUnmerged, node.UnmergedLeaves)
+			sort.Slice(sortedUnmerged, func(i, j int) bool { return sortedUnmerged[i] < sortedUnmerged[j] })
 			unmergedBuf := tls.NewWriter()
-			for _, li := range node.UnmergedLeaves {
+			for _, li := range sortedUnmerged {
 				unmergedBuf.WriteUint32(uint32(li))
 			}
 			w.WriteVLBytes(unmergedBuf.Bytes())

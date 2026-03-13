@@ -444,6 +444,8 @@ func (t *RatchetTree) BlankNode(idx NodeIndex) {
 		t.Nodes[idx].State = NodeStateBlank
 		t.Nodes[idx].EncryptionKey = nil
 		t.Nodes[idx].LeafData = nil
+		t.Nodes[idx].ParentHash = nil
+		t.Nodes[idx].UnmergedLeaves = nil
 	}
 }
 
