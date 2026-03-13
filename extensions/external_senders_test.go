@@ -4,6 +4,9 @@
 package extensions_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -178,5 +181,79 @@ func TestExternalSendersExtension_AddSenderInvalid(t *testing.T) {
 
 	if err := ext.AddSender(sender); err == nil {
 		t.Error("AddSender() should fail with invalid sender")
+	}
+}
+
+// ============================================================================
+// unmarshalECDSAPublicKey via round-trip (RFC 9420 §5.1.1)
+// ============================================================================
+
+// newExtWithKey builds an ExternalSendersExtension with a real P-256 key,
+// bypassing AddSender validation for testing internal parse paths.
+func newExtWithKey(t *testing.T, privKey *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	ecdhKey, err := privKey.ECDH()
+	if err != nil {
+		t.Fatalf("ECDH: %v", err)
+	}
+	cred := credentials.NewBasicCredentialFromString("sender")
+	ext := extensions.NewExternalSendersExtension()
+	ext.Senders = append(ext.Senders, extensions.ExternalSender{
+		Credential: cred,
+		PublicKey:  &privKey.PublicKey,
+	})
+	_ = ecdhKey
+	return ext.Marshal()
+}
+
+// TestUnmarshalExternalSenders_ValidKey verifies that a valid P-256 uncompressed
+// public key (0x04 || X || Y) is correctly parsed into a non-zero *ecdsa.PublicKey.
+func TestUnmarshalExternalSenders_ValidKey(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	data := newExtWithKey(t, privKey)
+
+	got, err := extensions.UnmarshalExternalSendersExtension(data)
+	if err != nil {
+		t.Fatalf("UnmarshalExternalSendersExtension: %v", err)
+	}
+	if len(got.Senders) != 1 {
+		t.Fatalf("expected 1 sender, got %d", len(got.Senders))
+	}
+	pub := got.Senders[0].PublicKey
+	if pub == nil {
+		t.Fatal("PublicKey is nil — unmarshalECDSAPublicKey did not parse the key")
+	}
+	if !pub.Equal(&privKey.PublicKey) {
+		t.Error("parsed PublicKey does not match original")
+	}
+}
+
+// TestUnmarshalExternalSenders_RoundTrip verifies Marshal → Unmarshal round-trip.
+func TestUnmarshalExternalSenders_RoundTrip(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	cred := credentials.NewBasicCredentialFromString("alice")
+
+	orig := extensions.NewExternalSendersExtension()
+	orig.Senders = append(orig.Senders, extensions.ExternalSender{
+		Credential: cred,
+		PublicKey:  &privKey.PublicKey,
+	})
+
+	data := orig.Marshal()
+	got, err := extensions.UnmarshalExternalSendersExtension(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Len() != 1 {
+		t.Fatalf("sender count = %d, want 1", got.Len())
+	}
+	if !got.Senders[0].PublicKey.Equal(&privKey.PublicKey) {
+		t.Error("public key mismatch after round-trip")
 	}
 }
