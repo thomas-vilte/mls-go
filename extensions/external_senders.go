@@ -6,9 +6,12 @@ package extensions
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
@@ -222,9 +225,17 @@ func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, 
 
 	buf := tls.NewReader(data)
 
-	for buf.Remaining() > 0 {
+	// RFC 9420 §12.1.8.1: ExternalSender senders<V>
+	// Marshal() wraps all senders in an outer VL; strip it first.
+	sendersData, err := buf.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading senders vector: %w", err)
+	}
+
+	inner := tls.NewReader(sendersData)
+	for inner.Remaining() > 0 {
 		// SignaturePublicKey<V>
-		pubKeyBytes, err := buf.ReadVLBytes()
+		pubKeyBytes, err := inner.ReadVLBytes()
 		if err != nil {
 			return nil, fmt.Errorf("reading public_key: %w", err)
 		}
@@ -238,7 +249,7 @@ func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, 
 		}
 
 		// credential<V>
-		credBytes, err := buf.ReadVLBytes()
+		credBytes, err := inner.ReadVLBytes()
 		if err != nil {
 			return nil, fmt.Errorf("reading credential: %w", err)
 		}
@@ -367,9 +378,17 @@ func FromExternalSendersExtension(ext *Extension) (*ExternalSendersExtension, er
 
 func unmarshalECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
 	if len(data) != 65 || data[0] != 0x04 {
-		return nil, errors.New("invalid ECDSA public key format")
+		return nil, errors.New("invalid ECDSA public key format: must be 65 bytes starting with 0x04")
 	}
-	return &ecdsa.PublicKey{}, nil
+	// Use crypto/ecdh for on-curve validation (RFC 9420 §5.1.1).
+	// ecdh.P256().NewPublicKey accepts uncompressed format (0x04 || X || Y)
+	// and rejects points not on the curve.
+	if _, err := ecdh.P256().NewPublicKey(data); err != nil {
+		return nil, fmt.Errorf("ECDSA public key not on curve P-256: %w", err)
+	}
+	x := new(big.Int).SetBytes(data[1:33])
+	y := new(big.Int).SetBytes(data[33:65])
+	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, nil
 }
 
 func credentialsEqual(a, b *credentials.Credential) bool {
