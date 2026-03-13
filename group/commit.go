@@ -286,11 +286,15 @@ type StagedCommit struct {
 	Proposals            []*Proposal
 	ProposalSenders      []LeafNodeIndex // Per-proposal sender indices (parallel to Proposals)
 	AuthenticatedContent *framing.AuthenticatedContent
-	RootPathSecret       *ciphersuite.Secret // Used to advance the key schedule
+	RootPathSecret       *ciphersuite.Secret // commit_secret; zeroed by key schedule during Commit()
 	// Precomputed by committer in Commit() — nil for receivers
 	PrecomputedEpochSecrets *schedule.EpochSecrets
 	PrecomputedGroupContext *GroupContext
 	PrecomputedInterimHash  []byte
+	// JoinerSecret is the actual joiner_secret = ExpandWithLabel(intermediate,"joiner",GC,Nh).
+	// Cloned before ComputePskSecret zeroes it; used by the caller for CreateWelcome.
+	// Nil for receiver-side StagedCommits.
+	JoinerSecret *ciphersuite.Secret
 }
 
 // ConfirmationTag represents the confirmation tag in a commit per RFC 9420 §8.2.

@@ -1,14 +1,14 @@
 # Interoperability Testing
 
-This package provides interoperability testing between this Go MLS implementation and other implementations using standardized test vectors.
+Interoperability testing against other MLS implementations using standardized test vectors.
 
 ## Overview
 
-Interoperability is achieved through **test vectors** - JSON files containing standardized test cases that different implementations can generate and validate.
+Test vectors are JSON files containing deterministic test cases. Multiple implementations generate and validate the same vectors — matching output confirms interoperability.
+
+This follows the [MLS Interoperability Test Vectors](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/) format used by the MLS working group.
 
 ## Test Vector Format
-
-Test vectors follow the [MLS Interop Test Vectors](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/) specification:
 
 ```json
 {
@@ -39,10 +39,10 @@ Test vectors follow the [MLS Interop Test Vectors](https://github.com/mlswg/mls-
 # Run all interop tests
 go test ./interop/... -v
 
-# Run specific test
+# Run a specific test
 go test ./interop/... -v -run TestOneToOneJoinScenario
 
-# Enable cross-implementation testing (requires external test vectors)
+# Cross-implementation testing (requires external test vectors)
 export MLS_TEST_VECTORS=path/to/vectors.json
 go test ./interop/... -v -run TestCrossImplementationRoundTrip
 ```
@@ -57,13 +57,11 @@ import (
 )
 
 func main() {
-    // Generate test vectors
     tvs, err := interop.GenerateInteropTestVectors()
     if err != nil {
         panic(err)
     }
-    
-    // Export to JSON
+
     err = tvs.ExportToFile("go_test_vectors.json")
     if err != nil {
         panic(err)
@@ -73,32 +71,42 @@ func main() {
 
 ## Test Scenarios
 
-### 1. One-to-One Join
-- Alice creates a group
-- Alice adds Bob
-- Bob joins via Welcome
-- Both verify group state
+### One-to-One Join
 
-### Future Scenarios (TODO)
-- Three-party join
-- Multiple additions
-- Member removal
-- Member update
-- External join
+Covers the basic group formation flow:
+
+1. Alice creates a group (epoch 0)
+2. Alice adds Bob via Add proposal + Commit
+3. Bob processes Welcome and joins at epoch 1
+4. Both verify matching group state and tree hash
+
+This exercises RFC 9420 section 11.2.1 (Adding Members).
+
+### Planned Scenarios
+
+- Multi-party join (3+ members)
+- Multiple concurrent additions
+- Member removal (RFC 9420 section 11.2.3)
+- Member updates / key rotation (RFC 9420 section 11.2.2)
+- External commits (RFC 9420 section 11.3)
 - Group reinitialization
 
 ## Implementation Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Test Vector Generation | ✅ | Basic scenarios working |
-| Test Vector Import/Export | ✅ | JSON format compatible |
-| 1:1 Join | ✅ | Implemented |
-| Multi-party Join | 🚧 | Planned |
-| External Commits | 🚧 | Planned |
-| All Cipher Suites | 🚧 | Only MLS128DHKEMP256 tested |
+| Test vector generation | Done | Basic scenarios |
+| Test vector import/export | Done | JSON format |
+| 1:1 join scenario | Done | RFC 9420 section 11.2.1 |
+| Multi-party join | Planned | |
+| External commits | Planned | RFC 9420 section 11.3 |
+| All cipher suites | Partial | Only MLS128DHKEMP256 (0x0002) tested |
 
 ## References
 
-- [MLS Interop Test Vectors Specification](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/)
+- [MLS Interop Test Vectors](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/)
 - [RFC 9420 - The Messaging Layer Security (MLS) Protocol](https://www.rfc-editor.org/rfc/rfc9420)
+- [RFC 9420 Section 11.2.1 - Adding Members](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.1)
+- [RFC 9420 Section 11.2.2 - Member Updates](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.2)
+- [RFC 9420 Section 11.2.3 - Member Removal](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.3)
+- [RFC 9420 Section 11.3 - External Commits](https://www.rfc-editor.org/rfc/rfc9420#section-11.3)
