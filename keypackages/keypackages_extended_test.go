@@ -255,6 +255,7 @@ func TestLeafNode_Validate_EmptyEncryptionKey(t *testing.T) {
 func TestLeafNode_Validate_NilSignatureKey(t *testing.T) {
 	ln := generateKP(t).LeafNode
 	ln.SignatureKey = nil
+	ln.SignatureKeyBytes = nil
 	if err := ln.Validate(); err == nil {
 		t.Fatal("expected error for nil signature_key")
 	}
