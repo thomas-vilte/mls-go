@@ -255,7 +255,7 @@ func TestExternalCommitReceiver(t *testing.T) {
 	err = aliceGroup.ProcessReceivedCommit(
 		staged.AuthenticatedContent,
 		treesync.LeafIndex(0),
-		alice.priv.InitKey.Bytes(),
+		alice.priv.EncryptionKey.Bytes(), // RFC §10.1: TreeKEM uses LeafNode.EncryptionKey, not InitKey
 	)
 	if err != nil {
 		t.Fatalf("ProcessReceivedCommit(external): %v", err)

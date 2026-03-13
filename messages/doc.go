@@ -177,14 +177,14 @@
 //
 // Encrypting GroupInfo:
 //
-//	encryptedGI, err := messages.EncryptGroupInfo(groupInfo, welcomeKey, welcomeNonce)
+//	encryptedGI, err := messages.EncryptGroupInfo(groupInfo, welcomeKey, welcomeNonce, cs)
 //	if err != nil {
 //	    return err
 //	}
 //
 // Decrypting GroupInfo:
 //
-//	groupInfo, err := messages.DecryptGroupInfo(encryptedGI, welcomeKey, welcomeNonce)
+//	groupInfo, err := messages.DecryptGroupInfo(encryptedGI, welcomeKey, welcomeNonce, cs)
 //	if err != nil {
 //	    return err
 //	}
