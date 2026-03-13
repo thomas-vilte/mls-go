@@ -196,25 +196,16 @@ func TestDeleteLeaf(t *testing.T) {
 		t.Fatalf("Encrypt before DeleteLeaf: %v", err)
 	}
 
-	// Capture key before deletion.
-	keyBefore, _ := leaf.ApplicationKey(0)
-
 	leaf.DeleteLeaf()
 
-	// After deletion, key derivation still succeeds (it uses zeroed ratchet
-	// state) but must produce a different (zeroed-derived) key than before.
-	keyAfter, err := leaf.ApplicationKey(0)
-	if err != nil {
-		t.Fatalf("ApplicationKey after DeleteLeaf: %v", err)
-	}
-	if bytes.Equal(keyBefore, keyAfter) {
-		t.Error("DeleteLeaf must change the derived key (secrets should be zeroed)")
+	// After deletion, secrets are nil — key derivation MUST fail (RFC §9.2).
+	if _, err := leaf.ApplicationKey(0); err == nil {
+		t.Error("ApplicationKey after DeleteLeaf should fail: secrets are deleted")
 	}
 
-	// Decryption with the zeroed ratchet should fail or produce garbage.
-	decrypted, err := leaf.Decrypt(ciphertext, nil, seqNum)
-	if err == nil && bytes.Equal(decrypted, plaintext) {
-		t.Error("Decrypt after DeleteLeaf should not recover the original plaintext")
+	// Decryption after deletion must also fail.
+	if _, err := leaf.Decrypt(ciphertext, nil, seqNum); err == nil {
+		t.Error("Decrypt after DeleteLeaf should fail: secrets are deleted")
 	}
 }
 
