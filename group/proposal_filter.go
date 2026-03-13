@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
@@ -41,8 +42,9 @@ func NewProposalFilter(
 
 // FilteredProposal represents a proposal with its sender.
 type FilteredProposal struct {
-	Proposal *Proposal
-	Sender   LeafNodeIndex
+	Proposal   *Proposal
+	Sender     LeafNodeIndex
+	IsExternal bool // true for SenderTypeExternal senders (not leaf-tree members)
 }
 
 // FilterAndValidateProposals validates and filters a list of proposals per RFC 9420 §12.2.
@@ -71,11 +73,7 @@ func (pf *ProposalFilter) FilterAndValidateProposals(
 	proposals []FilteredProposal,
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
-	if len(proposals) == 0 {
-		return nil, fmt.Errorf("no proposals to filter: %w", ErrInvalidProposal)
-	}
-
-	// Step 1: Validate each proposal individually
+	// Validate each proposal individually
 	validated := make([]FilteredProposal, 0, len(proposals))
 	for _, fp := range proposals {
 		if err := pf.validateSingleProposal(fp, capabilities); err != nil {
@@ -84,17 +82,17 @@ func (pf *ProposalFilter) FilterAndValidateProposals(
 		validated = append(validated, fp)
 	}
 
-	// Step 2: Validate combinations and restrictions
+	// Validate combinations and restrictions
 	if err := pf.validateProposalCombinations(validated); err != nil {
 		return nil, fmt.Errorf("validating proposal combinations: %w", err)
 	}
 
-	// Step 3: Check for duplicates
+	// Check for duplicates
 	if err := pf.checkDuplicates(validated); err != nil {
 		return nil, fmt.Errorf("checking duplicates: %w", err)
 	}
 
-	// Step 4: Sort according to RFC §12.4.2
+	// Sort according to RFC §12.4.2
 	sorted := pf.sortProposals(validated)
 
 	return sorted, nil
@@ -110,12 +108,15 @@ func (pf *ProposalFilter) validateSingleProposal(
 		return err
 	}
 
+	requiredCaps := pf.extractRequiredCapabilities()
+
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
 			if err := validateCapabilitiesCompatible(
 				pf.cipherSuite,
 				toTreeSyncCapabilities(proposal.Add.KeyPackage.LeafNode.Capabilities),
+				requiredCaps,
 			); err != nil {
 				return err
 			}
@@ -134,9 +135,15 @@ func (pf *ProposalFilter) validateSingleProposal(
 			return fmt.Errorf("update proposal from non-present leaf %d: %w", fp.Sender, ErrInvalidProposal)
 		}
 		if proposal.Update != nil && proposal.Update.LeafNode != nil {
+			// RFC §7.3: leaf_node_source MUST be update (2) in an Update proposal
+			if proposal.Update.LeafNode.LeafNodeSource != 2 {
+				return fmt.Errorf("update proposal leaf_node_source is %d, want 2 (update): %w",
+					proposal.Update.LeafNode.LeafNodeSource, ErrInvalidProposal)
+			}
 			if err := validateCapabilitiesCompatible(
 				pf.cipherSuite,
 				toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities),
+				requiredCaps,
 			); err != nil {
 				return err
 			}
@@ -162,9 +169,28 @@ func (pf *ProposalFilter) validateSingleProposal(
 			}
 		}
 
+	case ProposalTypePreSharedKey:
+		// RFC §12.1.4: psk_nonce MUST be of length KDF.Nh
+		if proposal.PreSharedKey != nil {
+			nh := pf.cipherSuite.HashLength()
+			if len(proposal.PreSharedKey.PskID.Nonce) != nh {
+				return fmt.Errorf("PSK nonce length %d, want %d (KDF.Nh): %w",
+					len(proposal.PreSharedKey.PskID.Nonce), nh, ErrInvalidProposal)
+			}
+		}
+
 	case ProposalTypeExternalInit:
-		if int(fp.Sender) < len(pf.members) {
+		// RFC §12.1.6: ExternalInit MUST be sent by an external sender (not a tree member)
+		if !fp.IsExternal {
 			return fmt.Errorf("external init from internal sender: %w", ErrInvalidProposal)
+		}
+
+	case ProposalTypeGroupContextExtensions:
+		// RFC §12.1.7: verify all existing members support the new required_capabilities
+		if proposal.GroupContextExtensions != nil {
+			if err := pf.validateGCEMemberCompatibility(proposal.GroupContextExtensions.Extensions); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -391,7 +417,7 @@ func (g *Group) FilterProposalsForCommit(
 ) ([]FilteredProposal, error) {
 	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
 	for _, sp := range g.Proposals.Proposals {
-		filtered = append(filtered, FilteredProposal(sp))
+		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender})
 	}
 
 	pf := NewProposalFilter(
@@ -406,9 +432,15 @@ func (g *Group) FilterProposalsForCommit(
 }
 
 // validateCapabilitiesCompatible checks if leaf capabilities are compatible with the group.
+//
+// Validates:
+//   - MLS 1.0 support
+//   - Group cipher suite support
+//   - All extensions/proposals/credentials listed in required_capabilities (RFC §11.1)
 func validateCapabilitiesCompatible(
 	groupCS ciphersuite.CipherSuite,
 	leafCaps *treesync.LeafNodeCapabilities,
+	required *extensions.RequiredCapabilitiesExtension,
 ) error {
 	if leafCaps == nil {
 		return fmt.Errorf("missing leaf capabilities: %w", ErrInvalidProposal)
@@ -436,6 +468,97 @@ func validateCapabilitiesCompatible(
 		return fmt.Errorf("leaf does not support group cipher suite %d: %w", groupCS, ErrInvalidProposal)
 	}
 
+	if required == nil {
+		return nil
+	}
+
+	// RFC §11.1: leaf MUST support all required extension types
+	for _, reqExt := range required.Extensions {
+		found := false
+		for _, leafExt := range leafCaps.Extensions {
+			if uint16(reqExt) == leafExt {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("leaf does not support required extension type %d: %w", reqExt, ErrInvalidProposal)
+		}
+	}
+
+	// RFC §11.1: leaf MUST support all required proposal types
+	for _, reqProp := range required.Proposals {
+		found := false
+		for _, leafProp := range leafCaps.Proposals {
+			if reqProp == leafProp {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("leaf does not support required proposal type %d: %w", reqProp, ErrInvalidProposal)
+		}
+	}
+
+	// RFC §11.1: leaf MUST support all required credential types
+	for _, reqCred := range required.Credentials {
+		found := false
+		for _, leafCred := range leafCaps.Credentials {
+			if uint16(reqCred) == leafCred {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("leaf does not support required credential type %d: %w", reqCred, ErrInvalidProposal)
+		}
+	}
+
+	return nil
+}
+
+// extractRequiredCapabilities looks for a required_capabilities extension (type 0x0003)
+// in the GroupContext and parses it. Returns nil if not present or unparseable.
+func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapabilitiesExtension {
+	const requiredCapsExtType = uint16(0x0003) // extensions.ExtensionTypeRequiredCapabilities
+	for _, ext := range pf.groupContext.Extensions {
+		if ext.Type == requiredCapsExtType {
+			caps, err := extensions.UnmarshalRequiredCapabilities(ext.Data)
+			if err != nil {
+				return nil
+			}
+			return caps
+		}
+	}
+	return nil
+}
+
+// validateGCEMemberCompatibility checks that all current tree members support any
+// required_capabilities present in the proposed new GroupContext extensions (RFC §12.1.7).
+func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) error {
+	const requiredCapsExtType = uint16(0x0003)
+	var reqCaps *extensions.RequiredCapabilitiesExtension
+	for _, ext := range newExts {
+		if ext.Type == requiredCapsExtType {
+			var err error
+			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
+			if err != nil {
+				return fmt.Errorf("parsing required_capabilities in GCE proposal: %w", err)
+			}
+			break
+		}
+	}
+	if reqCaps == nil {
+		return nil
+	}
+	for i, node := range pf.tree.Nodes {
+		if node.State != treesync.NodeStatePresent || node.LeafData == nil {
+			continue
+		}
+		if err := validateCapabilitiesCompatible(pf.cipherSuite, node.LeafData.Capabilities, reqCaps); err != nil {
+			return fmt.Errorf("tree node %d incompatible with new required_capabilities: %w", i, err)
+		}
+	}
 	return nil
 }
 
