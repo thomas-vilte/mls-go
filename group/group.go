@@ -109,14 +109,14 @@ func NewGroup(
 	groupID *GroupID,
 	cipherSuite ciphersuite.CipherSuite,
 	keyPackage *keypackages.KeyPackage,
-	_ *keypackages.KeyPackagePrivateKeys,
+	privKeys *keypackages.KeyPackagePrivateKeys,
 ) (*Group, error) {
 	// Create ratchet tree with 1 leaf
 	ratchetTree := treesync.NewRatchetTree(1)
 
 	// Add our leaf
 	leafData := treesync.LeafNodeData{
-		EncryptionKey:   keyPackage.InitKey,
+		EncryptionKey:   keyPackage.LeafNode.EncryptionKey, // RFC §10.1: use LeafNode.encryption_key for TreeKEM
 		SignatureKey:    keyPackage.LeafNode.SignatureKey,
 		SignatureKeyRaw: append([]byte(nil), keyPackage.LeafNode.SignatureKeyBytes...),
 		Credential:      keyPackage.LeafNode.Credential,
@@ -186,6 +186,11 @@ func NewGroup(
 	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, 1, group.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
+	}
+
+	// Store our leaf encryption private key for TreeKEM decryption (RFC §10.1)
+	if privKeys != nil && privKeys.EncryptionKey != nil {
+		group.MyLeafEncryptionKey = privKeys.EncryptionKey.Bytes()
 	}
 
 	// Add ourselves as a member
@@ -1765,7 +1770,7 @@ func NewGroupFromReInit(
 	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
 	ratchetTree := treesync.NewRatchetTree(1)
 	leafData := treesync.LeafNodeData{
-		EncryptionKey:   myKP.InitKey,
+		EncryptionKey:   myKP.LeafNode.EncryptionKey, // RFC §10.1: use LeafNode.encryption_key for TreeKEM
 		SignatureKey:    myKP.LeafNode.SignatureKey,
 		SignatureKeyRaw: append([]byte(nil), myKP.LeafNode.SignatureKeyBytes...),
 		Credential:      myKP.LeafNode.Credential,

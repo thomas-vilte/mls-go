@@ -1,6 +1,7 @@
 package keypackages
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -130,10 +131,15 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 		return nil, nil, errors.New("credential is nil")
 	}
 
-	// Generate HPKE key pair appropriate for the cipher suite
-	hpkePrivKey, hpkePubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
+	// Generate two separate HPKE key pairs per RFC §10.1:
+	// init_key is used once for Welcome decryption; encryption_key is for TreeKEM.
+	initPrivKey, initPubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
 	if err != nil {
-		return nil, nil, fmt.Errorf("generating HPKE keys: %w", err)
+		return nil, nil, fmt.Errorf("generating init HPKE keys: %w", err)
+	}
+	encPrivKey, encPubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generating encryption HPKE keys: %w", err)
 	}
 
 	// Create LeafNode with capabilities that advertise the actual cipher suite.
@@ -141,7 +147,7 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 	caps.CipherSuites = []CipherSuite{cipherSuite}
 
 	leafNode := &LeafNode{
-		EncryptionKey:     hpkePubKey.Bytes(),
+		EncryptionKey:     encPubKey.Bytes(),
 		SignatureKey:      credWithKey.SignatureKey,      // *ecdsa.PublicKey, nil for Ed25519
 		SignatureKeyBytes: credWithKey.SignatureKeyBytes, // raw bytes for Ed25519
 		Credential:        credWithKey.Credential,
@@ -155,7 +161,7 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 	keyPackage := &KeyPackage{
 		ProtocolVersion: MLS10,
 		CipherSuite:     cipherSuite,
-		InitKey:         hpkePubKey.Bytes(),
+		InitKey:         initPubKey.Bytes(),
 		LeafNode:        leafNode,
 		Extensions:      []Extension{},
 	}
@@ -186,8 +192,8 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 
 	// Create private keys
 	privKeys := &KeyPackagePrivateKeys{
-		InitKey:             hpkePrivKey,
-		EncryptionKey:       hpkePrivKey,
+		InitKey:             initPrivKey,
+		EncryptionKey:       encPrivKey,
 		SignatureKey:        credWithKey.PrivateKey,        // *ecdsa.PrivateKey, nil for Ed25519
 		Ed25519SignatureKey: credWithKey.Ed25519PrivateKey, // non-nil for CS1/CS3
 	}
@@ -199,8 +205,8 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 //
 // These must be kept secret and are used for decryption and signing.
 type KeyPackagePrivateKeys struct {
-	InitKey             *ecdh.PrivateKey   // HPKE private key
-	EncryptionKey       *ecdh.PrivateKey   // Same as InitKey for DAVE
+	InitKey             *ecdh.PrivateKey   // HPKE private key for Welcome decryption (one-time use)
+	EncryptionKey       *ecdh.PrivateKey   // HPKE private key for TreeKEM (LeafNode.EncryptionKey)
 	SignatureKey        *ecdsa.PrivateKey  // nil for Ed25519 (CS1/CS3)
 	Ed25519SignatureKey ed25519.PrivateKey // non-nil for CS1/CS3
 }
@@ -413,8 +419,21 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
-	// Extensions parsing - simplified for now
-	_ = extBytes // Mark as used
+	var exts []Extension
+	if len(extBytes) > 0 {
+		extReader := tls.NewReader(extBytes)
+		for extReader.Remaining() > 0 {
+			extType, err := extReader.ReadUint16()
+			if err != nil {
+				break
+			}
+			extData, err := extReader.ReadVLBytes()
+			if err != nil {
+				break
+			}
+			exts = append(exts, Extension{Type: extType, Data: extData})
+		}
+	}
 
 	signature, err := buf.ReadVLBytes()
 	if err != nil {
@@ -426,7 +445,7 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 		CipherSuite:     CipherSuite(cipherSuite),
 		InitKey:         initKey,
 		LeafNode:        leafNode,
-		Extensions:      nil, // Simplified - extensions parsing is complex
+		Extensions:      exts,
 		Signature:       signature,
 		Raw:             append([]byte(nil), data...),
 	}, nil
@@ -467,7 +486,21 @@ func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
-	_ = extBytes
+	var exts []Extension
+	if len(extBytes) > 0 {
+		extReader := tls.NewReader(extBytes)
+		for extReader.Remaining() > 0 {
+			extType, err := extReader.ReadUint16()
+			if err != nil {
+				break
+			}
+			extData, err := extReader.ReadVLBytes()
+			if err != nil {
+				break
+			}
+			exts = append(exts, Extension{Type: extType, Data: extData})
+		}
+	}
 	signature, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading signature: %w", err)
@@ -483,7 +516,7 @@ func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
 		CipherSuite:     CipherSuite(cipherSuite),
 		InitKey:         initKey,
 		LeafNode:        leafNode,
-		Extensions:      nil,
+		Extensions:      exts,
 		Signature:       signature,
 		Raw:             rawBytes,
 	}, nil
@@ -687,6 +720,17 @@ func (kp *KeyPackage) Validate() error {
 		return errors.New("LeafNode is nil")
 	}
 
+	// RFC §10.1: leaf_node_source MUST be key_package (1) in a KeyPackage
+	if kp.LeafNode.LeafNodeSource != 1 {
+		return fmt.Errorf("leaf_node_source is %d, must be 1 (key_package) in a KeyPackage",
+			kp.LeafNode.LeafNodeSource)
+	}
+
+	// RFC §10.1: init_key and encryption_key MUST be different (prevents key reuse)
+	if bytes.Equal(kp.InitKey, kp.LeafNode.EncryptionKey) {
+		return errors.New("init_key and encryption_key must be different (RFC §10.1)")
+	}
+
 	if err := kp.LeafNode.Validate(); err != nil {
 		return fmt.Errorf("LeafNode validation failed: %w", err)
 	}
@@ -710,6 +754,23 @@ func (ln *LeafNode) Validate() error {
 
 	if err := ln.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
+	}
+
+	// RFC §7.3: every extension in LeafNode.extensions MUST be declared in capabilities.extensions
+	if ln.Capabilities != nil {
+		for _, ext := range ln.Extensions {
+			declared := false
+			for _, capExt := range ln.Capabilities.Extensions {
+				if ext.Type == capExt {
+					declared = true
+					break
+				}
+			}
+			if !declared {
+				return fmt.Errorf("extension type 0x%04x not declared in capabilities.extensions (RFC §7.3)",
+					ext.Type)
+			}
+		}
 	}
 
 	return nil
