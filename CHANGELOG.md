@@ -54,151 +54,140 @@ We have achieved significant alignment with the RFC 9420 standard, introducing c
 
 [v0.2.0]: https://github.com/thomas-vilte/mls-go/compare/v0.1.0...v0.2.0
 
-En esta versión, nos enfocamos en alcanzar la plena conformidad con el estándar RFC 9420 (Messaging Layer Security). Implementamos operaciones críticas de árbol, mejoramos la interoperabilidad con vectores de prueba oficiales y refinamos la gestión de claves para garantizar una seguridad robusta en las comunicaciones grupales.
+In this version, we focused on achieving full compliance with the RFC 9420 (Messaging Layer Security) standard. We implemented critical tree operations, improved interoperability with official proof vectors, and refined key management to ensure robust security in group communications.
 
-### 🔐 Protocolo y Estándares RFC 9420
+### 🔐 RFC 9420 Protocol and Standards
 
-- Alineamos los componentes DHKEM, KeySchedule y PSK con los estándares RFC 9180 y RFC 9420 para asegurar una compatibilidad total.
-- Integramos funciones hash dinámicas que dependen del ciphersuite seleccionado para una mayor flexibilidad criptográfica.
-- Implementamos el etiquetado de firmas y el filtrado de propuestas siguiendo estrictamente las especificaciones del protocolo.
+- We aligned the DHKEM, KeySchedule, and PSK components with the RFC 9180 and RFC 9420 standards to ensure full compatibility.
 
-### 🌳 Operaciones de Árbol y Seguridad
+- We integrated dynamic hash functions that depend on the selected cipher suite for greater cryptographic flexibility.
 
-- Añadimos soporte completo para operaciones de árbol, incluyendo hashing de nodos y gestión eficiente de miembros.
-- Implementamos ratchets de árbol de secretos para fortalecer la derivación de claves dentro del grupo.
-- Mejoramos la sincronización del árbol y la validación de datos para mantener la integridad de la estructura jerárquica.
+- We implemented signature tagging and proposal filtering, strictly adhering to the protocol specifications.
 
-### 📦 Mensajería y Serialización
+### 🌳 Tree Operations and Security
 
-- Habilitamos el procesamiento y la verificación de mensajes públicos, garantizando la autenticidad de la comunicación.
-- Refactorizamos el sistema de unmarshaling para extensiones y credenciales, optimizando la lectura de datos desde diversos orígenes.
-- Unificamos el manejo de etiquetas de membresía en el framing para simplificar la estructura de los mensajes.
+- We added full support for tree operations, including node hashing and efficient member management.
 
-### 🔄 Gestión de Grupos
+- We implemented secret tree ratchets to strengthen key derivation within the group.
 
-- Agregamos la capacidad de re-inicializar grupos a partir de una ReInitProposal, facilitando la actualización de parámetros del grupo.
-- Mejoramos la gestión de LeafNode y KeyPackage para alinearlos con el orden de campos requerido por el estándar.
+- We improved tree synchronization and data validation to maintain the integrity of the hierarchical structure.
 
-### 🧪 Interoperabilidad y Estabilidad
+### 📦 Messaging and Serialization
 
-- Incorporamos una suite extensa de tests de interoperabilidad y vectores de prueba para validar la compatibilidad con implementaciones como other implementations.
-- Corregimos errores críticos en la derivación de claves privadas y en la serialización de datos.
-- Aseguramos la generación de claves privadas válidas durante los procesos de derivación.
+- We enabled the processing and verification of public messages, ensuring the authenticity of communication.
+
+- We refactored the unmarshaling system for extensions and credentials, optimizing data reading from various sources.
+
+- We unified the handling of membership tags in the framing to simplify the message structure.
+
+### 🔄 Group Management
+
+- We added the ability to reinitialize groups using a ReInitProposal, simplifying the updating of group parameters.
+
+- We improved the management of LeafNode and KeyPackage to align them with the field order required by the standard.
+
+### 🧪 Interoperability and Stability
+
+- We incorporated an extensive suite of interoperability tests and test vectors to validate compatibility with implementations such as other implementations.
+
+- We fixed critical errors in private key derivation and data serialization.
+
+- We ensured the generation of valid private keys during the derivation process.
 
 ## [v0.1.0] - 2026-03-09
 
 [v0.1.0]: https://github.com/thomas-vilte/mls-go/compare/v0.0.0...v0.1.0
 
-Presentamos la primera versión funcional de mls-go, estableciendo las bases del protocolo Messaging Layer Security (RFC 9420). En este lanzamiento, nos enfocamos en proporcionar una arquitectura sólida para la gestión de grupos, mensajería segura y cumplimiento estricto de los estándares criptográficos internacionales.
+We are releasing the first working version of mls-go, establishing the foundation of the Messaging Layer Security (RFC 9420) protocol. In this release, we focus on providing a robust architecture for group management, secure messaging, and strict compliance with international cryptographic standards.
 
-### 🚀 Protocolo Core y Mensajería
+### 🚀 Core Protocol and Messaging
 
-- Implementamos el flujo completo de mensajes MLS, incluyendo los protocolos de Welcome y Commit.
-- Agregamos un sistema de mensajería robusto con soporte para el encuadrado (framing) de datos de aplicación y componentes de core.
-- Introducimos pruebas de integración exhaustivas para validar la funcionalidad de mensajería de extremo a extremo.
+- We implemented the complete MLS message flow, including the Welcome and Commit protocols.
 
-### 👥 Gestión de Grupos y Membresía
+- We added a robust messaging system with support for framing application data and core components.
 
-- Introducimos componentes avanzados para la gestión de grupos y el seguimiento de propuestas de miembros.
-- Mejoramos la actualización de miembros y la gestión del árbol de ratchets para garantizar una sincronización precisa entre participantes.
-- Agregamos soporte para el referenciamiento de propuestas y actualizaciones dinámicas del árbol de estado.
+- We introduced comprehensive integration tests to validate end-to-end messaging functionality.
 
-### 🔒 Seguridad y Criptografía
+### 👥 Group and Membership Management
 
-- Incorporamos soporte para la encapsulación de claves HPKE y validación robusta mediante certificados X.509 y mecanismos GREASE.
-- Refactorizamos la combinación de claves pre-compartidas (PSK) y el uso de HKDF para alinearnos con los estándares modernos de seguridad.
-- Añadimos capacidades de comparación y validación de extensiones para fortalecer la integridad del protocolo.
+- We introduced advanced components for group management and tracking member proposals.
 
-### 📜 Estándares y Compatibilidad
+- We improved member updates and ratchet tree management to ensure accurate synchronization between participants.
 
-- Alineamos el esquema de generación de claves (key schedule) con la especificación final del RFC 9420.
-- Implementamos el soporte completo para extensiones críticas como RatchetTree, LastResort y Application ID.
-- Mejoramos el procesamiento de mensajes de bienvenida para asegurar el cumplimiento estricto del estándar MLS.
+- We added support for proposal referencing and dynamic updates to the status tree.
 
-### 🛠️ Correcciones y Estabilidad
+### 🔒 Security and Cryptography
 
-- Corregimos errores en la serialización de credenciales y mejoramos el acceso a los datos de aplicación dentro del framing.
-- Solucionamos un problema en la aplicación de propuestas que afectaba la integridad de las hojas del remitente en el árbol.
-- Optimizamos la inicialización de grupos y el procesamiento de mensajes Welcome para evitar estados inconsistentes.
+- We incorporated support for HPKE key encapsulation and robust validation using X.509 certificates and GREASE mechanisms.
 
-### ⚠️ Breaking Changes
+- We refactored the combination of pre-shared keys (PSK) and the use of HKDF to align with modern security standards.
 
-- Renombramos varios paquetes internos y actualizamos la serialización de mensajes para mejorar la estructura del proyecto.
-- Adoptamos una representación de árbol entrelazado (interleaved tree) que modifica la forma en que se gestionan los nodos del grupo.
+- We added extension comparison and validation capabilities to strengthen protocol integrity.
 
+### 📜 Standards and Compatibility
 
-Presentamos la primera versión funcional de mls-go, estableciendo las bases del protocolo Messaging Layer Security (RFC 9420). En este lanzamiento, nos enfocamos en proporcionar una arquitectura sólida para la gestión de grupos, mensajería segura y cumplimiento estricto de los estándares criptográficos internacionales.
+- We aligned the key schedule with the final RFC 9420 specification.
+- We implemented full support for critical extensions such as RatchetTree, LastResort, and Application ID.
 
-### 🚀 Protocolo Core y Mensajería
+- We improved the processing of welcome messages to ensure strict compliance with the MLS standard.
 
-- Implementamos el flujo completo de mensajes MLS, incluyendo los protocolos de Welcome y Commit.
-- Agregamos un sistema de mensajería robusto con soporte para el encuadrado (framing) de datos de aplicación y componentes de core.
-- Introducimos pruebas de integración exhaustivas para validar la funcionalidad de mensajería de extremo a extremo.
+### 🛠️ Fixes and Stability
 
-### 👥 Gestión de Grupos y Membresía
+- We fixed errors in credential serialization and improved access to application data within the framing.
 
-- Introducimos componentes avanzados para la gestión de grupos y el seguimiento de propuestas de miembros.
-- Mejoramos la actualización de miembros y la gestión del árbol de ratchets para garantizar una sincronización precisa entre participantes.
-- Agregamos soporte para el referenciamiento de propuestas y actualizaciones dinámicas del árbol de estado.
+- We resolved an issue in proposal application that affected the integrity of sender leaves in the tree.
 
-### 🔒 Seguridad y Criptografía
-
-- Incorporamos soporte para la encapsulación de claves HPKE y validación robusta mediante certificados X.509 y mecanismos GREASE.
-- Refactorizamos la combinación de claves pre-compartidas (PSK) y el uso de HKDF para alinearnos con los estándares modernos de seguridad.
-- Añadimos capacidades de comparación y validación de extensiones para fortalecer la integridad del protocolo.
-
-### 📜 Estándares y Compatibilidad
-
-- Alineamos el esquema de generación de claves (key schedule) con la especificación final del RFC 9420.
-- Implementamos el soporte completo para extensiones críticas como RatchetTree, LastResort y Application ID.
-- Mejoramos el procesamiento de mensajes de bienvenida para asegurar el cumplimiento estricto del estándar MLS.
-
-### 🛠️ Correcciones y Estabilidad
-
-- Corregimos errores en la serialización de credenciales y mejoramos el acceso a los datos de aplicación dentro del framing.
-- Solucionamos un problema en la aplicación de propuestas que afectaba la integridad de las hojas del remitente en el árbol.
-- Optimizamos la inicialización de grupos y el procesamiento de mensajes Welcome para evitar estados inconsistentes.
+- We optimized group initialization and welcome message processing to avoid inconsistent states.
 
 ### ⚠️ Breaking Changes
 
-- Renombramos varios paquetes internos y actualizamos la serialización de mensajes para mejorar la estructura del proyecto.
-- Adoptamos una representación de árbol entrelazado (interleaved tree) que modifica la forma en que se gestionan los nodos del grupo.
+- We renamed several internal packages and updated message serialization to improve the project structure.
 
+- We adopted an interleaved tree representation that modifies how group nodes are managed.
 
-Presentamos la primera versión funcional de mls-go, estableciendo las bases del protocolo Messaging Layer Security (RFC 9420). En este lanzamiento, nos enfocamos en proporcionar una arquitectura sólida para la gestión de grupos, mensajería segura y cumplimiento estricto de los estándares criptográficos internacionales.
+We introduced the first functional version of mls-go, establishing the foundation of the Messaging Layer Security (RFC 9420) protocol. In this release, we focused on providing a robust architecture for group management, secure messaging, and strict compliance with international cryptographic standards.
 
-### 🚀 Protocolo Core y Mensajería
+### 🚀 Core Protocol and Messaging
 
-- Implementamos el flujo completo de mensajes MLS, incluyendo los protocolos de Welcome y Commit.
-- Agregamos un sistema de mensajería robusto con soporte para el encuadrado (framing) de datos de aplicación y componentes de core.
-- Introducimos pruebas de integración exhaustivas para validar la funcionalidad de mensajería de extremo a extremo.
+- We implemented the complete MLS message flow, including the Welcome and Commit protocols.
 
-### 👥 Gestión de Grupos y Membresía
+- We added a robust messaging system with support for framing application data and core components.
 
-- Introducimos componentes avanzados para la gestión de grupos y el seguimiento de propuestas de miembros.
-- Mejoramos la actualización de miembros y la gestión del árbol de ratchets para garantizar una sincronización precisa entre participantes.
-- Agregamos soporte para el referenciamiento de propuestas y actualizaciones dinámicas del árbol de estado.
+- We introduced comprehensive integration testing to validate end-to-end messaging functionality.
 
-### 🔒 Seguridad y Criptografía
+### 👥 Group Management and Membership
 
-- Incorporamos soporte para la encapsulación de claves HPKE y validación robusta mediante certificados X.509 y mecanismos GREASE.
-- Refactorizamos la combinación de claves pre-compartidas (PSK) y el uso de HKDF para alinearnos con los estándares modernos de seguridad.
-- Añadimos capacidades de comparación y validación de extensiones para fortalecer la integridad del protocolo.
+- We introduced advanced components for group management and tracking member proposals.
 
-### 📜 Estándares y Compatibilidad
+- We improved member updates and ratchet tree management to ensure accurate synchronization between participants.
 
-- Alineamos el esquema de generación de claves (key schedule) con la especificación final del RFC 9420.
-- Implementamos el soporte completo para extensiones críticas como RatchetTree, LastResort y Application ID.
-- Mejoramos el procesamiento de mensajes de bienvenida para asegurar el cumplimiento estricto del estándar MLS.
+- We added support for proposal referencing and dynamic updates to the state tree.
 
-### 🛠️ Correcciones y Estabilidad
+### 🔒 Security and Cryptography
 
-- Corregimos errores en la serialización de credenciales y mejoramos el acceso a los datos de aplicación dentro del framing.
-- Solucionamos un problema en la aplicación de propuestas que afectaba la integridad de las hojas del remitente en el árbol.
-- Optimizamos la inicialización de grupos y el procesamiento de mensajes Welcome para evitar estados inconsistentes.
+- We incorporated support for HPKE key encapsulation and robust validation using X.509 certificates and GREASE mechanisms.
+
+- We refactored the combination of pre-shared keys (PSK) and the use of HKDF to align with modern security standards.
+
+- We added extension comparison and validation capabilities to strengthen protocol integrity.
+
+### 📜 Standards and Compatibility
+
+- We aligned the key schedule with the final RFC 9420 specification.
+
+- We implemented full support for critical extensions such as RatchetTree, LastResort, and Application ID.
+
+- We improved welcome message processing to ensure strict compliance with the MLS standard.
+
+### 🛠️ Fixes and Stability
+
+- We fixed errors in credential serialization and improved access to application data within the framing.
+
+- We resolved an issue in proposal application that affected the integrity of the sender's leaves in the tree.
+
+- We optimized group initialization and Welcome message processing to avoid inconsistent states.
 
 ### ⚠️ Breaking Changes
 
-- Renombramos varios paquetes internos y actualizamos la serialización de mensajes para mejorar la estructura del proyecto.
-- Adoptamos una representación de árbol entrelazado (interleaved tree) que modifica la forma en que se gestionan los nodos del grupo.
+- We renamed several packages.
 
