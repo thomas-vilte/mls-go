@@ -233,11 +233,17 @@ func ValidateProposal(proposal *Proposal, capabilities *keypackages.Capabilities
 }
 
 // isProposalTypeSupported checks if the proposal type is supported by the capabilities.
+//
+// RFC 9420 §7.2: an empty Proposals list is equivalent to supporting all
+// default proposal types (Add, Update, Remove, PreSharedKey, ReInit,
+// ExternalInit, GroupContextExtensions).
 func isProposalTypeSupported(proposalType ProposalType, capabilities *keypackages.Capabilities) bool {
-	if capabilities == nil {
-		// Default to supporting basic proposal types
+	// nil capabilities or an empty Proposals list → all standard types supported.
+	if capabilities == nil || len(capabilities.Proposals) == 0 {
 		switch proposalType {
-		case ProposalTypeAdd, ProposalTypeUpdate, ProposalTypeRemove:
+		case ProposalTypeAdd, ProposalTypeUpdate, ProposalTypeRemove,
+			ProposalTypePreSharedKey, ProposalTypeReInit,
+			ProposalTypeExternalInit, ProposalTypeGroupContextExtensions:
 			return true
 		}
 		return false

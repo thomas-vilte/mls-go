@@ -434,6 +434,8 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 //   - joinerSecret: joiner_secret from the commit's UpdatePath
 //   - pathSecret: Optional path_secret for the joining members
 //   - signerPrivKey: Private key to sign the GroupInfo
+//   - pskIDs: PreSharedKeyID entries for all PSK proposals in this commit
+//   - pskSecret: The psk_secret used in the key schedule (0^Nh if no PSKs)
 //
 // Returns:
 //   - Welcome message ready to send to new members
@@ -448,19 +450,23 @@ func (g *Group) CreateWelcome(
 	joinerSecret *ciphersuite.Secret,
 	pathSecret []byte,
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
+	pskIDs []PskID,
+	pskSecret *ciphersuite.Secret,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
 	}
 
 	// Compute welcome_secret per RFC 9420 §8, §12.4.3.1:
-	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret=0^Nh)
+	//    member_secret  = HKDF-Extract(joiner_secret, psk_secret)
 	//    welcome_secret = DeriveSecret(member_secret, "welcome")
 	// We use a copy to preserve joiner_secret (needed for GroupSecrets).
+	// The psk_secret must match what was used in the epoch key schedule.
+	if pskSecret == nil {
+		pskSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
+	}
 	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
-	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(
-		ciphersuite.ZeroSecret(g.CipherSuite.HashLength()),
-	)
+	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(pskSecret)
 	if err != nil {
 		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
 	}
@@ -507,7 +513,7 @@ func (g *Group) CreateWelcome(
 		groupSecrets := &GroupSecrets{
 			JoinerSecret: joinerSecret,
 			PathSecret:   pathSecret,
-			Psks:         nil,
+			Psks:         pskIDs,
 		}
 
 		// Encrypt with HPKE using init_key of the KeyPackage
@@ -598,8 +604,30 @@ func JoinFromWelcomeWithContext(
 
 	var psks []schedule.Psk
 	for _, pskRef := range groupSecrets.Psks {
-		if externalPsks != nil {
-			if pskBytes, ok := externalPsks[string(pskRef.ID)]; ok {
+		if externalPsks == nil {
+			continue
+		}
+
+		var pskBytes []byte
+		var ok bool
+
+		switch pskRef.PskType {
+		case 2: // Resumption PSK: lookup by compound key (group_id, epoch)
+			resumptionKey := ResumptionPskCacheKey(pskRef.PskGroupID, pskRef.PskEpoch)
+			pskBytes, ok = externalPsks[resumptionKey]
+			if ok {
+				psks = append(psks, schedule.Psk{
+					PskType:    schedule.PskType(pskRef.PskType),
+					PskNonce:   pskRef.Nonce,
+					Psk:        pskBytes,
+					Usage:      pskRef.Usage,
+					PskGroupID: pskRef.PskGroupID,
+					PskEpoch:   pskRef.PskEpoch,
+				})
+			}
+		default: // External (1) or Branch (3) PSK: lookup by ID
+			pskBytes, ok = externalPsks[string(pskRef.ID)]
+			if ok {
 				psks = append(psks, schedule.Psk{
 					PskType:  schedule.PskType(pskRef.PskType),
 					PskID:    pskRef.ID,
@@ -744,13 +772,14 @@ func JoinFromWelcomeWithContext(
 	}
 	// Create Group
 	group := &Group{
-		GroupID:      groupContext.GroupID,
-		Epoch:        groupContext.Epoch,
-		CipherSuite:  welcome.CipherSuite,
-		GroupContext: groupContext,
-		RatchetTree:  ratchetTree,
-		OwnLeafIndex: ownLeafIndex,
-		EpochSecrets: epochSecrets,
+		GroupID:         groupContext.GroupID,
+		Epoch:           groupContext.Epoch,
+		CipherSuite:     welcome.CipherSuite,
+		GroupContext:    groupContext,
+		RatchetTree:     ratchetTree,
+		OwnLeafIndex:    ownLeafIndex,
+		EpochSecrets:    epochSecrets,
+		ConfirmationTag: groupInfo.ConfirmationTag,
 		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(
 			welcome.CipherSuite,
 			groupContext.ConfirmedTranscriptHash,
@@ -776,7 +805,7 @@ func JoinFromWelcomeWithContext(
 	// Cache the resumption secret for this initial epoch so that future
 	// resumption PSK proposals referencing this epoch can resolve it.
 	if epochSecrets.ResumptionSecret != nil {
-		rKey := resumptionPskCacheKey(groupContext.GroupID.AsSlice(), groupContext.Epoch.AsUint64())
+		rKey := ResumptionPskCacheKey(groupContext.GroupID.AsSlice(), groupContext.Epoch.AsUint64())
 		group.CachedPsks[rKey] = append([]byte(nil), epochSecrets.ResumptionSecret.AsSlice()...)
 	}
 

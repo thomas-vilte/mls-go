@@ -541,7 +541,9 @@ func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) er
 			var err error
 			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {
-				return fmt.Errorf("parsing required_capabilities in GCE proposal: %w", err)
+				// Unparseable required_capabilities — treat as no requirements
+				// (forward-compatibility: unknown or malformed extension data is skipped).
+				break
 			}
 			break
 		}
