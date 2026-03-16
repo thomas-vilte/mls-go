@@ -75,6 +75,8 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 		joinerSecret,
 		pathSecret,
 		alice.sigPriv,
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
@@ -162,6 +164,8 @@ func TestExternalCommitRoundTrip(t *testing.T) {
 		aliceGroup.CipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
+		-1,
+		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
 		t.Fatalf("ExternalCommit: %v", err)
@@ -203,6 +207,8 @@ func TestConfirmationTagPersistence(t *testing.T) {
 		aliceGroup.CipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
+		-1,
+		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
 		t.Fatalf("ExternalCommit: %v", err)
@@ -247,6 +253,8 @@ func TestExternalCommitReceiver(t *testing.T) {
 		aliceGroup.CipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
+		-1,
+		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
 		t.Fatalf("ExternalCommit: %v", err)

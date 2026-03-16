@@ -78,7 +78,7 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("HKDFExtract joiner secret: %v", err)
 	}
 
-	welcome, err := aliceGroup.CreateWelcome([]*keypackages.KeyPackage{bobKP}, joinerSecret, pathSecret, aliceSigPriv)
+	welcome, err := aliceGroup.CreateWelcome([]*keypackages.KeyPackage{bobKP}, joinerSecret, pathSecret, aliceSigPriv, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}

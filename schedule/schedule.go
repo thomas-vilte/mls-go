@@ -265,7 +265,7 @@ func (ks *KeySchedule) ComputePskSecret(psks []Psk) (*ciphersuite.Secret, error)
 		}
 		pskSecret = ciphersuite.NewSecret(pskInput)
 	}
-	ks.rawPskSecret = pskSecret
+	ks.rawPskSecret = pskSecret.Clone() // clone BEFORE HKDFExtract zeroes pskSecret
 	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecret)
 	if err != nil {
 		return nil, fmt.Errorf("HKDF extract member_secret: %w", err)
@@ -280,7 +280,7 @@ func (ks *KeySchedule) SetPskSecretDirect(pskSecret *ciphersuite.Secret) error {
 	if ks.joinerSecret == nil {
 		return fmt.Errorf("joiner_secret not computed")
 	}
-	ks.rawPskSecret = pskSecret
+	ks.rawPskSecret = pskSecret.Clone() // clone BEFORE HKDFExtract zeroes pskSecret
 	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecret)
 	if err != nil {
 		return fmt.Errorf("HKDF extract member_secret: %w", err)
@@ -295,7 +295,7 @@ func (ks *KeySchedule) SetPskSecretFromInput(pskSecretInput *ciphersuite.Secret)
 	if ks.joinerSecret == nil {
 		return fmt.Errorf("joiner_secret not computed")
 	}
-	ks.rawPskSecret = pskSecretInput
+	ks.rawPskSecret = pskSecretInput.Clone() // clone BEFORE HKDFExtract zeroes pskSecretInput
 	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecretInput)
 	if err != nil {
 		return fmt.Errorf("HKDF extract member_secret: %w", err)
@@ -427,6 +427,16 @@ func (ks *KeySchedule) DeriveEpochSecrets() (*EpochSecrets, error) {
 	}
 
 	return secrets, nil
+}
+
+// GetRawPskSecret returns the raw psk_secret used to compute member_secret.
+// This is the psk_secret before HKDF-Extract with joiner_secret.
+// Returns nil if ComputePskSecret has not been called yet.
+func (ks *KeySchedule) GetRawPskSecret() *ciphersuite.Secret {
+	if ks == nil || ks.rawPskSecret == nil {
+		return nil
+	}
+	return ks.rawPskSecret.Clone()
 }
 
 // ComputeWelcomeSecret computes welcome_secret per RFC 9420 §8.

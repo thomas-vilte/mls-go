@@ -442,8 +442,10 @@ func (g *Group) CommitWithContext(
 	// Clone tree, apply proposals provisionally.
 	// Track newly added leaves (Add proposals) to exclude them from
 	// UpdatePath encryption (RFC §12.4.1: new members get commit_secret via Welcome).
+	// Also collect new extensions from any GroupContextExtensions proposal for newGC.
 	treeDiff := g.RatchetTree.Clone()
 	excluded := make(map[treesync.LeafIndex]bool)
+	newExtensions := g.GroupContext.Extensions // default: carry forward current extensions
 	for _, fp := range filtered {
 		if fp.Proposal.Type == ProposalTypeAdd && fp.Proposal.Add != nil && fp.Proposal.Add.KeyPackage != nil && fp.Proposal.Add.KeyPackage.LeafNode != nil {
 			leafData := *keyPackageLeafToTreeSync(fp.Proposal.Add.KeyPackage.LeafNode)
@@ -453,6 +455,10 @@ func (g *Group) CommitWithContext(
 			if err := g.applyProposalToTree(fp.Proposal, treeDiff, fp.Sender); err != nil {
 				return nil, fmt.Errorf("applying proposal to tree: %w", err)
 			}
+		}
+		// Collect new extensions from GCE proposals for the new epoch GroupContext.
+		if fp.Proposal.Type == ProposalTypeGroupContextExtensions && fp.Proposal.GroupContextExtensions != nil {
+			newExtensions = fp.Proposal.GroupContextExtensions.Extensions
 		}
 	}
 
@@ -520,7 +526,7 @@ func (g *Group) CommitWithContext(
 		Epoch:                   NewGroupEpoch(g.Epoch.AsUint64() + 1),
 		TreeHash:                newTreeHash,
 		ConfirmedTranscriptHash: confirmedHash,
-		Extensions:              g.GroupContext.Extensions,
+		Extensions:              newExtensions,
 	}
 
 	// Advance key schedule to compute confirmation_key del nuevo epoch
@@ -561,6 +567,14 @@ func (g *Group) CommitWithContext(
 
 	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
 
+	// Extract PskIDs from PSK proposals for CreateWelcome
+	var pskIDs []PskID
+	for _, proposal := range proposals {
+		if proposal.Type == ProposalTypePreSharedKey && proposal.PreSharedKey != nil {
+			pskIDs = append(pskIDs, proposal.PreSharedKey.PskID)
+		}
+	}
+
 	// Create StagedCommit with precomputed values for committer
 	stagedCommit := &StagedCommit{
 		Commit:                  commit,
@@ -572,6 +586,8 @@ func (g *Group) CommitWithContext(
 		PrecomputedEpochSecrets: newEpochSecrets,
 		PrecomputedGroupContext: newGC,
 		PrecomputedInterimHash:  newInterimHash,
+		PskIDs:                  pskIDs,
+		RawPskSecret:            newKS.GetRawPskSecret(),
 	}
 
 	g.PendingCommit = stagedCommit
@@ -885,9 +901,8 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 			tree.BlankNode(path[i])
 		}
 	case ProposalTypeGroupContextExtensions:
-		if proposal.GroupContextExtensions != nil {
-			g.GroupContext.Extensions = proposal.GroupContextExtensions.Extensions
-		}
+		// GCE does not change tree structure; no-op for provisional tree building.
+		// The actual extensions update happens in MergeCommit via applyProposal.
 	}
 	return nil
 }
@@ -940,6 +955,7 @@ func (g *Group) ProcessReceivedCommit(
 	if err != nil {
 		return fmt.Errorf("unmarshaling commit: %w", err)
 	}
+
 
 	switch ac.Content.Sender.Type {
 	case framing.SenderTypeMember:
@@ -1038,14 +1054,11 @@ func (g *Group) ProcessReceivedCommit(
 	decryptKey := myHpkePrivKeyBytes
 	if g.PendingUpdatePrivKey != nil {
 		ownLeaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(g.OwnLeafIndex))
-		fmt.Printf("DEBUG PK pending: ownLeaf=%d ownLeafNil=%v proposalsLen=%d\n", g.OwnLeafIndex, ownLeaf == nil, len(proposals))
 		if ownLeaf != nil && ownLeaf.LeafData != nil {
 			for _, p := range proposals {
-				fmt.Printf("DEBUG proposal type=%d update_nil=%v\n", p.Type, p.Update == nil)
 				if p.Type == ProposalTypeUpdate && p.Update != nil && p.Update.LeafNode != nil {
 					propKey := p.Update.LeafNode.SignatureKeyBytes
 					ownKey := ownLeaf.LeafData.SigKeyBytes()
-					fmt.Printf("DEBUG pending update check: propSigKey=%x ownSigKey=%x match=%v ownLeaf=%d\n", propKey[:4], ownKey[:4], bytes.Equal(propKey, ownKey), g.OwnLeafIndex)
 					if bytes.Equal(propKey, ownKey) {
 						decryptKey = g.PendingUpdatePrivKey
 						break
@@ -1053,8 +1066,6 @@ func (g *Group) ProcessReceivedCommit(
 				}
 			}
 		}
-	} else {
-		fmt.Printf("DEBUG PendingUpdatePrivKey is nil, ownLeaf=%d\n", g.OwnLeafIndex)
 	}
 
 	// Decrypt path secret with our HPKE private key.
@@ -1199,16 +1210,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	}
 
 	// Apply proposals to the ratchet tree
+	// RFC §12.4.3.2: for external commits, proposals (including any Remove) must be
+	// applied BEFORE adding the external committer's leaf, so the freed slot can be reused.
 	senderIdx := g.OwnLeafIndex
-	if stagedCommit.AuthenticatedContent != nil {
-		if stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
-			if stagedCommit.Commit == nil || stagedCommit.Commit.Path == nil || stagedCommit.Commit.Path.LeafNode == nil {
-				return fmt.Errorf("external commit missing update path")
-			}
-
-			extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
-			senderIdx = LeafNodeIndex(extLeafIdx)
-		} else {
+	isExternalCommit := stagedCommit.AuthenticatedContent != nil &&
+		stagedCommit.AuthenticatedContent.Content.Sender.Type == framing.SenderTypeNewMemberCommit
+	if !isExternalCommit {
+		if stagedCommit.AuthenticatedContent != nil {
 			senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
 		}
 	}
@@ -1231,6 +1239,15 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				g.PendingUpdatePrivKey = nil
 			}
 		}
+	}
+
+	// RFC §12.4.3.2: after proposals are applied, add the external committer's leaf.
+	if isExternalCommit {
+		if stagedCommit.Commit == nil || stagedCommit.Commit.Path == nil || stagedCommit.Commit.Path.LeafNode == nil {
+			return fmt.Errorf("external commit missing update path")
+		}
+		extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
+		senderIdx = LeafNodeIndex(extLeafIdx)
 	}
 
 	hasReInit := false
@@ -1461,7 +1478,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if g.CachedPsks == nil {
 			g.CachedPsks = make(map[string][]byte)
 		}
-		rKey := resumptionPskCacheKey(g.GroupContext.GroupID.AsSlice(), g.GroupContext.Epoch.AsUint64())
+		rKey := ResumptionPskCacheKey(g.GroupContext.GroupID.AsSlice(), g.GroupContext.Epoch.AsUint64())
 		g.CachedPsks[rKey] = append([]byte(nil), g.EpochSecrets.ResumptionSecret.AsSlice()...)
 	}
 
@@ -1492,7 +1509,7 @@ func (g *Group) collectPSKsFromProposals(proposals []*Proposal) ([]schedule.Psk,
 			ok       bool
 		)
 		if pid.PskType == 2 { // Resumption PSK
-			resumptionKey := resumptionPskCacheKey(pid.PskGroupID, pid.PskEpoch)
+			resumptionKey := ResumptionPskCacheKey(pid.PskGroupID, pid.PskEpoch)
 			pskBytes, ok = g.CachedPsks[resumptionKey]
 			if !ok {
 				if g.PSKStore != nil {
@@ -1535,9 +1552,9 @@ func (g *Group) collectPSKsFromProposals(proposals []*Proposal) ([]schedule.Psk,
 	return psks, nil
 }
 
-// resumptionPskCacheKey builds a compound cache key for resumption PSKs
+// ResumptionPskCacheKey builds a compound cache key for resumption PSKs
 // from (group_id, epoch) per RFC 9420 §8.4.
-func resumptionPskCacheKey(groupID []byte, epoch uint64) string {
+func ResumptionPskCacheKey(groupID []byte, epoch uint64) string {
 	buf := make([]byte, len(groupID)+8)
 	copy(buf, groupID)
 	buf[len(groupID)] = byte(epoch >> 56)

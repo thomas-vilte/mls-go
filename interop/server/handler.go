@@ -14,6 +14,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/interop/server/proto"
@@ -363,18 +364,23 @@ func (s *Server) Unprotect(ctx context.Context, req *proto.UnprotectRequest) (*p
 // or when a joiner processes a Welcome that references the PSK.
 func (s *Server) StorePSK(ctx context.Context, req *proto.StorePSKRequest) (*proto.StorePSKResponse, error) {
 	id := req.StateOrTransactionId
+	// Check transactions first to avoid collision with group state IDs.
+	// Transactions are transient and should be resolved before conflicts arise.
+	if _, ok := s.transactions.Load(id); ok {
+		// The id refers to a key-package transaction (joiner not yet in a group).
+		// Buffer the PSK so JoinGroup can pass it to JoinFromWelcome.
+		psksRaw, _ := s.txPsks.LoadOrStore(id, &sync.Map{})
+		psksMap := psksRaw.(*sync.Map)
+		psksMap.Store(string(req.PskId), append([]byte(nil), req.PskSecret...))
+		return &proto.StorePSKResponse{}, nil
+	}
 	if gVal, ok := s.groups.Load(id); ok {
 		// Existing group member: load directly into the group's PSK cache.
 		g := gVal.(*group.Group)
 		g.LoadPsk(req.PskId, req.PskSecret)
 		return &proto.StorePSKResponse{}, nil
 	}
-	// The id refers to a key-package transaction (joiner not yet in a group).
-	// Buffer the PSK so JoinGroup can pass it to JoinFromWelcome.
-	psksRaw, _ := s.txPsks.LoadOrStore(id, &sync.Map{})
-	psksMap := psksRaw.(*sync.Map)
-	psksMap.Store(string(req.PskId), append([]byte(nil), req.PskSecret...))
-	return &proto.StorePSKResponse{}, nil
+	return nil, status.Errorf(codes.NotFound, "state or transaction not found: %d", id)
 }
 
 // Free releases a group state
@@ -396,7 +402,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 
 	cs := groupInfo.GroupContext.CipherSuite
 
-	_, sigPrivKey, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
+	credWithKey, sigPrivKey, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "generating credential: %v", err)
 	}
@@ -411,7 +417,43 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 		groupInfo.RatchetTree = tree
 	}
 
-	g, staged, err := group.ExternalCommit(groupInfo, cs, sigPrivKey, sigPrivKey.PublicKey())
+	// RFC §12.4.3.2: if remove_prior is set, find the joiner's prior leaf in the tree
+	// matched by credential identity and include a Remove proposal.
+	removePriorLeaf := -1
+	if req.RemovePrior {
+		// Find the ratchet tree — prefer groupInfo.RatchetTree, fall back to extensions.
+		rtree := groupInfo.RatchetTree
+		if rtree == nil {
+			for _, ext := range groupInfo.Extensions {
+				if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+					parsed, parseErr := treesync.UnmarshalTree(ext.Data, cs)
+					if parseErr == nil {
+						rtree = parsed
+					}
+					break
+				}
+			}
+		}
+		if len(req.RatchetTree) > 0 && rtree == nil {
+			parsed, parseErr := treesync.UnmarshalTree(req.RatchetTree, cs)
+			if parseErr == nil {
+				rtree = parsed
+			}
+		}
+		if rtree != nil {
+			for i := uint32(0); i < rtree.NumLeaves; i++ {
+				leaf := rtree.GetLeaf(treesync.LeafIndex(i))
+				if leaf == nil || leaf.LeafData == nil || leaf.LeafData.Credential == nil {
+					continue
+				}
+				if string(leaf.LeafData.Credential.Identity) == string(req.Identity) {
+					removePriorLeaf = int(i)
+					break
+				}
+			}
+		}
+	}
+	g, staged, err := group.ExternalCommit(groupInfo, cs, sigPrivKey, sigPrivKey.PublicKey(), removePriorLeaf, credWithKey.Credential)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "external commit: %v", err)
 	}
@@ -757,7 +799,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// Create Welcome for new members if any Add proposals were committed.
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := g.CreateWelcome(newMemberKPs, joinerSecret, nil, sigKey)
+		welcome, err := g.CreateWelcome(newMemberKPs, joinerSecret, nil, sigKey, staged.PskIDs, staged.RawPskSecret)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating welcome: %v", err)
 		}
@@ -1072,7 +1114,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, state.SigPrivKey)
+		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, state.SigPrivKey, staged.PskIDs, staged.RawPskSecret)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating reinit welcome: %v", err)
 		}

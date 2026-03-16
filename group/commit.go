@@ -295,6 +295,12 @@ type StagedCommit struct {
 	// Cloned before ComputePskSecret zeroes it; used by the caller for CreateWelcome.
 	// Nil for receiver-side StagedCommits.
 	JoinerSecret *ciphersuite.Secret
+	// PskIDs contains the PreSharedKeyID entries for all PSK proposals in this commit.
+	// Used by CreateWelcome to populate GroupSecrets.psks for joiners.
+	PskIDs []PskID
+	// RawPskSecret is the psk_secret computed from all PSKs (0^Nh if none).
+	// Used by CreateWelcome to derive welcome_secret with the correct PSK secret.
+	RawPskSecret *ciphersuite.Secret
 }
 
 // ConfirmationTag represents the confirmation tag in a commit per RFC 9420 §8.2.
