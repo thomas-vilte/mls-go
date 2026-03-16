@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
 	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/schedule"
@@ -18,11 +19,17 @@ import (
 // The new member retrieves a signed GroupInfo, constructs an ExternalInit proposal
 // and an UpdatePath, and creates an external commit that adds them to the group.
 // Returns the resulting group state and the PublicMessage to broadcast to other members.
+//
+// If removePriorLeaf >= 0, a Remove proposal for that leaf index is included before
+// the ExternalInit proposal (RFC §12.4.3.2: external commit may contain Remove proposals
+// to remove prior appearance of this member).
 func ExternalCommit(
 	groupInfo *GroupInfo,
 	cs ciphersuite.CipherSuite,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
+	removePriorLeaf int, // -1 means no removal; >= 0 is the leaf index to remove
+	credential *credentials.Credential, // identity credential for the new leaf node
 ) (*Group, *StagedCommit, error) {
 	if groupInfo == nil || groupInfo.GroupContext == nil {
 		return nil, nil, fmt.Errorf("invalid group info")
@@ -76,11 +83,19 @@ func ExternalCommit(
 		},
 	}
 
-	// Clone tree and append our leaf.
+	// Clone tree. If removing a prior leaf, blank it first (RFC §12.4.3.2).
 	treeDiff := tree.Clone()
-	sigPubKeyECDSA, err := sigPubKey.ToECDSA()
-	if err != nil {
-		return nil, nil, fmt.Errorf("converting signature public key: %w", err)
+	var removeProposal *Proposal
+	if removePriorLeaf >= 0 {
+		priorLeaf := treesync.LeafIndex(removePriorLeaf)
+		removeProposal = &Proposal{
+			Type:   ProposalTypeRemove,
+			Remove: &RemoveProposal{Removed: LeafNodeIndex(priorLeaf)},
+		}
+		for _, nodeIdx := range treeDiff.DirectPath(priorLeaf) {
+			treeDiff.BlankNode(nodeIdx)
+		}
+		treeDiff.TruncateTrailingBlanks()
 	}
 
 	leafSecret, err := ciphersuite.NewSecretRandomCS(cs)
@@ -97,12 +112,22 @@ func ExternalCommit(
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
 	}
+
+	// Build leaf node using raw signature key bytes (works for both Ed25519 and P-256).
+	sigPubKeyRaw := sigPubKey.AsSlice()
 	ownLeafData := &treesync.LeafNodeData{
-		EncryptionKey:  leafPrivKey.PublicKey().Bytes(),
-		SignatureKey:   sigPubKeyECDSA,
-		Capabilities:   &treesync.LeafNodeCapabilities{},
-		Lifetime:       &treesync.LeafNodeLifetime{},
-		LeafNodeSource: 3, // commit
+		EncryptionKey:   leafPrivKey.PublicKey().Bytes(),
+		SignatureKeyRaw: sigPubKeyRaw,
+		Credential:      credential,
+		Capabilities:    &treesync.LeafNodeCapabilities{},
+		Lifetime:        &treesync.LeafNodeLifetime{},
+		LeafNodeSource:  3, // commit
+	}
+	// For ECDSA (P-256), also populate the typed key field.
+	if cs.SignatureScheme() == ciphersuite.ECDSA_SECP256R1_SHA256 {
+		if ecKey, err2 := sigPubKey.ToECDSA(); err2 == nil {
+			ownLeafData.SignatureKey = ecKey
+		}
 	}
 
 	tbsInitial := ownLeafData.MarshalTBS()
@@ -252,8 +277,13 @@ func ExternalCommit(
 
 	// Build and sign commit.
 	groupContext := groupInfo.GroupContext
+	proposals := []ProposalOrRef{{Proposal: externalInitProposal}}
+	if removeProposal != nil {
+		// Remove proposals come before ExternalInit per RFC §12.4.3.2
+		proposals = []ProposalOrRef{{Proposal: removeProposal}, {Proposal: externalInitProposal}}
+	}
 	commit := &Commit{
-		Proposals: []ProposalOrRef{{Proposal: externalInitProposal}},
+		Proposals: proposals,
 		Path:      updatePath,
 	}
 
