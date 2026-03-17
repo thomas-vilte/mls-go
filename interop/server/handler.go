@@ -237,6 +237,8 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 	// Preserve the joiner's signature key so GroupInfo and Protect work after joining.
 	s.signers.Store(stateID, tx.PrivKeys.GetSignaturePrivateKey())
 
+	log.Printf("JoinGroup: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+
 	return &proto.JoinGroupResponse{
 		StateId:            stateID,
 		EpochAuthenticator: g.EpochAuthenticator(),
@@ -469,6 +471,8 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 	s.groups.Store(stateID, g)
 	s.signers.Store(stateID, sigPrivKey)
 
+	log.Printf("ExternalJoin: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+
 	return &proto.ExternalJoinResponse{
 		StateId:            stateID,
 		Commit:             commitData,
@@ -535,17 +539,15 @@ func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRe
 	}
 	g := gVal.(*group.Group)
 
-	// Find member by identity — Credential.Identity is a []byte field, not a method.
+	// Find member by identity. Iterate Members map directly: after removals the
+	// tree is sparse, so MemberCount() as a loop bound would miss high leaf indices.
 	targetLeafIndex := group.LeafNodeIndex(0)
 	found := false
-	memberCount := g.MemberCount()
-	for i := 0; i < memberCount; i++ {
-		if member, ok := g.GetMember(group.LeafNodeIndex(i)); ok {
-			if string(member.Credential.Identity) == string(req.RemovedId) {
-				targetLeafIndex = group.LeafNodeIndex(i)
-				found = true
-				break
-			}
+	for leafIdx, m := range g.Members {
+		if m.Active && string(m.Credential.Identity) == string(req.RemovedId) {
+			targetLeafIndex = leafIdx
+			found = true
+			break
 		}
 	}
 
@@ -646,12 +648,11 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 
 	case "remove":
 		// RemovedId is the identity bytes; find the leaf index.
-		memberCount := g.MemberCount()
-		for i := range memberCount {
-			if m, ok := g.GetMember(group.LeafNodeIndex(i)); ok {
-				if string(m.Credential.Identity) == string(desc.RemovedId) {
-					return group.NewRemoveProposal(group.LeafNodeIndex(i)), nil
-				}
+		// Iterate the Members map directly: after removals the tree is sparse,
+		// so using MemberCount() as an upper bound on leaf indices is wrong.
+		for leafIdx, m := range g.Members {
+			if m.Active && string(m.Credential.Identity) == string(desc.RemovedId) {
+				return group.NewRemoveProposal(leafIdx), nil
 			}
 		}
 		return nil, fmt.Errorf("member with identity %s not found", desc.RemovedId)
@@ -744,11 +745,16 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 		sender := g.OwnLeafIndex
 		if p.Type == group.ProposalTypeUpdate && p.Update != nil {
 			newSigKey := p.Update.LeafNode.SignatureKeyBytes
-			for i := range g.MemberCount() {
-				leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(i))
+			// Iterate Members map directly: after removals the tree is sparse,
+			// so using MemberCount() as an upper bound on leaf indices is wrong.
+			for leafIdx, m := range g.Members {
+				if !m.Active {
+					continue
+				}
+				leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
 				if leaf != nil && leaf.LeafData != nil {
 					if string(leaf.LeafData.SigKeyBytes()) == string(newSigKey) {
-						sender = group.LeafNodeIndex(i)
+						sender = leafIdx
 						break
 					}
 				}
@@ -799,7 +805,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// Create Welcome for new members if any Add proposals were committed.
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := g.CreateWelcome(newMemberKPs, joinerSecret, nil, sigKey, staged.PskIDs, staged.RawPskSecret)
+		welcome, err := g.CreateWelcome(newMemberKPs, joinerSecret, nil, sigKey, staged.PskIDs, staged.RawPskSecret, staged)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating welcome: %v", err)
 		}
@@ -810,6 +816,8 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	if req.ExternalTree {
 		ratchetTree = g.RatchetTree.MarshalTree()
 	}
+
+	log.Printf("Commit: state_id=%d ownLeaf=%d pnpkLen=%d", req.StateId, g.OwnLeafIndex, len(g.PathNodePrivKeys))
 
 	return &proto.CommitResponse{
 		Commit:      commitData,
@@ -861,6 +869,8 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 		s.signers.Store(newStateID, signerVal)
 	}
 
+	log.Printf("HandleCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+
 	return &proto.HandleCommitResponse{
 		StateId:            newStateID,
 		EpochAuthenticator: g.EpochAuthenticator(),
@@ -892,6 +902,8 @@ func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendi
 	if signerVal, ok := s.signers.Load(req.StateId); ok {
 		s.signers.Store(newStateID, signerVal)
 	}
+
+	log.Printf("HandlePendingCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
 
 	return &proto.HandleCommitResponse{
 		StateId:            newStateID,
@@ -947,6 +959,9 @@ func (s *Server) HandlePendingReInitCommit(ctx context.Context, req *proto.Handl
 		if err := g.MergeCommit(g.PendingCommit); err != nil {
 			return nil, status.Errorf(codes.Internal, "merging pending commit: %v", err)
 		}
+	} else {
+		// Commit was already merged by the Commit RPC — use saved proposals.
+		proposals = g.LastCommittedProposals
 	}
 
 	return s.finalizeReInitCommit(g, proposals)
@@ -1050,11 +1065,6 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 		SigPrivKey:       sigPrivKey,
 	})
 
-	sigKeyBytes, err := privKeys.SignatureKey.Bytes()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "getting reinit sig key bytes: %v", err)
-	}
-	_ = sigKeyBytes
 	kpData := kp.Marshal()
 
 	return &proto.HandleReInitCommitResponse{
@@ -1114,7 +1124,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, state.SigPrivKey, staged.PskIDs, staged.RawPskSecret)
+		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, state.SigPrivKey, staged.PskIDs, staged.RawPskSecret, staged)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating reinit welcome: %v", err)
 		}
@@ -1230,9 +1240,12 @@ func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberA
 	proposal := group.NewAddProposal(kp)
 	proposalBytes := group.ProposalMarshal(proposal)
 
-	sigKeyBytes, err := privKeys.SignatureKey.Bytes()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "getting sig key bytes: %v", err)
+	// Extract raw private key bytes (Ed25519 for CS1/CS3, P-256 for CS2).
+	var sigKeyBytes []byte
+	if privKeys.Ed25519SignatureKey != nil {
+		sigKeyBytes = []byte(privKeys.Ed25519SignatureKey)
+	} else if privKeys.SignatureKey != nil {
+		sigKeyBytes, _ = privKeys.SignatureKey.Bytes()
 	}
 
 	txID := s.generateTransactionID()

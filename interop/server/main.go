@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
+	"runtime/debug"
 
 	"google.golang.org/grpc"
 
@@ -13,7 +16,19 @@ import (
 
 func main() {
 	port := flag.Int("port", 50051, "Port to listen on")
+	memLimit := flag.Int("memlimit", 2048, "Memory limit in MB (GOMEMLIMIT)")
 	flag.Parse()
+
+	// Set memory limit to prevent OOM kills
+	limit := int64(*memLimit) * 1024 * 1024
+	debug.SetMemoryLimit(limit)
+
+	// pprof on port+1000
+	go func() {
+		pprofPort := *port + 1000
+		log.Printf("pprof on :%d", pprofPort)
+		http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), nil)
+	}()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
