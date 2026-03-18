@@ -301,6 +301,23 @@ type StagedCommit struct {
 	// RawPskSecret is the psk_secret computed from all PSKs (0^Nh if none).
 	// Used by CreateWelcome to derive welcome_secret with the correct PSK secret.
 	RawPskSecret *ciphersuite.Secret
+	// PathSecrets holds all N+1 path secrets from createUpdatePath (indexed 0..N).
+	// pathSecrets[0] = leaf secret, pathSecrets[N] = commit_secret.
+	// Used by CreateWelcome to compute per-joiner path_secret values.
+	PathSecrets []*ciphersuite.Secret
+	// CommitterFilteredLevels and CommitterDirectPath are used by CreateWelcome
+	// to locate each new joiner's position in the committer's copath.
+	CommitterFilteredLevels []int
+	CommitterDirectPath     []treesync.NodeIndex
+	CommitterCopath         []treesync.NodeIndex
+	// TreeAfterProposals is the ratchet tree with all proposals applied (including
+	// Add proposals that add new joiners), before MergeCommit updates the group state.
+	// Used by CreateWelcome to find per-joiner path_secret for newly added members
+	// whose LCA with the committer is below the filtered direct path.
+	TreeAfterProposals *treesync.RatchetTree
+	// MembershipTag is the MAC(membership_key, AuthenticatedContentTBM) for PublicMessage
+	// commits (RFC §6.2). Nil for PrivateMessage commits or when membership_key is unavailable.
+	MembershipTag []byte
 }
 
 // ConfirmationTag represents the confirmation tag in a commit per RFC 9420 §8.2.
