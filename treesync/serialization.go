@@ -70,6 +70,50 @@ func unmarshalPublicKey(data []byte, cs ciphersuite.CipherSuite) (*ecdh.PublicKe
 	return curve.NewPublicKey(data)
 }
 
+// MarshalTreeRFC serializes the RatchetTree in RFC 9420 §12.4.3.3 format.
+//
+// Format: VL(byte_count) || optional<Node>*
+// Each node is encoded as: 0x00 (absent) or 0x01 || nodeType(u8) || nodeData.
+//
+// This is the interoperable format expected by OpenMLS and other RFC-compliant
+// implementations. It differs from the internal MarshalTree() format.
+func (t *RatchetTree) MarshalTreeRFC() []byte {
+	nodesBuf := tls.NewWriter()
+	for i := range t.Nodes {
+		node := &t.Nodes[i]
+		if node.State == NodeStateEmpty || node.State == NodeStateBlank {
+			nodesBuf.WriteUint8(0) // absent
+			continue
+		}
+		nodesBuf.WriteUint8(1) // present
+		if IsLeaf(NodeIndex(i)) {
+			nodesBuf.WriteUint8(nodeTypeLeaf)
+			if node.LeafData != nil {
+				nodesBuf.WriteRaw(node.LeafData.Marshal())
+			}
+		} else {
+			nodesBuf.WriteUint8(nodeTypeParent)
+			if node.EncryptionKey != nil {
+				nodesBuf.WriteVLBytes(node.EncryptionKey.Bytes())
+			} else {
+				nodesBuf.WriteVLBytes([]byte{})
+			}
+			nodesBuf.WriteVLBytes(node.ParentHash)
+			sortedUnmerged := make([]LeafIndex, len(node.UnmergedLeaves))
+			copy(sortedUnmerged, node.UnmergedLeaves)
+			sort.Slice(sortedUnmerged, func(i, j int) bool { return sortedUnmerged[i] < sortedUnmerged[j] })
+			unmergedBuf := tls.NewWriter()
+			for _, li := range sortedUnmerged {
+				unmergedBuf.WriteUint32(uint32(li))
+			}
+			nodesBuf.WriteVLBytes(unmergedBuf.Bytes())
+		}
+	}
+	w := tls.NewWriter()
+	w.WriteVLBytes(nodesBuf.Bytes())
+	return w.Bytes()
+}
+
 // UnmarshalTree deserializes a RatchetTree from TLS format.
 func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error) {
 	r := tls.NewReader(data)

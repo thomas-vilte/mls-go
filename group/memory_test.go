@@ -8,8 +8,9 @@ import (
 	keypackages "github.com/thomas-vilte/mls-go/keypackages"
 )
 
-// TestMemoryZeroing_AfterCommit verifica que los secrets del epoch anterior
-// son borrados después de un commit (Fase 4.4).
+// TestMemoryZeroing_AfterCommit verifies that after a commit the old epoch's
+// secrets are moved into EpochHistory (not discarded) and that the group
+// advances to a fresh set of EpochSecrets.
 func TestMemoryZeroing_AfterCommit(t *testing.T) {
 	// Crear grupo con Alice
 	cred1, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -33,41 +34,25 @@ func TestMemoryZeroing_AfterCommit(t *testing.T) {
 		t.Fatalf("creating commit: %v", err)
 	}
 
-	// Al hacer MergeCommit, los oldSecrets deberían zerarse
+	// Al hacer MergeCommit, los oldSecrets se mueven a EpochHistory.
 	if err := aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("merging commit: %v", err)
 	}
 
-	// Verificar que los viejos secrets fueron borrados (ahora son cero)
-	checkZero := func(name string, secret *ciphersuite.Secret) {
-		t.Helper()
-		if secret == nil {
-			return
-		}
-
-		data := secret.AsSlice()
-		for i, b := range data {
-			if b != 0 {
-				t.Errorf("Secret %s was not zeroed: byte %d is %02x", name, i, b)
-				return
-			}
-		}
+	// Old epoch (0) must be cached in EpochHistory.
+	if aliceGroup.EpochHistory == nil {
+		t.Fatal("EpochHistory is nil after commit")
+	}
+	if _, ok := aliceGroup.EpochHistory[0]; !ok {
+		t.Fatal("epoch 0 not cached in EpochHistory")
 	}
 
-	checkZero("SenderDataSecret", oldSecrets.SenderDataSecret)
-	checkZero("EncryptionSecret", oldSecrets.EncryptionSecret)
-	checkZero("ExporterSecret", oldSecrets.ExporterSecret)
-	checkZero("AuthenticationSecret", oldSecrets.AuthenticationSecret)
-	checkZero("ConfirmationKey", oldSecrets.ConfirmationKey)
-	checkZero("MembershipKey", oldSecrets.MembershipKey)
-	checkZero("ExternalSecret", oldSecrets.ExternalSecret)
-	checkZero("InitSecret", oldSecrets.InitSecret)
-	checkZero("ResumptionSecret", oldSecrets.ResumptionSecret)
-
-	// Los nuevos secrets no deben ser cero
+	// New EpochSecrets must differ from the old ones.
 	newSecrets := aliceGroup.EpochSecrets
-	if newSecrets.SenderDataSecret.AsSlice()[0] == 0 && newSecrets.SenderDataSecret.AsSlice()[1] == 0 {
-		// Posibilidad mínima de que empiece con 00, pero revisar todos los bytes es excesivo
-		t.Log("Warning: New SenderDataSecret starts with 0x00")
+	if newSecrets == oldSecrets {
+		t.Fatal("EpochSecrets pointer unchanged after commit")
+	}
+	if newSecrets.SenderDataSecret == nil {
+		t.Fatal("new SenderDataSecret is nil")
 	}
 }

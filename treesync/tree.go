@@ -272,6 +272,39 @@ func nodeLevel(x uint32) uint32 {
 	return uint32(bits.TrailingZeros32(^x))
 }
 
+// LowestCommonAncestor returns the lowest common ancestor of two leaves
+// in the binary tree (RFC Appendix C). The result is a NodeIndex.
+func LowestCommonAncestor(x, y LeafIndex) NodeIndex {
+	xn := uint32(LeafIndexToNodeIndex(x))
+	yn := uint32(LeafIndexToNodeIndex(y))
+	lx := nodeLevel(xn) + 1
+	ly := nodeLevel(yn) + 1
+	if lx <= ly && (xn>>ly) == (yn>>ly) {
+		return NodeIndex(yn)
+	}
+	if ly <= lx && (xn>>lx) == (yn>>lx) {
+		return NodeIndex(xn)
+	}
+	k := uint32(0)
+	for xn != yn {
+		xn >>= 1
+		yn >>= 1
+		k++
+	}
+	return NodeIndex((xn << k) + (1 << (k - 1)) - 1)
+}
+
+// FindLeafByEncKey returns the leaf index of a leaf with the given encryption key, or -1 if not found.
+func (t *RatchetTree) FindLeafByEncKey(encKey []byte) LeafIndex {
+	for i := LeafIndex(0); i < LeafIndex(t.NumLeaves); i++ {
+		node := t.GetLeaf(i)
+		if node != nil && node.LeafData != nil && bytes.Equal(node.LeafData.EncryptionKey, encKey) {
+			return i
+		}
+	}
+	return LeafIndex(0xFFFFFFFF) // not found sentinel
+}
+
 // Root returns the root node index per RFC Appendix C:
 //
 //	root(n) = (1 << floor(log2(2n-1))) - 1
@@ -284,32 +317,32 @@ func (t *RatchetTree) Root() NodeIndex {
 	return NodeIndex((1 << w) - 1)
 }
 
+// parentStep computes one step of the parent function per RFC Appendix C.
+// The result may fall outside the valid node range for non-power-of-2 trees.
+func parentStep(node NodeIndex) NodeIndex {
+	l := nodeLevel(uint32(node))
+	if (uint32(node)>>(l+1))&1 == 0 {
+		// left child: parent is to the right
+		return node + NodeIndex(1<<l)
+	}
+	// right child: parent is to the left
+	return node - NodeIndex(1<<l)
+}
+
 // Parent returns the parent of a node per RFC Appendix C.
 //
-// If bit (l+1) of node is 0, it's a left child → parent = x + 2^l.
-// If bit (l+1) of node is 1, it's a right child → parent = x - 2^l.
-// In non-power-of-2 trees, the result may exceed the root; it is bounded.
+// For non-power-of-2 trees, parentStep is applied repeatedly until the result
+// falls within the valid node range (0..2n-2), per the RFC algorithm.
 func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	root := t.Root()
 	if node == root {
 		return 0, fmt.Errorf("root has no parent")
 	}
 
-	l := nodeLevel(uint32(node))
-	var p NodeIndex
-	if (uint32(node)>>(l+1))&1 == 0 {
-		// left child: parent is to the right
-		p = node + NodeIndex(1<<l)
-	} else {
-		// right child: parent is to the left
-		p = node - NodeIndex(1<<l)
-	}
-
-	// For non-power-of-2 trees, the "natural" parent may fall outside
-	// the valid range (0..2n-2); in that case, use the root.
 	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
-	if p > maxIdx {
-		p = root
+	p := parentStep(node)
+	for p > maxIdx {
+		p = parentStep(p)
 	}
 
 	return p, nil
@@ -407,7 +440,9 @@ func (t *RatchetTree) AddLeaf(leaf LeafNodeData) (LeafIndex, NodeIndex) {
 		}
 	}
 
-	// Expand tree if needed
+	// Expand tree. RFC 9420 §7.8 says "smallest size that can contain the new
+	// member count". We round up to the next power-of-2 so that our internal
+	// tree structure matches the reference test vectors.
 	i := LeafIndex(t.NumLeaves)
 	newNumLeaves := t.NumLeaves + 1
 	if newNumLeaves > 1 && (newNumLeaves&(newNumLeaves-1)) != 0 {
@@ -631,6 +666,41 @@ func (t *RatchetTree) ResolutionWithExclusions(idx NodeIndex, excluded map[LeafI
 	res = append(res, t.ResolutionWithExclusions(right, excluded)...)
 
 	return res
+}
+
+// SubtreeContainsLeafByKey checks if any leaf node under the subtree rooted at
+// idx has an EncryptionKey matching the given key.
+func (t *RatchetTree) SubtreeContainsLeafByKey(idx NodeIndex, key []byte) bool {
+	if int(idx) >= len(t.Nodes) {
+		return false
+	}
+	if IsLeaf(idx) {
+		node := &t.Nodes[idx]
+		if node.State == NodeStatePresent && node.LeafData != nil {
+			return bytes.Equal(node.LeafData.EncryptionKey, key)
+		}
+		return false
+	}
+	left, _ := t.LeftChild(idx)
+	right, _ := t.RightChild(idx)
+	return t.SubtreeContainsLeafByKey(left, key) || t.SubtreeContainsLeafByKey(right, key)
+}
+
+// SubtreeContainsLeaf checks if the given leaf index is under the subtree rooted at idx.
+func (t *RatchetTree) SubtreeContainsLeaf(idx NodeIndex, leaf LeafIndex) bool {
+	target := LeafIndexToNodeIndex(leaf)
+	if int(idx) >= len(t.Nodes) || int(target) >= len(t.Nodes) {
+		return false
+	}
+	if idx == target {
+		return true
+	}
+	if IsLeaf(idx) {
+		return false
+	}
+	left, _ := t.LeftChild(idx)
+	right, _ := t.RightChild(idx)
+	return t.SubtreeContainsLeaf(left, leaf) || t.SubtreeContainsLeaf(right, leaf)
 }
 
 // VerifyParentHashes verifies the parent hashes along the direct path (RFC §7.9).

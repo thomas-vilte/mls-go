@@ -5,6 +5,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/secrettree"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
@@ -92,6 +93,34 @@ func (g *Group) SendApplicationMessage(
 	})
 }
 
+// SignProposalAsPublicMessage wraps a Proposal in a signed PublicMessage MLSMessage.
+//
+// RFC 9420 §6.2: proposals from group members MUST be sent as PublicMessage with
+// a membership_tag. This is the format expected by other MLS implementations.
+func (g *Group) SignProposalAsPublicMessage(
+	proposal *Proposal,
+	sigKey *ciphersuite.SignaturePrivateKey,
+) ([]byte, error) {
+	content := framing.FramedContent{
+		GroupID:           g.GroupID.AsSlice(),
+		Epoch:             g.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(proposal)},
+	}
+	pm, err := framing.NewPublicMessage(
+		content,
+		sigKey,
+		g.GroupContext.Marshal(),
+		g.EpochSecrets.MembershipKey,
+		g.CipherSuite,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("signing proposal: %w", err)
+	}
+	return framing.NewMLSMessagePublic(pm).Marshal(), nil
+}
+
 // ReceiveMessage decrypts an application message from another member.
 //
 // RFC 9420 §6.3
@@ -155,6 +184,9 @@ func (g *Group) ReceiveMessage(
 //
 // This is the entry point used by the MLSWG interop gRPC Unprotect RPC,
 // where the ciphertext is opaque and the sender is determined at decrypt time.
+//
+// Messages from previous epochs are decrypted using the cached EpochHistory
+// to support out-of-order delivery across epoch boundaries.
 func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext, authenticatedData []byte, err error) {
 	if g.state != StateOperational {
 		return nil, nil, fmt.Errorf("group not operational")
@@ -162,11 +194,28 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 	if pm == nil {
 		return nil, nil, fmt.Errorf("private message is nil")
 	}
-	if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
-		return nil, nil, fmt.Errorf("sender_data_secret not available")
-	}
-	if g.SecretTree == nil {
-		return nil, nil, fmt.Errorf("secret tree not available")
+
+	var senderDataSecret *ciphersuite.Secret
+	var secretTree *secrettree.Tree
+
+	if pm.Epoch == g.Epoch.AsUint64() {
+		// Current epoch — use live secrets.
+		if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
+			return nil, nil, fmt.Errorf("sender_data_secret not available")
+		}
+		if g.SecretTree == nil {
+			return nil, nil, fmt.Errorf("secret tree not available")
+		}
+		senderDataSecret = g.EpochSecrets.SenderDataSecret
+		secretTree = g.SecretTree
+	} else {
+		// Old epoch — look up cached epoch history.
+		if state, ok := g.EpochHistory[pm.Epoch]; ok {
+			senderDataSecret = state.SenderDataSecret
+			secretTree = state.SecretTree
+		} else {
+			return nil, nil, fmt.Errorf("message from unknown epoch %d (current: %d)", pm.Epoch, g.Epoch.AsUint64())
+		}
 	}
 
 	// Decrypt without signature verification — sender identity is not available
@@ -174,8 +223,8 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 	// framing.Decrypt while still advancing the SecretTree ratchet correctly.
 	ac, decErr := framing.Decrypt(pm, framing.DecryptParams{
 		CipherSuite:      g.CipherSuite,
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
+		SenderDataSecret: senderDataSecret,
+		SecretTree:       secretTree,
 		GroupContext:     g.GroupContext.Marshal(),
 	})
 	if decErr != nil {

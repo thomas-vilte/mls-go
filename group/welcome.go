@@ -448,10 +448,11 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
-	pathSecret []byte,
+	pathSecret []byte, // deprecated: ignored if staged != nil (per-joiner path secrets computed from staged)
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
 	pskIDs []PskID,
 	pskSecret *ciphersuite.Secret,
+	staged ...*StagedCommit, // optional: if provided, per-joiner path_secret is derived from it
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
@@ -509,10 +510,35 @@ func (g *Group) CreateWelcome(
 		// Compute key_package_ref (hash of the key package)
 		kpRef := keyPackageRef(kp, g.CipherSuite)
 
+		// Compute per-joiner path_secret from the staged commit if available.
+		// RFC 9420 §12.4.3.1: the path_secret for a joiner is the one at the
+		// lowest filtered direct path node that is an ancestor of the joiner's leaf.
+		// This correctly handles newly added joiners whose LCA with the committer
+		// is below the filtered path (because their copath node was excluded).
+		joinerPathSecret := pathSecret
+		if len(staged) > 0 && staged[0] != nil && staged[0].PathSecrets != nil {
+			sc := staged[0]
+			N := len(sc.CommitterDirectPath) - 1
+			F := len(sc.CommitterFilteredLevels)
+
+			if sc.TreeAfterProposals != nil {
+				encKey := kp.LeafNode.EncryptionKey
+				// Find the lowest filtered level whose subtree contains the joiner.
+				for m, level := range sc.CommitterFilteredLevels {
+					nodeIdx := sc.CommitterDirectPath[level+1]
+					if sc.TreeAfterProposals.SubtreeContainsLeafByKey(nodeIdx, encKey) {
+						ps := sc.PathSecrets[N-F+m+1]
+						joinerPathSecret = ps.AsSlice()
+						break
+					}
+				}
+			}
+		}
+
 		// Build GroupSecrets
 		groupSecrets := &GroupSecrets{
 			JoinerSecret: joinerSecret,
-			PathSecret:   pathSecret,
+			PathSecret:   joinerPathSecret,
 			Psks:         pskIDs,
 		}
 
@@ -800,6 +826,52 @@ func JoinFromWelcomeWithContext(
 	}
 	for id, pskBytes := range externalPsks {
 		group.CachedPsks[id] = append([]byte(nil), pskBytes...)
+	}
+
+	// Derive PathNodePrivKeys from path_secret (RFC 9420 §12.4.3.1).
+	// The path_secret lets the joiner derive private keys for the committer's
+	// filtered direct path nodes, from the common ancestor up to the root.
+	// This is needed so the joiner can decrypt future commits where one of
+	// these intermediate nodes appears in a copath resolution.
+	if len(groupSecrets.PathSecret) > 0 {
+		committerLeafIdx := treesync.LeafIndex(groupInfo.Signer)
+		committerDP := ratchetTree.DirectPath(committerLeafIdx)
+
+		// Walk the committer's directPath (skipping the leaf at index 0).
+		// Only PRESENT nodes were filtered levels when the UpdatePath was built;
+		// BLANK nodes were non-filtered (their copath had empty resolution with
+		// the exclusion set, so no path_secret entry was produced for them).
+		// The path_secret advances one step per PRESENT node.
+		// We start storing keys from the first PRESENT node that is an ancestor
+		// of the joiner's leaf (SubtreeContainsLeaf check).
+		ps := ciphersuite.NewSecret(groupSecrets.PathSecret)
+		ownLeaf := treesync.LeafIndex(ownLeafIndex)
+		started := false
+		for _, nodeIdx := range committerDP[1:] { // skip the sender leaf (index 0)
+			if int(nodeIdx) >= len(ratchetTree.Nodes) {
+				break
+			}
+			if ratchetTree.Nodes[nodeIdx].State != treesync.NodeStatePresent {
+				continue // blank node = non-filtered, skip (no path_secret for it)
+			}
+			if !started {
+				if !ratchetTree.SubtreeContainsLeaf(nodeIdx, ownLeaf) {
+					continue // joiner is not in this node's subtree
+				}
+				started = true
+				if group.PathNodePrivKeys == nil {
+					group.PathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+				}
+			}
+			nodeSecret, nsErr := ps.DeriveSecret(welcome.CipherSuite, "node")
+			if nsErr == nil {
+				privKey, pkErr := ciphersuite.DeriveKeyPair(welcome.CipherSuite, nodeSecret.AsSlice())
+				if pkErr == nil {
+					group.PathNodePrivKeys[nodeIdx] = privKey.Bytes()
+				}
+			}
+			ps, _ = ps.DeriveSecret(welcome.CipherSuite, "path")
+		}
 	}
 
 	// Cache the resumption secret for this initial epoch so that future

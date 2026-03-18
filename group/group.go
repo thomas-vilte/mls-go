@@ -98,6 +98,57 @@ type Group struct {
 	// (not MyLeafEncryptionKey) to decrypt the UpdatePath when the Update proposal
 	// is committed in a received commit.
 	PendingUpdatePrivKey []byte
+	// PathNodePrivKeys stores the private HPKE keys for intermediate nodes on the
+	// member's direct path that they generated during their own commits. These are
+	// needed when a later commit from another member includes one of these nodes in
+	// a copath resolution (RFC 9420 §12.4.2).
+	PathNodePrivKeys map[treesync.NodeIndex][]byte
+	// LastCommittedProposals holds the proposals from the most recent commit.
+	// Set by MergeCommit so that handlers (e.g. HandlePendingReInitCommit) can
+	// inspect committed proposals after PendingCommit has been cleared.
+	LastCommittedProposals []*Proposal
+	// EpochHistory caches secrets from previous epochs to allow decryption of
+	// out-of-order messages that arrive after the epoch has advanced.
+	// Keyed by epoch number. Limited to the last maxCachedEpochs epochs.
+	EpochHistory map[uint64]*epochState
+}
+
+// epochState holds the decryption material for a past epoch.
+type epochState struct {
+	SenderDataSecret *ciphersuite.Secret
+	SecretTree       *secrettree.Tree
+}
+
+// maxCachedEpochs is the number of past epochs to keep for out-of-order decryption.
+const maxCachedEpochs = 5
+
+// cacheOldEpoch saves the current epoch's decryption material into EpochHistory
+// so that out-of-order messages from that epoch can be decrypted after the epoch
+// advances. Called by MergeCommit right before replacing EpochSecrets.
+//
+// g.Epoch has already been incremented at this point, so the old epoch number
+// is g.Epoch.AsUint64() - 1.
+func (g *Group) cacheOldEpoch() {
+	if g.EpochSecrets == nil {
+		return
+	}
+	oldEpoch := g.Epoch.AsUint64() - 1
+	if g.EpochHistory == nil {
+		g.EpochHistory = make(map[uint64]*epochState)
+	}
+	g.EpochHistory[oldEpoch] = &epochState{
+		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
+		SecretTree:       g.SecretTree,
+	}
+	// Evict entries older than maxCachedEpochs.
+	if oldEpoch >= maxCachedEpochs {
+		cutoff := oldEpoch - uint64(maxCachedEpochs)
+		for ep := range g.EpochHistory {
+			if ep <= cutoff {
+				delete(g.EpochHistory, ep)
+			}
+		}
+	}
 }
 
 // NewGroup creates a new MLS group with a single member (the creator).
@@ -120,13 +171,17 @@ func NewGroup(
 	ratchetTree := treesync.NewRatchetTree(1, cipherSuite)
 
 	// Add our leaf
+	leafCaps := toTreeSyncCapabilities(keyPackage.LeafNode.Capabilities)
+	if leafCaps == nil {
+		leafCaps = &treesync.LeafNodeCapabilities{}
+	}
 	leafData := treesync.LeafNodeData{
 		EncryptionKey:   keyPackage.LeafNode.EncryptionKey, // RFC §10.1: use LeafNode.encryption_key for TreeKEM
 		SignatureKey:    keyPackage.LeafNode.SignatureKey,
 		SignatureKeyRaw: append([]byte(nil), keyPackage.LeafNode.SignatureKeyBytes...),
 		Credential:      keyPackage.LeafNode.Credential,
-		Capabilities:    &treesync.LeafNodeCapabilities{},
-		Lifetime:        &treesync.LeafNodeLifetime{},
+		Capabilities:    leafCaps,
+		Lifetime:        keyPackageToTreeSyncLifetime(keyPackage.LeafNode.Lifetime),
 		LeafNodeSource:  1, // key_package
 	}
 
@@ -208,6 +263,25 @@ func NewGroup(
 	}
 
 	return group, nil
+}
+
+// NewGroupWithExtensions creates a new group with the given GroupContext extensions.
+// Identical to NewGroup except the initial GroupContext includes the provided extensions.
+func NewGroupWithExtensions(
+	groupID *GroupID,
+	cipherSuite ciphersuite.CipherSuite,
+	keyPackage *keypackages.KeyPackage,
+	privKeys *keypackages.KeyPackagePrivateKeys,
+	extensions []Extension,
+) (*Group, error) {
+	g, err := NewGroup(groupID, cipherSuite, keyPackage, privKeys)
+	if err != nil {
+		return nil, err
+	}
+	if len(extensions) > 0 {
+		g.GroupContext.Extensions = extensions
+	}
+	return g, nil
 }
 
 // AddMember creates a proposal to add a new member to the group.
@@ -319,9 +393,12 @@ func (g *Group) SelfUpdate(sigKey *ciphersuite.SignaturePrivateKey) (*Proposal, 
 	g.PendingUpdatePrivKey = newEncPriv.Bytes()
 
 	// Build the new leaf node (LeafNodeSource=2 for update per RFC §7.2).
+	// Use SigKeyBytes() to ensure SignatureKeyRaw is always set: for ECDSA leaves
+	// (CS2) after a commit, SignatureKey holds the *ecdsa.PublicKey and SignatureKeyRaw
+	// is nil, so a direct copy of SignatureKeyRaw would produce an empty TBS field.
 	newLN := &treesync.LeafNodeData{
 		EncryptionKey:   newEncPub,
-		SignatureKeyRaw: append([]byte(nil), ld.SignatureKeyRaw...),
+		SignatureKeyRaw: append([]byte(nil), ld.SigKeyBytes()...),
 		Credential:      ld.Credential,
 		Capabilities:    ld.Capabilities,
 		Lifetime:        ld.Lifetime,
@@ -467,7 +544,10 @@ func (g *Group) CommitWithContext(
 	var commitSecret *ciphersuite.Secret
 
 	// Generate UpdatePath, excluding newly added leaves from encryption.
-	updatePath, commitSecret, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded)
+	var allPathSecrets []*ciphersuite.Secret
+	var committerDP, committerCopath []treesync.NodeIndex
+	var committerLevels []int
+	updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded)
 	if err != nil {
 		return nil, fmt.Errorf("creating update path: %w", err)
 	}
@@ -567,6 +647,16 @@ func (g *Group) CommitWithContext(
 
 	newInterimHash := schedule.ComputeInterimTranscriptHash(g.CipherSuite, confirmedHash, confirmationTag)
 
+	// Compute membership_tag for PublicMessage commits (RFC §6.2).
+	// Uses the CURRENT epoch's membership_key (before MergeCommit advances the group).
+	var membershipTag []byte
+	if format == framing.WireFormatPublicMessage &&
+		content.Sender.Type == framing.SenderTypeMember &&
+		g.EpochSecrets != nil && g.EpochSecrets.MembershipKey != nil {
+		tbm := ac.MarshalTBM()
+		membershipTag = schedule.ComputeMembershipTag(g.CipherSuite, g.EpochSecrets.MembershipKey.AsSlice(), tbm)
+	}
+
 	// Extract PskIDs from PSK proposals for CreateWelcome
 	var pskIDs []PskID
 	for _, proposal := range proposals {
@@ -588,6 +678,12 @@ func (g *Group) CommitWithContext(
 		PrecomputedInterimHash:  newInterimHash,
 		PskIDs:                  pskIDs,
 		RawPskSecret:            newKS.GetRawPskSecret(),
+		PathSecrets:             allPathSecrets,
+		CommitterFilteredLevels: committerLevels,
+		CommitterDirectPath:     committerDP,
+		CommitterCopath:         committerCopath,
+		TreeAfterProposals:      treeDiff,
+		MembershipTag:           membershipTag,
 	}
 
 	g.PendingCommit = stagedCommit
@@ -615,33 +711,42 @@ func filteredDirectPathLevelsExcluding(tree *treesync.RatchetTree, senderLeafIdx
 	return directPath, copath, levels
 }
 
-// createUpdatePath genera un UpdatePath real (RFC §12.4.1).
+// createUpdatePath generates an UpdatePath (RFC §12.4.1).
 // Uses filtered direct path: only levels where the copath sibling has non-empty
 // resolution get a new encryption key and an UpdatePathNode entry.
-// Path secrets are indexed as pathSecrets[N-F+m] for filtered level m, so that
-// DeriveSecret^(F-m)(pathSecrets[N-F+m]) == pathSecrets[N] == commitSecret.
+// Path secrets: pathSecrets[0] = leaf_secret; pathSecrets[k] = DeriveSecret^k(leaf_secret, "path").
+// Filtered level m encrypts pathSecrets[N-F+m+1] so receivers derive the node key as
+// DeriveKeyPair(DeriveSecret(decrypted, "node")) and chain F-m times to commitSecret = pathSecrets[N+1].
 func (g *Group) createUpdatePath(
 	tree *treesync.RatchetTree,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
 	excluded map[treesync.LeafIndex]bool, // newly added leaves excluded from UpdatePath encryption (RFC §12.4.1)
-) (*UpdatePath, *ciphersuite.Secret, error) {
+) (*UpdatePath, *ciphersuite.Secret, []*ciphersuite.Secret, []treesync.NodeIndex, []treesync.NodeIndex, []int, error) {
 	leafSecret, err := ciphersuite.NewSecretRandomCS(g.CipherSuite)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	senderLeafIdx := treesync.LeafIndex(g.OwnLeafIndex)
 	directPath := tree.DirectPath(senderLeafIdx)
 	N := len(directPath) - 1
 
-	// Derive path secrets for all N non-leaf levels.
-	pathSecrets := make([]*ciphersuite.Secret, N+1)
+	// Derive path secrets for all N non-leaf levels, plus one extra so that
+	// pathSecrets[k] is the path_secret for parent k in the RFC sense:
+	//   pathSecrets[0]   = leaf_secret (random seed, used only for leaf HPKE key)
+	//   pathSecrets[1]   = DeriveSecret(pathSecrets[0], "path") → path_secret[0] for first parent
+	//   pathSecrets[k]   = path_secret for k-th parent
+	//   pathSecrets[N+1] = commit_secret = DeriveSecret^(N+1)(leaf_secret)
+	// Encrypting pathSecrets[N-F+m+1] at filtered level m ensures the receiver can
+	// derive the node key as DeriveKeyPair(DeriveSecret(pathSecrets[N-F+m+1], "node"))
+	// (matching the published key), then chain forward to pathSecrets[N+1] = commit_secret.
+	pathSecrets := make([]*ciphersuite.Secret, N+2)
 	pathSecrets[0] = leafSecret
-	for i := 1; i <= N; i++ {
+	for i := 1; i <= N+1; i++ {
 		pathSecrets[i], err = pathSecrets[i-1].DeriveSecret(g.CipherSuite, "path")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, nil, nil, nil, err
 		}
 	}
 
@@ -651,10 +756,19 @@ func (g *Group) createUpdatePath(
 	F := len(levels)
 
 	// Apply encryption keys to filtered parent nodes (RFC §12.4.1).
+	// Also store private keys so this member can later decrypt commits where one
+	// of these ancestor nodes appears in the copath resolution (RFC §12.4.2).
 	pubKeys := make([][]byte, F)
+	if g.PathNodePrivKeys == nil {
+		g.PathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+	}
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m]
-		nodeSecret, _ := ps.DeriveSecret(g.CipherSuite, "node")
+		// pathSecrets[N-F+m+1] is the path_secret for this parent node.
+		// Receivers decrypt this value and derive: node_key = DeriveKeyPair(DeriveSecret(ps, "node")).
+		// Using pathSecrets[N-F+m+1] ensures the node key differs from the leaf key
+		// (which uses DeriveSecret(pathSecrets[0], "node") = DeriveSecret(leaf_secret, "node")).
+		nodePs := pathSecrets[N-F+m+1]
+		nodeSecret, _ := nodePs.DeriveSecret(g.CipherSuite, "node")
 		privKey, _ := ciphersuite.DeriveKeyPair(g.CipherSuite, nodeSecret.AsSlice())
 		pubKeys[m] = privKey.PublicKey().Bytes()
 
@@ -662,6 +776,9 @@ func (g *Group) createUpdatePath(
 		tree.Nodes[nodeIdx].EncryptionKey, _ = g.CipherSuite.Curve().NewPublicKey(pubKeys[m])
 		tree.Nodes[nodeIdx].State = treesync.NodeStatePresent
 		tree.Nodes[nodeIdx].UnmergedLeaves = nil
+
+		// Store private key: needed if a future copath resolution includes this node.
+		g.PathNodePrivKeys[nodeIdx] = privKey.Bytes()
 	}
 
 	// Compute parent hashes top-down (RFC §7.9).
@@ -705,7 +822,7 @@ func (g *Group) createUpdatePath(
 		// ECDSA uncompressed point
 		converted, err := sigPubKey.ToECDSA()
 		if err != nil {
-			return nil, nil, fmt.Errorf("converting signature public key: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("converting signature public key: %w", err)
 		}
 		sigPubKeyECDSA = converted
 	} else {
@@ -716,11 +833,11 @@ func (g *Group) createUpdatePath(
 	// Derive leaf HPKE key pair from node_secret = DeriveSecret(leafSecret, "node") (RFC §12.4.2).
 	leafNodeSecret, err := leafSecret.DeriveSecret(g.CipherSuite, "node")
 	if err != nil {
-		return nil, nil, fmt.Errorf("deriving leaf node secret: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("deriving leaf node secret: %w", err)
 	}
 	leafPrivKey, err := ciphersuite.DeriveKeyPair(g.CipherSuite, leafNodeSecret.AsSlice())
 	if err != nil {
-		return nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
 	}
 	leafNodeData := &treesync.LeafNodeData{
 		EncryptionKey:   leafPrivKey.PublicKey().Bytes(),
@@ -728,7 +845,7 @@ func (g *Group) createUpdatePath(
 		SignatureKeyRaw: sigPubKeyRaw,
 		Credential:      g.Members[g.OwnLeafIndex].Credential,
 		Capabilities:    caps,
-		Lifetime:        &treesync.LeafNodeLifetime{},
+		Lifetime:        nil, // source=commit: Lifetime not included in TBS (RFC §7.2)
 		LeafNodeSource:  3,
 		ParentHash:      tree.Nodes[directPath[0]].ParentHash,
 	}
@@ -736,13 +853,13 @@ func (g *Group) createUpdatePath(
 	tbs := leafNodeData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(senderLeafIdx))
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("signing leaf node TBS: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("signing leaf node TBS: %w", err)
 	}
 	leafNodeData.Signature = sig.AsSlice()
 
 	// Apply leaf to tree for provisional tree hash computation.
 	if err := tree.SetLeaf(senderLeafIdx, *leafNodeData); err != nil {
-		return nil, nil, fmt.Errorf("setting leaf in tree: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("setting leaf in tree: %w", err)
 	}
 
 	// Compute provisional GroupContext (RFC §12.4.1: next epoch + tree_hash_after).
@@ -757,9 +874,11 @@ func (g *Group) createUpdatePath(
 	}).Marshal()
 
 	// Encrypt path secrets for each filtered level using provisional GC as context.
+	// Encrypt pathSecrets[N-F+m+1] so receivers can derive the node key directly
+	// as DeriveKeyPair(DeriveSecret(decrypted, "node")) and chain to commit_secret.
 	nodes := make([]UpdatePathNode, F)
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m]
+		ps := pathSecrets[N-F+m+1]
 		res := tree.ResolutionWithExclusions(copath[level], excluded)
 		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
 		for j, resIdx := range res {
@@ -777,7 +896,7 @@ func (g *Group) createUpdatePath(
 			}
 			ct, err := ciphersuite.EncryptWithLabel(encKeyBytes, "UpdatePathNode", provGCBytes, ps.AsSlice(), g.CipherSuite)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, nil, nil, nil, err
 			}
 			encryptedSecrets[j] = *ct
 		}
@@ -790,8 +909,8 @@ func (g *Group) createUpdatePath(
 	// Store new leaf private key so MergeCommit can update MyLeafEncryptionKey.
 	g.MyLeafEncryptionKey = leafPrivKey.Bytes()
 
-	commitSecret := pathSecrets[N]
-	return &UpdatePath{LeafNode: leafNodeData, Nodes: nodes}, commitSecret, nil
+	commitSecret := pathSecrets[N+1]
+	return &UpdatePath{LeafNode: leafNodeData, Nodes: nodes}, commitSecret, pathSecrets, directPath, copath, levels, nil
 }
 
 // provisionalGroupContextBytes computes the GroupContext bytes with the provisional tree hash.
@@ -1001,10 +1120,12 @@ func (g *Group) ProcessReceivedCommit(
 			sender := LeafNodeIndex(senderLeafIdx) // default: committer
 			if por.Proposal.Type == ProposalTypeUpdate && por.Proposal.Update != nil && por.Proposal.Update.LeafNode != nil {
 				newSigKey := por.Proposal.Update.LeafNode.SignatureKeyBytes
-				for i := 0; i < g.MemberCount(); i++ {
-					leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(i))
+				// Iterate Members map directly: after removals the tree is sparse,
+				// so MemberCount() as an upper bound on leaf indices misses high slots.
+				for leafIdx := range g.Members {
+					leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
 					if leaf != nil && leaf.LeafData != nil && bytes.Equal(leaf.LeafData.SigKeyBytes(), newSigKey) {
-						sender = LeafNodeIndex(i)
+						sender = leafIdx
 						break
 					}
 				}
@@ -1076,6 +1197,10 @@ func (g *Group) ProcessReceivedCommit(
 		}
 		extLeafIdx, _ := treeAfterProposals.AddLeaf(*commit.Path.LeafNode)
 		senderLeafIdx = extLeafIdx
+		// The external joiner is excluded from copath resolution (same as newly added
+		// members via Add proposals), because the sender excluded themselves when
+		// computing filtered direct path levels during encryption.
+		excluded[extLeafIdx] = true
 		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded, g.CipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
@@ -1105,7 +1230,7 @@ func (g *Group) ProcessReceivedCommit(
 // Traverse the sender's filtered copath looking for the receiver's node in the resolution,
 // decrypts with HPKE and derives forward to obtain the commit_secret.
 // RFC 9420 §12.4.1: UpdatePath.Nodes has F entries (filtered levels only);
-// nodes[m] encrypts pathSecrets[N-F+m], so derive F-m times to reach commitSecret.
+// nodes[m] encrypts pathSecrets[N-F+m+1], so derive F-m times to reach commitSecret = pathSecrets[N+1].
 func (g *Group) decryptPathSecret(
 	tree *treesync.RatchetTree,
 	senderLeafIdx treesync.LeafIndex,
@@ -1114,22 +1239,38 @@ func (g *Group) decryptPathSecret(
 	gcBytes []byte, // provisional GroupContext bytes (RFC §12.4.1: context for HPKE)
 	excluded map[treesync.LeafIndex]bool, // newly added leaves to exclude from resolution
 ) (*ciphersuite.Secret, error) {
-	_, copath, levels := filteredDirectPathLevelsExcluding(tree, senderLeafIdx, excluded)
+	directPath, copath, levels := filteredDirectPathLevelsExcluding(tree, senderLeafIdx, excluded)
 	F := len(levels)
 	myNodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(g.OwnLeafIndex))
 
 	for m, level := range levels {
 		res := tree.ResolutionWithExclusions(copath[level], excluded)
 		for j, resIdx := range res {
-			if resIdx != myNodeIdx {
-				continue
+			// Determine which private key to use for decryption:
+			// - leaf node: use myPrivKeyBytes (the receiver's leaf or pending-update key)
+			// - intermediate node: use PathNodePrivKeys[resIdx] (key derived from a previous commit)
+			var privKeyToUse []byte
+			if treesync.IsLeaf(resIdx) {
+				if resIdx != myNodeIdx {
+					continue
+				}
+				privKeyToUse = myPrivKeyBytes
+			} else {
+				if g.PathNodePrivKeys == nil {
+					continue
+				}
+				privKeyToUse = g.PathNodePrivKeys[resIdx]
+				if len(privKeyToUse) == 0 {
+					continue
+				}
 			}
+
 			if m >= len(updatePath.Nodes) || j >= len(updatePath.Nodes[m].EncryptedPathSecrets) {
 				return nil, fmt.Errorf("path secret index out of bounds at filtered level %d", m)
 			}
 			ct := &updatePath.Nodes[m].EncryptedPathSecrets[j]
 			psBytes, err := ciphersuite.DecryptWithLabel(
-				myPrivKeyBytes,
+				privKeyToUse,
 				"UpdatePathNode",
 				gcBytes,
 				ct,
@@ -1138,9 +1279,26 @@ func (g *Group) decryptPathSecret(
 			if err != nil {
 				return nil, fmt.Errorf("decrypting path secret at level %d: %w", level+1, err)
 			}
+
 			// Derive forward F-m times to reach commitSecret = pathSecrets[N].
+			// While deriving, store private keys for all filtered direct path nodes
+			// above m (RFC §12.4.2): these let us decrypt future commits where a
+			// sender's ancestor node appears in the copath resolution.
 			pathSecret := ciphersuite.NewSecret(psBytes)
+			if g.PathNodePrivKeys == nil {
+				g.PathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+			}
 			for k := m; k < F; k++ {
+				// Store private key for the direct path node at filtered level k.
+				// directPath[levels[k]+1] is the node whose key corresponds to pathSecret.
+				nodeSecret, nsErr := pathSecret.DeriveSecret(g.CipherSuite, "node")
+				if nsErr == nil {
+					nodeIdx := directPath[levels[k]+1]
+					privKey, pkErr := ciphersuite.DeriveKeyPair(g.CipherSuite, nodeSecret.AsSlice())
+					if pkErr == nil {
+						g.PathNodePrivKeys[nodeIdx] = privKey.Bytes()
+					}
+				}
 				pathSecret, err = pathSecret.DeriveSecret(g.CipherSuite, "path")
 				if err != nil {
 					return nil, err
@@ -1220,6 +1378,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			senderIdx = LeafNodeIndex(stagedCommit.AuthenticatedContent.Content.Sender.LeafIndex)
 		}
 	}
+	// RFC §12.4.2: newly added members must be excluded from copath resolution
+	// when decrypting the UpdatePath (same exclusion the committer applied).
+	excluded := make(map[treesync.LeafIndex]bool)
 	for i, proposal := range stagedCommit.Proposals {
 		// Use per-proposal sender if available (from ProcessReceivedCommit),
 		// otherwise fall back to committer index (self-commit path).
@@ -1227,8 +1388,17 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if len(stagedCommit.ProposalSenders) > i {
 			proposalSender = stagedCommit.ProposalSenders[i]
 		}
-		if err := g.applyProposal(proposal, proposalSender); err != nil {
-			return fmt.Errorf("applying proposal: %w", err)
+		if proposal.Type == ProposalTypeAdd {
+			// Apply Add inline so we can capture the assigned leaf index for exclusion.
+			addedLeafIdx, err := g.applyAddProposalTracked(proposal.Add)
+			if err != nil {
+				return fmt.Errorf("applying proposal: %w", err)
+			}
+			excluded[addedLeafIdx] = true
+		} else {
+			if err := g.applyProposal(proposal, proposalSender); err != nil {
+				return fmt.Errorf("applying proposal: %w", err)
+			}
 		}
 		// RFC §12.4.3.3: if our own Update proposal was committed, the new leaf key
 		// (PendingUpdatePrivKey from SelfUpdate) replaces the current MyLeafEncryptionKey.
@@ -1248,6 +1418,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 		extLeafIdx, _ := g.RatchetTree.AddLeaf(*stagedCommit.Commit.Path.LeafNode)
 		senderIdx = LeafNodeIndex(extLeafIdx)
+		// Track the external joiner in Members so they can be found by identity later.
+		leafNode := stagedCommit.Commit.Path.LeafNode
+		g.Members[senderIdx] = &Member{
+			LeafIndex:  senderIdx,
+			Credential: leafNode.Credential,
+			Active:     true,
+		}
 	}
 
 	hasReInit := false
@@ -1292,8 +1469,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 
 		// Update ancestors with new encryption keys (filtered direct path).
-		// Re-compute filtered levels after blanking.
-		mergeDP, _, mergeLevels := filteredDirectPathLevels(g.RatchetTree, senderLeafIdx)
+		// Re-compute filtered levels after blanking. Exclude newly added leaves
+		// (RFC §12.4.2) so the filtered levels match those used by the committer.
+		mergeDP, _, mergeLevels := filteredDirectPathLevelsExcluding(g.RatchetTree, senderLeafIdx, excluded)
 		for m, level := range mergeLevels {
 			if m >= len(stagedCommit.Commit.Path.Nodes) {
 				break
@@ -1306,11 +1484,28 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			node.UnmergedLeaves = nil
 		}
 
-		// Compute parent hashes de arriba abajo y verificar (RFC §7.9)
-		// NOTE: For External Commits, we do NOT verify parent hashes because the external
-		// sender computed them over their provisional RatchetTree (with their leaf added), which is
-		// different from the receiver's RatchetTree before applying the commit.
-		if len(mergeDP) > 1 && stagedCommit.AuthenticatedContent.Content.Sender.Type != framing.SenderTypeNewMemberCommit {
+		// Update PathNodePrivKeys for the sender's direct path nodes:
+		// - For the committer themselves: createUpdatePath already populated the keys → no-op.
+		// - For receivers: decryptPathSecret derived and stored the new private keys (which
+		//   now match the new public keys from UpdatePath), so no action needed either.
+		// In both cases, nodes on the sender's direct path that are NOT filtered levels
+		// are now BLANK (no public key) → any stale private key for those nodes is useless.
+		// Clean them up to avoid confusion.
+		if g.PathNodePrivKeys != nil {
+			for i, nodeIdx := range mergeDP[1:] { // skip the sender's leaf
+				_ = i
+				// Only delete if the node is now blank (not a filtered level).
+				// Filtered-level nodes have fresh keys stored by createUpdatePath / decryptPathSecret.
+				if nodeIdx < treesync.NodeIndex(len(g.RatchetTree.Nodes)) &&
+					g.RatchetTree.Nodes[nodeIdx].State != treesync.NodeStatePresent {
+					delete(g.PathNodePrivKeys, nodeIdx)
+				}
+			}
+		}
+
+		// Compute parent hashes top-down (RFC §7.9). Must run for ALL commits,
+		// including external commits, so that TreeHash() returns the correct value.
+		if len(mergeDP) > 1 {
 			rootIdx := g.RatchetTree.Root()
 			g.RatchetTree.Nodes[rootIdx].ParentHash = []byte{}
 
@@ -1337,9 +1532,15 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				g.RatchetTree.Nodes[nodeIdx].ParentHash = ph
 			}
 
-			// Verify that direct path parent hashes match with the calculated ones (RFC §7.9)
-			if err := g.RatchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
-				return fmt.Errorf("parent hash verification failed: %w", err)
+			// Verify parent hashes for regular member commits.
+			// NOTE: For external commits we skip verification because the external sender
+			// computed parent hashes over their own provisional tree (which already has their
+			// leaf added), while here we compute over the final post-commit tree. The values
+			// are equivalent but the signing context differs, so verification is not meaningful.
+			if stagedCommit.AuthenticatedContent.Content.Sender.Type != framing.SenderTypeNewMemberCommit {
+				if err := g.RatchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
+					return fmt.Errorf("parent hash verification failed: %w", err)
+				}
 			}
 		}
 	}
@@ -1384,11 +1585,8 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if stagedCommit.PrecomputedEpochSecrets != nil {
 		// Committer: use precomputed epoch secrets from Commit()
 
-		// Securely zero old epoch secrets before replacing them
-		// This prevents old secrets from lingering in memory
-		if g.EpochSecrets != nil {
-			g.EpochSecrets.Zero()
-		}
+		// Cache current epoch secrets for out-of-order decryption before replacing.
+		g.cacheOldEpoch()
 
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
@@ -1427,6 +1625,12 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 
 		newGCBytes := g.GroupContext.Marshal()
+		// Snapshot values before key schedule zeroes them (for debugging)
+		dbgInitSecret := append([]byte(nil), initSecretForNewEpoch.AsSlice()...)
+		var dbgCommitSecret []byte
+		if commitSecret != nil {
+			dbgCommitSecret = append([]byte(nil), commitSecret.AsSlice()...)
+		}
 		// Derive epoch secrets for the new epoch
 		newKS := schedule.NewKeySchedule(g.CipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
@@ -1452,14 +1656,18 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			confirmedTranscriptHash,
 		)
 		if !ciphersuite.EqualCT(expectedTag, stagedCommit.AuthenticatedContent.Auth.ConfirmationTag) {
-			return fmt.Errorf("confirmation tag mismatch")
+			return fmt.Errorf("confirmation tag mismatch [leaf=%d interimHash=%x confirmedHash=%x treeHash=%x initSecret=%x commitSecret=%x]",
+				g.OwnLeafIndex,
+				g.InterimTranscriptHash,
+				confirmedTranscriptHash,
+				treeHash,
+				dbgInitSecret,
+				dbgCommitSecret,
+			)
 		}
 
-		// Securely zero old epoch secrets before replacing them
-		// This prevents old secrets from lingering in memory
-		if g.EpochSecrets != nil {
-			g.EpochSecrets.Zero()
-		}
+		// Cache current epoch secrets for out-of-order decryption before replacing.
+		g.cacheOldEpoch()
 
 		g.EpochSecrets = newEpochSecrets
 	}
@@ -1481,6 +1689,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		rKey := ResumptionPskCacheKey(g.GroupContext.GroupID.AsSlice(), g.GroupContext.Epoch.AsUint64())
 		g.CachedPsks[rKey] = append([]byte(nil), g.EpochSecrets.ResumptionSecret.AsSlice()...)
 	}
+
+	// Save committed proposals before clearing (used by HandlePendingReInitCommit).
+	g.LastCommittedProposals = stagedCommit.Proposals
 
 	// Clean up state
 	g.Proposals.Clear()
@@ -1774,26 +1985,33 @@ func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error
 // RFC 9420 §12.4.2: The new member's LeafNode from the KeyPackage is added to the tree.
 // We use keyPackageLeafToTreeSync to ensure consistency with applyProposalToTree.
 func (g *Group) applyAddProposal(add *AddProposal) error {
+	_, err := g.applyAddProposalTracked(add)
+	return err
+}
+
+// applyAddProposalTracked applies an Add proposal and returns the assigned leaf index.
+// Used in MergeCommit to build the exclusion set for filteredDirectPathLevelsExcluding.
+func (g *Group) applyAddProposalTracked(add *AddProposal) (treesync.LeafIndex, error) {
 	if add == nil {
-		return ErrNilAddProposal
+		return 0, ErrNilAddProposal
 	}
 	if add.KeyPackage == nil {
-		return ErrNilKeyPackage
+		return 0, ErrNilKeyPackage
 	}
 
 	// Validate KeyPackage
 	if err := add.KeyPackage.Validate(); err != nil {
-		return fmt.Errorf("invalid key package: %w", err)
+		return 0, fmt.Errorf("invalid key package: %w", err)
 	}
 	if add.KeyPackage.LeafNode == nil {
-		return fmt.Errorf("invalid key package leaf node")
+		return 0, fmt.Errorf("invalid key package leaf node")
 	}
 
 	// Use keyPackageLeafToTreeSync for consistency with applyProposalToTree.
 	// This correctly uses LeafNode.EncryptionKey (not KeyPackage.InitKey).
 	leafData := keyPackageLeafToTreeSync(add.KeyPackage.LeafNode)
 	if err := leafData.Validate(); err != nil {
-		return fmt.Errorf("invalid add leaf node: %w", err)
+		return 0, fmt.Errorf("invalid add leaf node: %w", err)
 	}
 
 	leafIdx, _ := g.RatchetTree.AddLeaf(*leafData)
@@ -1807,7 +2025,7 @@ func (g *Group) applyAddProposal(add *AddProposal) error {
 		Active:     true,
 	}
 
-	return nil
+	return leafIdx, nil
 }
 
 // applyUpdateProposal applies an Update proposal.
@@ -2048,10 +2266,10 @@ func (g *Group) buildSignedGroupInfo(
 		RatchetTree:     g.RatchetTree,
 	}
 
-	// ratchet_tree extension (RFC 9420 §11.2.2)
+	// ratchet_tree extension (RFC 9420 §11.2.2) — use RFC interoperable format.
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
 		Type: uint16(mlsext.ExtensionTypeRatchetTree),
-		Data: g.RatchetTree.MarshalTree(),
+		Data: g.RatchetTree.MarshalTreeRFC(),
 	})
 
 	// external_pub extension (RFC 9420 §11.2.4)
@@ -2062,9 +2280,13 @@ func (g *Group) buildSignedGroupInfo(
 	if err != nil {
 		return nil, fmt.Errorf("deriving external key pair: %w", err)
 	}
+	// RFC 9420 §11.2.4: HPKEPublicKey is VLBytes, so the extension data
+	// must be VL-prefixed key bytes (not raw bytes).
+	extPubW := tls.NewWriter()
+	extPubW.WriteVLBytes(externalPriv.PublicKey().Bytes())
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
 		Type: uint16(mlsext.ExtensionTypeExternalPub),
-		Data: externalPriv.PublicKey().Bytes(),
+		Data: extPubW.Bytes(),
 	})
 
 	tbs := groupInfo.MarshalTBS()
