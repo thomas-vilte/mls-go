@@ -105,14 +105,16 @@ func DefaultCapabilities() *Capabilities {
 	}
 }
 
-// DefaultLifetime returns a Lifetime valid for 24 hours from now.
+// DefaultLifetime returns a Lifetime valid from 1 hour ago through 90 days from now.
+// The 1-hour back-dated not_before matches OpenMLS's default margin for clock skew,
+// and is required for cross-interop (OpenMLS rejects KeyPackages where not_before >= now).
 func DefaultLifetime() *Lifetime {
 	now := uint64(time.Now().Unix())
-	day := uint64(24 * 60 * 60)
-
+	margin := uint64(60 * 60)              // 1 hour back (matches OpenMLS DEFAULT_KEY_PACKAGE_LIFETIME_MARGIN_SECONDS)
+	lifetime := uint64(83 * 24 * 60 * 60) // 83 days forward; total range < OpenMLS MAX (7261200s ≈ 84 days)
 	return &Lifetime{
-		NotBefore: now,
-		NotAfter:  now + day,
+		NotBefore: now - margin,
+		NotAfter:  now + lifetime,
 	}
 }
 

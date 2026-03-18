@@ -7,6 +7,7 @@ import (
 	"github.com/thomas-vilte/mls-go/credentials"
 	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/secrettree"
 	"github.com/thomas-vilte/mls-go/treesync"
@@ -39,10 +40,17 @@ func ExternalCommit(
 	}
 
 	// Obtain external_pub from GroupInfo extensions (RFC 9420 §11.2.4, type=0x0004).
+	// HPKEPublicKey is VLBytes in TLS encoding; unwrap VL prefix to get raw key bytes.
 	var externalPubBytes []byte
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == uint16(mlsext.ExtensionTypeExternalPub) {
-			externalPubBytes = ext.Data
+			r := tls.NewReader(ext.Data)
+			raw, err := r.ReadVLBytes()
+			if err == nil && len(raw) > 0 {
+				externalPubBytes = raw // VL-wrapped (RFC-format)
+			} else {
+				externalPubBytes = ext.Data // fallback: raw bytes (legacy self-interop)
+			}
 			break
 		}
 	}
@@ -54,7 +62,7 @@ func ExternalCommit(
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
-			parsed, err := treesync.UnmarshalTree(ext.Data, groupInfo.GroupContext.CipherSuite)
+			parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if err != nil {
 				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
 			}
@@ -119,9 +127,13 @@ func ExternalCommit(
 		EncryptionKey:   leafPrivKey.PublicKey().Bytes(),
 		SignatureKeyRaw: sigPubKeyRaw,
 		Credential:      credential,
-		Capabilities:    &treesync.LeafNodeCapabilities{},
-		Lifetime:        &treesync.LeafNodeLifetime{},
-		LeafNodeSource:  3, // commit
+		Capabilities: &treesync.LeafNodeCapabilities{
+			ProtocolVersions: []uint16{0x0001}, // MLS 1.0
+			CipherSuites:     []uint16{uint16(cs)},
+			Credentials:      []uint16{0x0001}, // BasicCredential
+		},
+		Lifetime:       nil, // source=commit: Lifetime not included in TBS (RFC §7.2)
+		LeafNodeSource: 3, // commit
 	}
 	// For ECDSA (P-256), also populate the typed key field.
 	if cs.SignatureScheme() == ciphersuite.ECDSA_SECP256R1_SHA256 {
@@ -363,6 +375,22 @@ func ExternalCommit(
 	ac.Auth.ConfirmationTag = confirmationTag
 	newInterimHash := schedule.ComputeInterimTranscriptHash(cs, confirmedHash, confirmationTag)
 
+	// Populate PathNodePrivKeys for all filtered direct path nodes.
+	// The external committer created the UpdatePath and has all path secrets,
+	// so they can derive private keys for every node on their filtered direct path.
+	pathNodePrivKeys := make(map[treesync.NodeIndex][]byte)
+	for m, level := range levels {
+		ps := pathSecrets[N-F+m]
+		nodeSecret, nsErr := ps.DeriveSecret(cs, "node")
+		if nsErr == nil {
+			nodeIdx := directPath[level+1]
+			privKey, pkErr := ciphersuite.DeriveKeyPair(cs, nodeSecret.AsSlice())
+			if pkErr == nil {
+				pathNodePrivKeys[nodeIdx] = privKey.Bytes()
+			}
+		}
+	}
+
 	// Build local group state for the new member.
 	group := &Group{
 		GroupID:               groupContext.GroupID,
@@ -380,6 +408,7 @@ func ExternalCommit(
 		state:                 StateOperational,
 		CachedPsks:            make(map[string][]byte),
 		MyLeafEncryptionKey:   leafPrivKey.Bytes(),
+		PathNodePrivKeys:      pathNodePrivKeys,
 	}
 
 	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)

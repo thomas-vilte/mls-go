@@ -70,6 +70,12 @@ func (ac *AuthenticatedContent) Marshal() []byte {
 	return w.Bytes()
 }
 
+// MarshalTBM serializes AuthenticatedContentTBM for membership_tag computation (RFC §6.2).
+// This is the public equivalent of the package-private marshalAuthenticatedContentTBM.
+func (ac *AuthenticatedContent) MarshalTBM() []byte {
+	return marshalAuthenticatedContentTBM(ac)
+}
+
 // MarshalForSigning serializes wire_format + content (used for membership tag TBM).
 func (ac *AuthenticatedContent) MarshalForSigning() []byte {
 	w := tls.NewWriter()
