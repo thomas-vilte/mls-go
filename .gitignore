@@ -1,2 +1,8 @@
 .idea
 .matecommit
+
+/interop/testrunner/test-runner
+/interop/server/mls-go-server
+/interop/server/mls-mock-client
+/interop/server/server
+/openmls

@@ -93,6 +93,34 @@ func (g *Group) SendApplicationMessage(
 	})
 }
 
+// SignProposalAsPublicMessage wraps a Proposal in a signed PublicMessage MLSMessage.
+//
+// RFC 9420 §6.2: proposals from group members MUST be sent as PublicMessage with
+// a membership_tag. This is the format expected by other MLS implementations.
+func (g *Group) SignProposalAsPublicMessage(
+	proposal *Proposal,
+	sigKey *ciphersuite.SignaturePrivateKey,
+) ([]byte, error) {
+	content := framing.FramedContent{
+		GroupID:           g.GroupID.AsSlice(),
+		Epoch:             g.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.OwnLeafIndex)},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(proposal)},
+	}
+	pm, err := framing.NewPublicMessage(
+		content,
+		sigKey,
+		g.GroupContext.Marshal(),
+		g.EpochSecrets.MembershipKey,
+		g.CipherSuite,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("signing proposal: %w", err)
+	}
+	return framing.NewMLSMessagePublic(pm).Marshal(), nil
+}
+
 // ReceiveMessage decrypts an application message from another member.
 //
 // RFC 9420 §6.3

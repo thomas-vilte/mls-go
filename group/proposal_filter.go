@@ -127,9 +127,8 @@ func (pf *ProposalFilter) validateSingleProposal(
 		}
 
 	case ProposalTypeUpdate:
-		if fp.Sender == pf.committer {
-			return fmt.Errorf("committer cannot update itself: %w", ErrInvalidProposal)
-		}
+		// RFC 9420 §12.4.2: the committer MAY include their own Update proposal (self-update).
+		// No restriction here — the by-reference self-update is valid.
 		leaf := pf.tree.GetLeaf(treesync.LeafIndex(fp.Sender))
 		if leaf == nil || leaf.State != treesync.NodeStatePresent {
 			return fmt.Errorf("update proposal from non-present leaf %d: %w", fp.Sender, ErrInvalidProposal)
