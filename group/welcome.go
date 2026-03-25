@@ -723,6 +723,10 @@ func JoinFromWelcomeWithContext(
 		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
 			parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if parseErr == nil {
+				// RFC §7.4.1: wire format is minimal (no trailing blanks), but the
+				// internal tree logic assumes power-of-2 leaf count for parent/copath
+				// indexing. Expand unconditionally; TreeHashMinimal stays unchanged.
+				parsed = parsed.ExpandToPowerOf2()
 				ratchetTree = parsed
 				break
 			}

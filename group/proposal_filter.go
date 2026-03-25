@@ -45,6 +45,9 @@ type FilteredProposal struct {
 	Proposal   *Proposal
 	Sender     LeafNodeIndex
 	IsExternal bool // true for SenderTypeExternal senders (not leaf-tree members)
+	// Ref is the ProposalRef if this proposal was received from the network.
+	// Nil for proposals generated locally by the committer.
+	Ref []byte
 }
 
 // FilterAndValidateProposals validates and filters a list of proposals per RFC 9420 §12.2.
@@ -416,7 +419,7 @@ func (g *Group) FilterProposalsForCommit(
 ) ([]FilteredProposal, error) {
 	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
 	for _, sp := range g.Proposals.Proposals {
-		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender})
+		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender, Ref: sp.Ref})
 	}
 
 	pf := NewProposalFilter(
