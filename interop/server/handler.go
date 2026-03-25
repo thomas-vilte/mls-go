@@ -46,11 +46,12 @@ type Server struct {
 	// stateID -> bool  (whether to use PrivateMessage for handshake messages)
 	encryptHandshake sync.Map
 
-	// Monotonic IDs
-	nextStateID       uint32
-	nextTransactionID uint32
-	nextSignerID      uint32
-	nextReinitID      uint32
+	// nextID is a single monotonic counter shared by all handle types (groups,
+	// transactions, signers, reinits) so that IDs never collide across maps.
+	// StorePSK uses state_or_transaction_id and must be able to distinguish a
+	// group-state ID from a transaction ID; using a shared pool guarantees each
+	// handle is globally unique.
+	nextID uint32
 }
 
 // keyPackageTransaction stores pending key package data
@@ -75,19 +76,19 @@ func NewServer() *Server {
 }
 
 func (s *Server) generateStateID() uint32 {
-	return atomic.AddUint32(&s.nextStateID, 1)
+	return atomic.AddUint32(&s.nextID, 1)
 }
 
 func (s *Server) generateTransactionID() uint32 {
-	return atomic.AddUint32(&s.nextTransactionID, 1)
+	return atomic.AddUint32(&s.nextID, 1)
 }
 
 func (s *Server) generateSignerID() uint32 {
-	return atomic.AddUint32(&s.nextSignerID, 1)
+	return atomic.AddUint32(&s.nextID, 1)
 }
 
 func (s *Server) generateReinitID() uint32 {
-	return atomic.AddUint32(&s.nextReinitID, 1)
+	return atomic.AddUint32(&s.nextID, 1)
 }
 
 // isEncryptHandshake reports whether the given stateID has encrypt_handshake=true.
@@ -239,6 +240,14 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 			return true
 		})
 	}
+	for k, v := range s.collectResumptionPSKs() {
+		if externalPsks == nil {
+			externalPsks = make(map[string][]byte)
+		}
+		if _, ok := externalPsks[k]; !ok {
+			externalPsks[k] = v
+		}
+	}
 
 	// Join group
 	g, err := group.JoinFromWelcome(
@@ -265,6 +274,18 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 		StateId:            stateID,
 		EpochAuthenticator: g.EpochAuthenticator(),
 	}, nil
+}
+
+func (s *Server) collectResumptionPSKs() map[string][]byte {
+	psks := make(map[string][]byte)
+	s.groups.Range(func(_, value interface{}) bool {
+		g := value.(*group.Group)
+		for k, v := range g.CachedPsks {
+			psks[k] = append([]byte(nil), v...)
+		}
+		return true
+	})
+	return psks
 }
 
 // GroupInfo returns the GroupInfo for a group
@@ -710,6 +731,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 		return p, nil
 
 	case "resumptionPSK":
+		log.Printf("[BYVAL PSK] epochID=%d currentEpoch=%d", desc.EpochId, g.GroupContext.Epoch.AsUint64())
 		nonce := make([]byte, g.CipherSuite.HashLength())
 		if _, err := rand.Read(nonce); err != nil {
 			return nil, fmt.Errorf("generating psk nonce: %w", err)
@@ -767,7 +789,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// Bytes may be either raw proposal bytes (group.ProposalMarshal output) or a
 	// full MLSMessage wrapping a PublicMessage (from ExternalSignerProposal/NewMemberAddProposal).
 	for _, propBytes := range req.ByReference {
-		rawProp, p, err := extractByReferenceProposal(propBytes)
+		rawProp, p, ref, err := extractByReferenceProposal(propBytes, g)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "byReference proposal: %v", err)
 		}
@@ -804,7 +826,11 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 				}
 			}
 		}
-		g.Proposals.AddProposal(p, sender)
+		if len(ref) > 0 {
+			g.Proposals.AddProposalWithRef(p, sender, ref)
+		} else {
+			g.Proposals.AddProposal(p, sender)
+		}
 	}
 
 	// Add any inline (byValue) proposals to g.Proposals before committing.
@@ -957,7 +983,22 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 		return nil, status.Errorf(codes.InvalidArgument, "commit must be a PublicMessage or PrivateMessage")
 	}
 
-	log.Printf("HandleCommit: state_id=%d ownLeaf=%d PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex, g.PendingUpdatePrivKey != nil)
+	// Store any proposals sent alongside this commit so that by-reference
+	// ProposalOrRefs in the commit body can be resolved.  Both PublicMessage
+	// and PrivateMessage proposal wrappers are handled.
+	for _, propBytes := range req.Proposal {
+		pmsg, parseErr := framing.UnmarshalMLSMessage(propBytes)
+		if parseErr != nil {
+			continue
+		}
+		if pubProp, isPub := pmsg.AsPublic(); isPub {
+			_ = g.ProcessPublicMessage(pubProp)
+		} else if privProp, isPriv := pmsg.AsPrivate(); isPriv {
+			_ = g.ProcessPrivateMessage(privProp)
+		}
+	}
+
+	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex, g.Epoch, g.InterimTranscriptHash, g.PendingUpdatePrivKey != nil)
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey); err != nil {
 		return nil, status.Errorf(codes.Internal, "processing commit: %v", err)
 	}
@@ -1032,7 +1073,7 @@ func (s *Server) ReInitProposal(ctx context.Context, req *proto.ReInitProposalRe
 	// Store proposal in the group so it is picked up by the next Commit.
 	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
 
-	return &proto.ProposalResponse{Proposal: group.ProposalMarshal(proposal)}, nil
+	return s.proposalResponse(g, req.StateId, proposal)
 }
 
 // ReInitCommit commits pending proposals for a reinitialization (Oleada 3).
@@ -1084,12 +1125,17 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 	// Pre-load proposals from the request so they can be resolved by-reference.
 	var proposals []*group.Proposal
 	for _, pBytes := range req.Proposal {
-		p, err := group.UnmarshalProposal(pBytes)
+		_, p, ref, err := extractByReferenceProposal(pBytes, g)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "parsing proposal: %v", err)
 		}
 		proposals = append(proposals, p)
-		g.Proposals.AddProposal(p, g.OwnLeafIndex)
+		if len(ref) > 0 {
+			g.ProposalByRef[string(ref)] = p
+			g.Proposals.AddProposalWithRef(p, g.OwnLeafIndex, ref)
+		} else {
+			g.Proposals.AddProposal(p, g.OwnLeafIndex)
+		}
 	}
 
 	msg, err := framing.UnmarshalMLSMessage(req.Commit)
@@ -1190,7 +1236,7 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 		SigPrivKey:       sigPrivKey,
 	})
 
-	kpData := kp.Marshal()
+	kpData := wrapKeyPackage(kp.Marshal())
 
 	return &proto.HandleReInitCommitResponse{
 		ReinitId:           reinitID,
@@ -1286,7 +1332,7 @@ func (s *Server) HandleReInitWelcome(ctx context.Context, req *proto.HandleReIni
 		return nil, status.Errorf(codes.InvalidArgument, "parsing welcome: %v", err)
 	}
 
-	newGroup, err := group.JoinFromWelcome(welcome, state.KeyPackage, state.PrivKeys, nil)
+	newGroup, err := group.JoinFromWelcome(welcome, state.KeyPackage, state.PrivKeys, s.collectResumptionPSKs())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "joining reinit group: %v", err)
 	}
@@ -1346,6 +1392,28 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "creating branch group: %v", err)
 	}
+	if oldGroup.EpochSecrets == nil || oldGroup.EpochSecrets.ResumptionSecret == nil {
+		return nil, status.Errorf(codes.Internal, "resumption secret not available for branch")
+	}
+	branchNonce := make([]byte, cs.HashLength())
+	if _, err := rand.Read(branchNonce); err != nil {
+		return nil, status.Errorf(codes.Internal, "generating branch psk nonce: %v", err)
+	}
+	branchPskKey := group.ResumptionPskCacheKey(oldGroup.GroupContext.GroupID.AsSlice(), oldGroup.GroupContext.Epoch.AsUint64())
+	newGroup.LoadPsk([]byte(branchPskKey), oldGroup.EpochSecrets.ResumptionSecret.AsSlice())
+	newGroup.Proposals.AddProposal(&group.Proposal{
+		Type: group.ProposalTypePreSharedKey,
+		PreSharedKey: &group.PreSharedKeyProposal{
+			PskType: 2,
+			PskID: group.PskID{
+				PskType:    2,
+				Usage:      3,
+				PskGroupID: oldGroup.GroupContext.GroupID.AsSlice(),
+				PskEpoch:   oldGroup.GroupContext.Epoch.AsUint64(),
+				Nonce:      branchNonce,
+			},
+		},
+	}, newGroup.OwnLeafIndex)
 
 	// Add each provided KeyPackage as an Add proposal.
 	for _, kpBytes := range req.KeyPackages {
@@ -1418,7 +1486,7 @@ func (s *Server) HandleBranch(ctx context.Context, req *proto.HandleBranchReques
 		return nil, status.Errorf(codes.InvalidArgument, "parsing welcome: %v", err)
 	}
 
-	newGroup, err := group.JoinFromWelcome(welcome, tx.KeyPackage, tx.PrivKeys, nil)
+	newGroup, err := group.JoinFromWelcome(welcome, tx.KeyPackage, tx.PrivKeys, s.collectResumptionPSKs())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "joining branch group: %v", err)
 	}
@@ -1445,8 +1513,9 @@ func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberA
 		return nil, status.Errorf(codes.InvalidArgument, "parsing group info: %v", err)
 	}
 
-	cs := groupInfo.GroupContext.CipherSuite
-	credWithKey, _, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
+	gc := groupInfo.GroupContext
+	cs := gc.CipherSuite
+	credWithKey, sigPrivKey, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "generating credential: %v", err)
 	}
@@ -1456,9 +1525,21 @@ func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberA
 		return nil, status.Errorf(codes.Internal, "generating key package: %v", err)
 	}
 
-	// Build an Add proposal for this new member.
+	// Build an Add proposal for this new member, signed as new_member_proposal
+	// per RFC 9420 §12.1.8 (PublicMessage, SenderType=new_member_proposal, no GC in TBS).
 	proposal := group.NewAddProposal(kp)
-	proposalBytes := group.ProposalMarshal(proposal)
+	content := framing.FramedContent{
+		GroupID:           gc.GroupID.AsSlice(),
+		Epoch:             gc.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeNewMemberProposal},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: group.ProposalMarshal(proposal)},
+	}
+	pm, err := framing.NewPublicMessage(content, sigPrivKey, nil /* no GC for new_member_proposal */, nil, cs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "signing new member proposal: %v", err)
+	}
+	proposalBytes := framing.NewMLSMessagePublic(pm).Marshal()
 
 	// Extract raw private key bytes (Ed25519 for CS1/CS3, P-256 for CS2).
 	var sigKeyBytes []byte
@@ -1504,8 +1585,9 @@ func (s *Server) CreateExternalSigner(ctx context.Context, req *proto.CreateExte
 	sigPubBytes := credWithKey.SignatureKeyBytes
 	credBytes := credWithKey.Credential.Marshal()
 
-	// Encode: VLBytes(sigKey) || VLBytes(cred) — one ExternalSender entry.
-	extSenderBytes := append(mlsVLBytes(sigPubBytes), mlsVLBytes(credBytes)...)
+	// Encode one ExternalSender entry per RFC 9420 §12.1.8.1:
+	// VL(signature_key) || Credential_inline (no extra VL wrapper on credential).
+	extSenderBytes := append(mlsVLBytes(sigPubBytes), credBytes...)
 
 	signerID := s.generateSignerID()
 	s.externalSigners.Store(signerID, sigPrivKey)
@@ -1533,16 +1615,23 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 
 	const extTypeExternalSenders = 0x0005
 
-	// Build the new ExternalSenders extension data.
-	// Collect existing entries from the group context (if any) then append the new one.
-	var existing []byte
+	// Build the new ExternalSenders extension data (RFC 9420 §12.1.8.1):
+	// extension data = VL(total_entries_bytes) || [ExternalSender entries].
+	// Each entry = VL(sigKey) || Credential_inline (no extra VL on credential).
+	var entriesBytes []byte
 	for _, ext := range g.GroupContext.Extensions {
 		if ext.Type == extTypeExternalSenders {
-			existing = ext.Data
+			// Existing data is VL(total)||entries; unwrap to get raw entries.
+			inner, _, err := mlsReadVLBytes(ext.Data)
+			if err == nil {
+				entriesBytes = inner
+			}
 			break
 		}
 	}
-	newExtData := append(existing, req.ExternalSender...)
+	// Append new ExternalSender entry (already RFC-encoded as VL(sigKey)||cred_inline).
+	entriesBytes = append(entriesBytes, req.ExternalSender...)
+	newExtData := mlsVLBytes(entriesBytes)
 
 	// Replace or append the ExternalSenders extension.
 	newExts := make([]group.Extension, 0, len(g.GroupContext.Extensions)+1)
@@ -1561,7 +1650,7 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 
 	proposal := group.NewGroupContextExtensionsProposal(newExts)
 	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
-	return &proto.ProposalResponse{Proposal: group.ProposalMarshal(proposal)}, nil
+	return s.proposalResponse(g, req.StateId, proposal)
 }
 
 // ExternalSignerProposal creates a proposal signed by an external signer
@@ -1572,7 +1661,7 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "external signer not found: %d", req.SignerId)
 	}
-	_ = signerVal.(*ciphersuite.SignaturePrivateKey) // key stored but signing skipped in self-interop mode
+	signerKey := signerVal.(*ciphersuite.SignaturePrivateKey)
 
 	groupInfo, err := unmarshalGroupInfoAnyFormat(req.GroupInfo)
 	if err != nil {
@@ -1682,13 +1771,22 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 		return nil, status.Errorf(codes.Unimplemented, "unsupported external proposal type: %s", ptype)
 	}
 
-	// RFC 9420 §12.1.8: external proposals MUST be sent as PublicMessage.
-	// However, the interop test-runner passes the ProposalResponse.Proposal bytes
-	// directly to HandleReInitCommit.Proposal and Commit.ByReference, both of
-	// which expect raw proposal bytes parseable by group.UnmarshalProposal.
-	// We return raw bytes here; signing is omitted since our HandleCommit does
-	// not verify external proposal signatures in self-interop mode.
-	return &proto.ProposalResponse{Proposal: group.ProposalMarshal(proposal)}, nil
+	// RFC 9420 §12.1.8: external proposals MUST be sent as PublicMessage with
+	// SenderType=external, signed by the external signer's key.
+	gcBytes := gc.Marshal()
+	content := framing.FramedContent{
+		GroupID:           gc.GroupID.AsSlice(),
+		Epoch:             gc.Epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeExternal, SenderIndex: req.SignerIndex},
+		AuthenticatedData: []byte{},
+		Body:              framing.ProposalBody{Data: group.ProposalMarshal(proposal)},
+	}
+	pm, err := framing.NewPublicMessage(content, signerKey, gcBytes, nil, cs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "signing external proposal: %v", err)
+	}
+	msgBytes := framing.NewMLSMessagePublic(pm).Marshal()
+	return &proto.ProposalResponse{Proposal: msgBytes}, nil
 }
 
 // extractByReferenceProposal extracts a *group.Proposal from byReference bytes.
@@ -1696,30 +1794,62 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 // Bytes may be either:
 //   - A full MLSMessage wrapping a PublicMessage whose body is a proposal
 //     (returned by proposalResponse, ExternalSignerProposal, NewMemberAddProposal), or
+//   - A full MLSMessage wrapping a PrivateMessage (when encrypt_handshake=true), or
 //   - Raw proposal bytes (group.ProposalMarshal output, fallback case).
 //
 // IMPORTANT: MLSMessage is tried first. Raw proposal parsing is only attempted as a
 // fallback because PublicMessage bytes start with [0x00, 0x01] which coincidentally
 // looks like ProposalTypeAdd=1, causing raw parsing to succeed with garbage data.
 //
-// Returns the raw proposal bytes and the parsed proposal.
-func extractByReferenceProposal(propBytes []byte) ([]byte, *group.Proposal, error) {
-	// Try MLSMessage → PublicMessage → ProposalBody first (most common case in public mode).
+// Returns the raw proposal bytes, the parsed proposal, and the ProposalRef (nil if unavailable).
+func extractByReferenceProposal(propBytes []byte, g *group.Group) ([]byte, *group.Proposal, []byte, error) {
 	if msg, err := framing.UnmarshalMLSMessage(propBytes); err == nil {
+		// PublicMessage path (public mode).
 		if msg.PublicMessage != nil {
 			if body, ok := msg.PublicMessage.Content.Body.(framing.ProposalBody); ok {
 				if p, err := group.UnmarshalProposal(body.Data); err == nil {
-					return body.Data, p, nil
+					// Compute ProposalRef from the AuthenticatedContent bytes.
+					ac := &framing.AuthenticatedContent{
+						WireFormat: framing.WireFormatPublicMessage,
+						Content:    msg.PublicMessage.Content,
+						Auth:       msg.PublicMessage.Auth,
+					}
+					ref := group.ComputeProposalRef(ac.Marshal(), g.CipherSuite)
+					return body.Data, p, ref, nil
+				}
+			}
+		}
+		// PrivateMessage path (encrypt_handshake=true).
+		if msg.PrivateMessage != nil && g != nil &&
+			g.EpochSecrets != nil && g.EpochSecrets.SenderDataSecret != nil &&
+			g.SecretTree != nil {
+			ac, err := framing.Decrypt(msg.PrivateMessage, framing.DecryptParams{
+				CipherSuite:      g.CipherSuite,
+				SenderDataSecret: g.EpochSecrets.SenderDataSecret,
+				SecretTree:       g.SecretTree,
+				GroupContext:     g.GroupContext.Marshal(),
+			})
+			if err == nil {
+				if body, ok := ac.Content.Body.(framing.ProposalBody); ok {
+					if p, err := group.UnmarshalProposal(body.Data); err == nil {
+						acForRef := &framing.AuthenticatedContent{
+							WireFormat: ac.WireFormat,
+							Content:    ac.Content,
+							Auth:       ac.Auth,
+						}
+						ref := group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite)
+						return body.Data, p, ref, nil
+					}
 				}
 			}
 		}
 	}
-	// Fall back: raw proposal bytes (group.ProposalMarshal output).
+	// Fall back: raw proposal bytes (group.ProposalMarshal output). No ref available.
 	p, err := group.UnmarshalProposal(propBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parsing byReference proposal: %w", err)
+		return nil, nil, nil, fmt.Errorf("parsing byReference proposal: %w", err)
 	}
-	return propBytes, p, nil
+	return propBytes, p, nil, nil
 }
 
 // unmarshalWelcomeAnyFormat parses a Welcome from either raw Welcome bytes
@@ -1800,4 +1930,36 @@ func mlsVLBytes(data []byte) []byte {
 		}
 	}
 	return append(out, data...)
+}
+
+// mlsReadVLBytes reads an MLS VL-prefixed byte slice from data.
+// Returns the inner bytes, the number of bytes consumed, and any error.
+func mlsReadVLBytes(data []byte) (inner []byte, consumed int, err error) {
+	if len(data) == 0 {
+		return nil, 0, fmt.Errorf("empty data")
+	}
+	var n int
+	var hdrLen int
+	switch data[0] >> 6 {
+	case 0, 1: // 1-byte varint
+		n = int(data[0])
+		hdrLen = 1
+	case 2: // 2-byte varint
+		if len(data) < 2 {
+			return nil, 0, fmt.Errorf("truncated 2-byte varint")
+		}
+		n = int(data[0]&0x3f)<<8 | int(data[1])
+		hdrLen = 2
+	default: // 4-byte varint
+		if len(data) < 4 {
+			return nil, 0, fmt.Errorf("truncated 4-byte varint")
+		}
+		n = int(data[0]&0x3f)<<24 | int(data[1])<<16 | int(data[2])<<8 | int(data[3])
+		hdrLen = 4
+	}
+	total := hdrLen + n
+	if len(data) < total {
+		return nil, 0, fmt.Errorf("data too short: need %d, have %d", total, len(data))
+	}
+	return data[hdrLen:total], total, nil
 }

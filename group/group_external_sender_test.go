@@ -11,12 +11,17 @@ import (
 )
 
 // buildExternalSendersExtData builds the ExternalSenders extension payload
-// with a single sender given sigKey and credBytes.
+// per RFC 9420 §12.1.8.1: VL(total_entries) || [VL(sigKey) || Credential_inline].
 func buildExternalSendersExtData(t *testing.T, sigKey, credBytes []byte) []byte {
 	t.Helper()
+	// Build one ExternalSender entry: VL(sigKey) || Credential_inline (no extra VL on cred).
+	entry := itls.NewWriter()
+	entry.WriteVLBytes(sigKey)
+	entry.WriteRaw(credBytes) // inline, no VL prefix
+	entriesBytes := entry.Bytes()
+	// Wrap in outer VL prefix.
 	w := itls.NewWriter()
-	w.WriteVLBytes(sigKey)
-	w.WriteVLBytes(credBytes)
+	w.WriteVLBytes(entriesBytes)
 	return w.Bytes()
 }
 
@@ -133,11 +138,15 @@ func TestGetExternalSenderSigningKey_MultipleSenders(t *testing.T) {
 	key1 := extPriv1.PublicKey().AsSlice()
 	credBytes := credentials.NewBasicCredentialFromString("ext").Marshal()
 
+	// Build two ExternalSender entries per RFC 9420 format:
+	// VL(outer_total) || [VL(key0)||cred_inline || VL(key1)||cred_inline]
+	entries := itls.NewWriter()
+	entries.WriteVLBytes(key0)
+	entries.WriteRaw(credBytes)
+	entries.WriteVLBytes(key1)
+	entries.WriteRaw(credBytes)
 	w := itls.NewWriter()
-	w.WriteVLBytes(key0)
-	w.WriteVLBytes(credBytes)
-	w.WriteVLBytes(key1)
-	w.WriteVLBytes(credBytes)
+	w.WriteVLBytes(entries.Bytes())
 
 	g.GroupContext.Extensions = append(g.GroupContext.Extensions, Extension{
 		Type: 0x0005,

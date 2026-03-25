@@ -183,17 +183,21 @@ func NewGroup(
 		Capabilities:    leafCaps,
 		Lifetime:        keyPackageToTreeSyncLifetime(keyPackage.LeafNode.Lifetime),
 		LeafNodeSource:  1, // key_package
+		Signature:       append([]byte(nil), keyPackage.LeafNode.Signature...),
 	}
 
 	_, _ = ratchetTree.AddLeaf(leafData)
 
-	// Create group context
+	// Create group context — TreeHash must be set for epoch 0 so that
+	// GetGroupInfo produces a GroupContext whose tree_hash matches the
+	// ratchet_tree extension (RFC §12.4.3.2 / §7.4.1).
 	groupContext := &GroupContext{
 		Version:     keypackages.MLS10,
 		GroupID:     groupID,
 		Epoch:       NewGroupEpoch(0),
 		CipherSuite: cipherSuite,
 		Extensions:  []Extension{},
+		TreeHash:    ratchetTree.TreeHashMinimal(),
 	}
 
 	// Initialize key schedule with zeros for first epoch
@@ -227,17 +231,21 @@ func NewGroup(
 
 	// Create group
 	group := &Group{
-		GroupID:               groupID,
-		Epoch:                 NewGroupEpoch(0),
-		CipherSuite:           cipherSuite,
-		GroupContext:          groupContext,
-		RatchetTree:           ratchetTree,
-		OwnLeafIndex:          NewLeafNodeIndex(0),
-		EpochSecrets:          epochSecrets,
-		Proposals:             NewProposalStore(),
-		ProposalByRef:         make(map[string]*Proposal),
-		KeySchedule:           keySchedule,
-		InterimTranscriptHash: []byte{},
+		GroupID:       groupID,
+		Epoch:         NewGroupEpoch(0),
+		CipherSuite:   cipherSuite,
+		GroupContext:  groupContext,
+		RatchetTree:   ratchetTree,
+		OwnLeafIndex:  NewLeafNodeIndex(0),
+		EpochSecrets:  epochSecrets,
+		Proposals:     NewProposalStore(),
+		ProposalByRef: make(map[string]*Proposal),
+		KeySchedule:   keySchedule,
+		// RFC 9420 §6.2: for the initial epoch, interim_transcript_hash =
+		// Hash(confirmed_transcript_hash || VL(confirmation_tag)) where both
+		// inputs are empty → Hash([0x00]). Must match what external parties
+		// derive from GroupInfo (which also has empty CTH and empty confirmation_tag).
+		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(cipherSuite, nil, nil),
 		Members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		CachedPsks:            make(map[string][]byte),
@@ -534,10 +542,17 @@ func (g *Group) CommitWithContext(
 			}
 		}
 		// Collect new extensions from GCE proposals for the new epoch GroupContext.
+		// Normalize nil extensions to empty slice so the nil-check in createUpdatePath
+		// correctly distinguishes "GCE present (even if empty)" from "no GCE (inherit)".
 		if fp.Proposal.Type == ProposalTypeGroupContextExtensions && fp.Proposal.GroupContextExtensions != nil {
-			newExtensions = fp.Proposal.GroupContextExtensions.Extensions
+			exts := fp.Proposal.GroupContextExtensions.Extensions
+			if exts == nil {
+				exts = []Extension{}
+			}
+			newExtensions = exts
 		}
 	}
+	treeDiff = treeDiff.ExpandToPowerOf2()
 
 	// Generate UpdatePath if necessary (RFC §12.4.1)
 	var updatePath *UpdatePath
@@ -547,20 +562,26 @@ func (g *Group) CommitWithContext(
 	var allPathSecrets []*ciphersuite.Secret
 	var committerDP, committerCopath []treesync.NodeIndex
 	var committerLevels []int
-	updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded)
+	updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
 	if err != nil {
 		return nil, fmt.Errorf("creating update path: %w", err)
 	}
 
-	// Build Commit structure
+	// Build Commit structure — use by-reference for proposals received from the
+	// network (they have a stored ref), inline for locally-generated proposals.
+	// RFC 9420 §12.4: "The committer SHOULD include those proposals by reference."
+	// mlspp treats all inline proposals as if sent by the committer, so using
+	// by-reference for others' proposals avoids "Duplicate signature key" errors.
 	commit := &Commit{
-		Proposals: make([]ProposalOrRef, len(proposals)),
+		Proposals: make([]ProposalOrRef, len(filtered)),
 		Path:      updatePath,
 	}
 
-	for i, prop := range proposals {
-		commit.Proposals[i] = ProposalOrRef{
-			Proposal: prop,
+	for i, fp := range filtered {
+		if len(fp.Ref) > 0 {
+			commit.Proposals[i] = ProposalOrRef{ProposalRef: fp.Ref}
+		} else {
+			commit.Proposals[i] = ProposalOrRef{Proposal: fp.Proposal}
 		}
 	}
 
@@ -695,16 +716,16 @@ func (g *Group) CommitWithContext(
 // filteredDirectPathLevels returns the direct path, copath, and the subset of
 // copath indices where the resolution is non-empty (RFC §12.4.1: UpdatePath.Nodes
 // only covers parents whose sibling's resolution is non-empty).
+// filteredDirectPathLevels returns the direct path, copath, and the subset of
+// copath indices where the FULL resolution is non-empty (RFC §12.4.1).
+// Note: newly-added-leaf exclusions only affect HPKECiphertext targets, NOT
+// which levels appear in the filtered path.
 func filteredDirectPathLevels(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex) (directPath, copath []treesync.NodeIndex, levels []int) {
-	return filteredDirectPathLevelsExcluding(tree, senderLeafIdx, nil)
-}
-
-func filteredDirectPathLevelsExcluding(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, excluded map[treesync.LeafIndex]bool) (directPath, copath []treesync.NodeIndex, levels []int) {
 	directPath = tree.DirectPath(senderLeafIdx)
 	copath = tree.Copath(senderLeafIdx)
 	levels = make([]int, 0, len(copath))
 	for i, copathNode := range copath {
-		if len(tree.ResolutionWithExclusions(copathNode, excluded)) > 0 {
+		if len(tree.Resolution(copathNode)) > 0 {
 			levels = append(levels, i)
 		}
 	}
@@ -722,6 +743,7 @@ func (g *Group) createUpdatePath(
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
 	excluded map[treesync.LeafIndex]bool, // newly added leaves excluded from UpdatePath encryption (RFC §12.4.1)
+	newExtensions []Extension, // GCE-updated extensions for provisional GroupContext (nil = current)
 ) (*UpdatePath, *ciphersuite.Secret, []*ciphersuite.Secret, []treesync.NodeIndex, []treesync.NodeIndex, []int, error) {
 	leafSecret, err := ciphersuite.NewSecretRandomCS(g.CipherSuite)
 	if err != nil {
@@ -752,8 +774,14 @@ func (g *Group) createUpdatePath(
 
 	// Compute filtered levels excluding newly added leaves (RFC §12.4.1).
 	// New members receive the commit_secret via Welcome, not via UpdatePath.
-	_, copath, levels := filteredDirectPathLevelsExcluding(tree, senderLeafIdx, excluded)
+	_, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	F := len(levels)
+
+	// RFC 9420 §7.5 / §12.4.2: blank all intermediate nodes on the committer's
+	// direct path before publishing new keys at filtered levels.
+	for i := 1; i < len(directPath); i++ {
+		tree.BlankNode(directPath[i])
+	}
 
 	// Apply encryption keys to filtered parent nodes (RFC §12.4.1).
 	// Also store private keys so this member can later decrypt commits where one
@@ -863,6 +891,11 @@ func (g *Group) createUpdatePath(
 	}
 
 	// Compute provisional GroupContext (RFC §12.4.1: next epoch + tree_hash_after).
+	// Use GCE-updated extensions if provided, otherwise inherit current extensions.
+	provExts := g.GroupContext.Extensions
+	if newExtensions != nil {
+		provExts = newExtensions
+	}
 	provGCBytes := (&GroupContext{
 		Version:                 g.GroupContext.Version,
 		CipherSuite:             g.GroupContext.CipherSuite,
@@ -870,7 +903,7 @@ func (g *Group) createUpdatePath(
 		Epoch:                   NewGroupEpoch(g.GroupContext.Epoch.AsUint64() + 1),
 		TreeHash:                tree.TreeHash(),
 		ConfirmedTranscriptHash: g.GroupContext.ConfirmedTranscriptHash,
-		Extensions:              g.GroupContext.Extensions,
+		Extensions:              provExts,
 	}).Marshal()
 
 	// Encrypt path secrets for each filtered level using provisional GC as context.
@@ -923,7 +956,7 @@ func (g *Group) createUpdatePath(
 // 3. Apply UpdatePath encryption keys at filtered levels
 // 4. Recompute parent_hash fields
 // The returned tree is a clone — the input tree is not modified.
-func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, path *UpdatePath, excluded map[treesync.LeafIndex]bool, cs ciphersuite.CipherSuite) *treesync.RatchetTree {
+func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.LeafIndex, path *UpdatePath, cs ciphersuite.CipherSuite) *treesync.RatchetTree {
 	provTree := tree.Clone()
 
 	if path.LeafNode != nil {
@@ -937,7 +970,7 @@ func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Lea
 	}
 
 	// Apply UpdatePath parent nodes using filtered direct path (RFC §12.4.1).
-	provDP, _, provLevels := filteredDirectPathLevelsExcluding(provTree, senderLeafIdx, excluded)
+	provDP, _, provLevels := filteredDirectPathLevels(provTree, senderLeafIdx)
 	for m, level := range provLevels {
 		if m >= len(path.Nodes) {
 			break
@@ -979,12 +1012,20 @@ func buildProvisionalTree(tree *treesync.RatchetTree, senderLeafIdx treesync.Lea
 		}
 	}
 
+	provTree = provTree.ExpandToPowerOf2()
+
 	return provTree
 }
 
 // provisionalGroupContextBytesFromTree computes the provisional GroupContext
 // from an already-built provisional tree.
-func (g *Group) provisionalGroupContextBytesFromTree(provTree *treesync.RatchetTree) []byte {
+// newExtensions should reflect any GCE proposals applied in this commit;
+// pass nil to inherit the current epoch's extensions unchanged.
+func (g *Group) provisionalGroupContextBytesFromTree(provTree *treesync.RatchetTree, newExtensions []Extension) []byte {
+	exts := g.GroupContext.Extensions
+	if newExtensions != nil {
+		exts = newExtensions
+	}
 	provGC := &GroupContext{
 		Version:                 g.GroupContext.Version,
 		CipherSuite:             g.GroupContext.CipherSuite,
@@ -992,7 +1033,7 @@ func (g *Group) provisionalGroupContextBytesFromTree(provTree *treesync.RatchetT
 		Epoch:                   NewGroupEpoch(g.GroupContext.Epoch.AsUint64() + 1),
 		TreeHash:                provTree.TreeHash(),
 		ConfirmedTranscriptHash: g.GroupContext.ConfirmedTranscriptHash,
-		Extensions:              g.GroupContext.Extensions,
+		Extensions:              exts,
 	}
 	return provGC.Marshal()
 }
@@ -1043,7 +1084,7 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 	}
 	ref := ComputeProposalRef(acBytes, g.CipherSuite)
 	g.ProposalByRef[string(ref)] = p
-	g.Proposals.AddProposal(p, sender)
+	g.Proposals.AddProposalWithRef(p, sender, ref)
 	return ref
 }
 
@@ -1074,7 +1115,6 @@ func (g *Group) ProcessReceivedCommit(
 	if err != nil {
 		return fmt.Errorf("unmarshaling commit: %w", err)
 	}
-
 
 	switch ac.Content.Sender.Type {
 	case framing.SenderTypeMember:
@@ -1154,8 +1194,10 @@ func (g *Group) ProcessReceivedCommit(
 	sortProposalsByRFCOrder(proposals, proposalSenders)
 
 	// Build tree with proposals applied, tracking newly added leaves (exclusion list).
+	// Also collect new extensions from any GCE proposals for the provisional GroupContext.
 	treeAfterProposals := g.RatchetTree.Clone()
 	excluded := make(map[treesync.LeafIndex]bool)
+	var newExtensions []Extension // nil = inherit current extensions
 	for i, p := range proposals {
 		if p.Type == ProposalTypeAdd && p.Add != nil && p.Add.KeyPackage != nil && p.Add.KeyPackage.LeafNode != nil {
 			leafData := *keyPackageLeafToTreeSync(p.Add.KeyPackage.LeafNode)
@@ -1166,8 +1208,14 @@ func (g *Group) ProcessReceivedCommit(
 				return fmt.Errorf("applying proposal %d to provisional tree: %w", i, err)
 			}
 		}
+		if p.Type == ProposalTypeGroupContextExtensions && p.GroupContextExtensions != nil {
+			exts := p.GroupContextExtensions.Extensions
+			if exts == nil {
+				exts = []Extension{}
+			}
+			newExtensions = exts
+		}
 	}
-
 	// RFC §12.4.3.3: if the commit contains an Update proposal for our own leaf,
 	// use PendingUpdatePrivKey (generated by SelfUpdate) instead of the current leaf key.
 	// We detect our own UpdateProposal by matching the signature key (SelfUpdate keeps the
@@ -1196,20 +1244,22 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("external commit missing update path")
 		}
 		extLeafIdx, _ := treeAfterProposals.AddLeaf(*commit.Path.LeafNode)
+		treeAfterProposals = treeAfterProposals.ExpandToPowerOf2()
 		senderLeafIdx = extLeafIdx
 		// The external joiner is excluded from copath resolution (same as newly added
 		// members via Add proposals), because the sender excluded themselves when
 		// computing filtered direct path levels during encryption.
 		excluded[extLeafIdx] = true
-		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded, g.CipherSuite)
-		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
+		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, g.CipherSuite)
+		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
 		if err != nil {
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
-		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, excluded, g.CipherSuite)
-		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree)
+		treeAfterProposals = treeAfterProposals.ExpandToPowerOf2()
+		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, g.CipherSuite)
+		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
 		if err != nil {
 			return fmt.Errorf("decrypting path secret: %w", err)
@@ -1239,7 +1289,7 @@ func (g *Group) decryptPathSecret(
 	gcBytes []byte, // provisional GroupContext bytes (RFC §12.4.1: context for HPKE)
 	excluded map[treesync.LeafIndex]bool, // newly added leaves to exclude from resolution
 ) (*ciphersuite.Secret, error) {
-	directPath, copath, levels := filteredDirectPathLevelsExcluding(tree, senderLeafIdx, excluded)
+	directPath, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	F := len(levels)
 	myNodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(g.OwnLeafIndex))
 
@@ -1440,6 +1490,8 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		return fmt.Errorf("collecting PSKs: %w", err)
 	}
 
+	g.RatchetTree = g.RatchetTree.ExpandToPowerOf2()
+
 	// Apply UpdatePath if it exists
 	if stagedCommit.Commit.Path != nil {
 		senderLeafIdx := treesync.LeafIndex(senderIdx)
@@ -1471,7 +1523,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		// Update ancestors with new encryption keys (filtered direct path).
 		// Re-compute filtered levels after blanking. Exclude newly added leaves
 		// (RFC §12.4.2) so the filtered levels match those used by the committer.
-		mergeDP, _, mergeLevels := filteredDirectPathLevelsExcluding(g.RatchetTree, senderLeafIdx, excluded)
+		mergeDP, _, mergeLevels := filteredDirectPathLevels(g.RatchetTree, senderLeafIdx)
 		for m, level := range mergeLevels {
 			if m >= len(stagedCommit.Commit.Path.Nodes) {
 				break
@@ -1973,7 +2025,11 @@ func (g *Group) applyProposal(proposal *Proposal, senderIdx LeafNodeIndex) error
 		// GroupContextExtensions proposals update group context extensions.
 		// RFC 9420 §12.4.2: Apply GCE to the group context.
 		if proposal.GroupContextExtensions != nil {
-			g.GroupContext.Extensions = proposal.GroupContextExtensions.Extensions
+			exts := proposal.GroupContextExtensions.Extensions
+			if exts == nil {
+				exts = []Extension{}
+			}
+			g.GroupContext.Extensions = exts
 		}
 		return nil
 	default:
