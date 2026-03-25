@@ -59,6 +59,9 @@ func ExternalCommit(
 	}
 
 	// Rebuild ratchet tree from extension if needed.
+	// RFC §7.4.1: wire format is minimal (no trailing blanks). Internally we
+	// use power-of-2 leaf count for parent/copath indexing. Expand if the
+	// parsed tree_hash doesn't match GroupInfo's tree_hash.
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
@@ -66,6 +69,7 @@ func ExternalCommit(
 			if err != nil {
 				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
 			}
+			parsed = parsed.ExpandToPowerOf2()
 			tree = parsed
 			break
 		}
@@ -133,7 +137,7 @@ func ExternalCommit(
 			Credentials:      []uint16{0x0001}, // BasicCredential
 		},
 		Lifetime:       nil, // source=commit: Lifetime not included in TBS (RFC §7.2)
-		LeafNodeSource: 3, // commit
+		LeafNodeSource: 3,   // commit
 	}
 	// For ECDSA (P-256), also populate the typed key field.
 	if cs.SignatureScheme() == ciphersuite.ECDSA_SECP256R1_SHA256 {
@@ -150,7 +154,9 @@ func ExternalCommit(
 	ownLeafData.Signature = sig.AsSlice()
 
 	ownLeafIdx, _ := treeDiff.AddLeaf(*ownLeafData)
+	treeDiff = treeDiff.ExpandToPowerOf2()
 	ownLeafIndex := LeafNodeIndex(ownLeafIdx)
+	excluded := map[treesync.LeafIndex]bool{ownLeafIdx: true}
 
 	// Build UpdatePath (RFC §12.4.1, filtered direct path).
 	directPath := treeDiff.DirectPath(ownLeafIdx)
@@ -159,10 +165,10 @@ func ExternalCommit(
 	}
 	N := len(directPath) - 1
 
-	// Derive path secrets for all N non-leaf levels.
-	pathSecrets := make([]*ciphersuite.Secret, N+1)
+	// Derive path secrets for all N non-leaf levels, plus one extra commit_secret.
+	pathSecrets := make([]*ciphersuite.Secret, N+2)
 	pathSecrets[0] = leafSecret
-	for i := 1; i <= N; i++ {
+	for i := 1; i <= N+1; i++ {
 		pathSecrets[i], err = pathSecrets[i-1].DeriveSecret(cs, "path")
 		if err != nil {
 			return nil, nil, fmt.Errorf("deriving path secret: %w", err)
@@ -182,7 +188,7 @@ func ExternalCommit(
 	// Apply encryption keys to filtered parent nodes.
 	pubKeys := make([][]byte, F)
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m]
+		ps := pathSecrets[N-F+m+1]
 		nodeSecret, err := ps.DeriveSecret(cs, "node")
 		if err != nil {
 			return nil, nil, fmt.Errorf("deriving node secret: %w", err)
@@ -254,8 +260,8 @@ func ExternalCommit(
 	// Encrypt path secrets for filtered levels using provisional GC as context.
 	nodes := make([]UpdatePathNode, F)
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m]
-		res := treeDiff.Resolution(copath[level])
+		ps := pathSecrets[N-F+m+1]
+		res := treeDiff.ResolutionWithExclusions(copath[level], excluded)
 		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
 		for j, resIdx := range res {
 			resNode := &treeDiff.Nodes[resIdx]
@@ -322,14 +328,14 @@ func ExternalCommit(
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transcript hash input: %w", err)
 	}
-	var interimHashForNewMember []byte
-	if len(groupInfo.ConfirmationTag) > 0 {
-		interimHashForNewMember = schedule.ComputeInterimTranscriptHash(
-			cs,
-			groupContext.ConfirmedTranscriptHash,
-			groupInfo.ConfirmationTag,
-		)
-	}
+	// RFC 9420 §6.2: always compute the interim transcript hash from the
+	// GroupInfo, even when ConfirmationTag is empty (initial epoch). For
+	// epoch 0, this gives Hash(CTH=[] || VL(tag=[])) = SHA256([0x00]).
+	interimHashForNewMember := schedule.ComputeInterimTranscriptHash(
+		cs,
+		groupContext.ConfirmedTranscriptHash,
+		groupInfo.ConfirmationTag,
+	)
 	confirmedHash, err := cthi.Compute(cs, interimHashForNewMember)
 	if err != nil {
 		return nil, nil, fmt.Errorf("computing confirmed transcript hash: %w", err)
@@ -380,7 +386,7 @@ func ExternalCommit(
 	// so they can derive private keys for every node on their filtered direct path.
 	pathNodePrivKeys := make(map[treesync.NodeIndex][]byte)
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m]
+		ps := pathSecrets[N-F+m+1]
 		nodeSecret, nsErr := ps.DeriveSecret(cs, "node")
 		if nsErr == nil {
 			nodeIdx := directPath[level+1]

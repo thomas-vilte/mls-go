@@ -16,6 +16,7 @@ package ciphersuite
 import (
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/hpke"
 	"crypto/rand"
 	"fmt"
 )
@@ -192,102 +193,80 @@ func DeriveKeyPairX25519(ikm []byte) (pubKey, privKey []byte, err error) {
 	return pub.Bytes(), priv.Bytes(), nil
 }
 
-// EncapToBytes performs DHKEM encapsulation per RFC 9180 §4.1.
+// EncapToBytes performs HPKE encapsulation per RFC 9420 §5.1.3 and RFC 9180 §4.1.
 //
-// Generates an ephemeral key pair and computes the shared secret:
-//   - enc = ephemeral public key (KEM output)
-//   - shared_secret = ECDH(ephemeral private key, recipient public key)
+// Uses SetupBaseS with the cipher suite's KEM/KDF/AEAD and returns the KEM output
+// (ephemeral public key) and the exported secret via context.Export(string(info), Nh).
+//
+// Per RFC 9420 §12.4.3.2, ExternalInit uses:
+//   - info = "MLS 1.0 external init"
+//   - exported secret = init_secret_for_new_epoch
 //
 // Returns:
 //   - kem_output: Encapsulated key (32 bytes for X25519, 65 bytes for P256)
-//   - shared_secret: Shared secret for key derivation
+//   - exported_secret: Exported secret of length Nh
 //   - error: if encapsulation fails
+// externalInitExportCtx is the HPKE export context for ExternalInit per RFC 9420 §12.4.3.2.
+// Both mlspp (Cisco) and OpenMLS use: SetupBaseS(external_pub, info="") + Export("MLS 1.0 external init secret", Nh).
+const externalInitExportCtx = "MLS 1.0 external init secret"
+
+// EncapToBytes performs HPKE encapsulation for ExternalInit (RFC 9420 §12.4.3.2, RFC 9180 §4.1).
 //
-// Supports CS1 (X25519), CS2 (P256), and CS3 (X25519).
-func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, sharedSecret []byte, err error) {
-	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
-		priv, err := ecdh.X25519().GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		pub, err := ecdh.X25519().NewPublicKey(recipientPubKeyBytes)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		sharedSecret, err := priv.ECDH(pub)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return priv.PublicKey().Bytes(), sharedSecret, nil
-
-	case MLS128DHKEMP256:
-		priv, err := ecdh.P256().GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		pub, err := ecdh.P256().NewPublicKey(recipientPubKeyBytes)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		sharedSecret, err := priv.ECDH(pub)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return priv.PublicKey().Bytes(), sharedSecret, nil
-
-	default:
+// Uses SetupBaseS with empty info and exports via context.Export("MLS 1.0 external init secret", Nh).
+// Returns the KEM output (enc) and the exported init_secret.
+func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, exportedSecret []byte, err error) {
+	curve := cs.Curve()
+	if curve == nil {
 		return nil, nil, fmt.Errorf("unsupported cipher suite: %d", cs)
 	}
+	aead, err := hpkeAEAD(cs)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub, err := curve.NewPublicKey(recipientPubKeyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing recipient public key: %w", err)
+	}
+	hpkePub, err := hpke.NewDHKEMPublicKey(pub)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating HPKE public key: %w", err)
+	}
+	// RFC 9420 §12.4.3.2: info = "" (empty), export context = "MLS 1.0 external init secret"
+	enc, sender, err := hpke.NewSender(hpkePub, hpke.HKDFSHA256(), aead, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("HPKE NewSender: %w", err)
+	}
+	secret, err := sender.Export(externalInitExportCtx, cs.HashLength())
+	if err != nil {
+		return nil, nil, fmt.Errorf("HPKE Export: %w", err)
+	}
+	return enc, secret, nil
 }
 
-// DecapToBytes performs DHKEM decapsulation per RFC 9180 §4.1.
+// DecapToBytes performs HPKE decapsulation for ExternalInit (RFC 9420 §12.4.3.2, RFC 9180 §4.1).
 //
-// Computes the shared secret:
-//   - shared_secret = ECDH(recipient private key, encapsulated key)
-//
-// Returns:
-//   - shared_secret: Shared secret for key derivation
-//   - error: if decapsulation fails
-//
-// Supports CS1 (X25519), CS2 (P256), and CS3 (X25519).
+// Uses SetupBaseR with empty info and exports via context.Export("MLS 1.0 external init secret", Nh).
 func DecapToBytes(enc, privKeyBytes []byte, cs CipherSuite) ([]byte, error) {
-	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
-		priv, err := ecdh.X25519().NewPrivateKey(privKeyBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		pub, err := ecdh.X25519().NewPublicKey(enc)
-		if err != nil {
-			return nil, err
-		}
-
-		sharedSecret, err := priv.ECDH(pub)
-		return sharedSecret, err
-
-	case MLS128DHKEMP256:
-		priv, err := ecdh.P256().NewPrivateKey(privKeyBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		pub, err := ecdh.P256().NewPublicKey(enc)
-		if err != nil {
-			return nil, err
-		}
-
-		sharedSecret, err := priv.ECDH(pub)
-		return sharedSecret, err
-
-	default:
+	curve := cs.Curve()
+	if curve == nil {
 		return nil, fmt.Errorf("unsupported cipher suite: %d", cs)
 	}
+	aead, err := hpkeAEAD(cs)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := curve.NewPrivateKey(privKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key: %w", err)
+	}
+	hpkePriv, err := hpke.NewDHKEMPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("creating HPKE private key: %w", err)
+	}
+	// RFC 9420 §12.4.3.2: info = "" (empty), export context = "MLS 1.0 external init secret"
+	recipient, err := hpke.NewRecipient(enc, hpkePriv, hpke.HKDFSHA256(), aead, nil)
+	if err != nil {
+		return nil, fmt.Errorf("HPKE NewRecipient: %w", err)
+	}
+	return recipient.Export(externalInitExportCtx, cs.HashLength())
 }

@@ -506,6 +506,31 @@ func (t *RatchetTree) BlankNode(idx NodeIndex) {
 	}
 }
 
+// ExpandToPowerOf2 returns a copy of the tree with NumLeaves rounded up to the
+// next power of 2. This is needed when deserializing a tree that was serialized
+// in minimal wire format (RFC §7.4.1): the serialized form trims trailing blank
+// leaves, so the receiver must re-expand to restore the virtual power-of-2 tree
+// used internally for parent/copath indexing. If NumLeaves is already a power of
+// 2 (or equals 1), the original tree is returned unchanged.
+func (t *RatchetTree) ExpandToPowerOf2() *RatchetTree {
+	n := t.NumLeaves
+	if n <= 1 || (n&(n-1)) == 0 {
+		return t // already power-of-2
+	}
+	next := uint32(1) << bits.Len32(n-1)
+	targetNodes := int(next*2 - 1)
+	expanded := make([]Node, targetNodes)
+	copy(expanded, t.Nodes)
+	for i := len(t.Nodes); i < targetNodes; i++ {
+		expanded[i] = Node{State: NodeStateEmpty}
+	}
+	return &RatchetTree{
+		Nodes:     expanded,
+		NumLeaves: next,
+		cs:        t.cs,
+	}
+}
+
 // TruncateTrailingBlanks removes blank or empty leaves from the end of the tree.
 func (t *RatchetTree) TruncateTrailingBlanks() {
 	for t.NumLeaves > 1 {
@@ -531,6 +556,38 @@ func (t *RatchetTree) TreeHash() []byte {
 		return nil
 	}
 	return t.HashNode(t.Root())
+}
+
+// TreeHashMinimal computes the tree hash using the minimal node count (RFC
+// §7.4.1). The internal tree may be padded to power-of-2 leaves for
+// parent/copath indexing, but the wire format (and mlspp cross-interop)
+// requires the hash to be computed from the minimal tree. This method
+// temporarily reduces NumLeaves to the actual member count and recomputes.
+func (t *RatchetTree) TreeHashMinimal() []byte {
+	// Find rightmost non-blank leaf (same logic as MarshalTreeRFC trim).
+	minimalNodeCount := len(t.Nodes)
+	for minimalNodeCount > 1 {
+		lastNodeIdx := minimalNodeCount - 1
+		if !IsLeaf(NodeIndex(lastNodeIdx)) {
+			break
+		}
+		if t.Nodes[lastNodeIdx].State != NodeStateEmpty && t.Nodes[lastNodeIdx].State != NodeStateBlank {
+			break
+		}
+		minimalNodeCount -= 2
+	}
+	if minimalNodeCount == len(t.Nodes) {
+		// Tree is already minimal (no trailing blank leaves).
+		return t.TreeHash()
+	}
+	// Create a minimal view with reduced NumLeaves. HashNode bounds-checks
+	// against len(Nodes), so this correctly computes the minimal tree hash.
+	minimal := &RatchetTree{
+		Nodes:     t.Nodes[:minimalNodeCount],
+		NumLeaves: uint32((minimalNodeCount + 1) / 2),
+		cs:        t.cs,
+	}
+	return minimal.HashNode(minimal.Root())
 }
 
 // HashNode computes node hash.

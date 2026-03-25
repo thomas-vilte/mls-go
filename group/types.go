@@ -96,11 +96,13 @@ func ProposalMarshal(p *Proposal) []byte {
 	switch p.Type {
 	case ProposalTypeAdd:
 		if p.Add != nil {
-			w.WriteVLBytes(p.Add.KeyPackage.Marshal())
+			// RFC 9420 §12.1.1: struct { KeyPackage key_package; } Add — inline, no VL wrapper
+			w.WriteRaw(p.Add.KeyPackage.Marshal())
 		}
 	case ProposalTypeUpdate:
 		if p.Update != nil {
-			w.WriteVLBytes(p.Update.LeafNode.Marshal())
+			// RFC 9420 §12.1.2: struct { LeafNode leaf_node; } Update — inline, no VL wrapper
+			w.WriteRaw(p.Update.LeafNode.Marshal())
 		}
 	case ProposalTypeRemove:
 		if p.Remove != nil {
@@ -164,17 +166,18 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		pos := r.Position()
-		kpData, err := r.ReadVLBytes()
-		if err == nil {
-			kp, parseErr := keypackages.UnmarshalKeyPackage(kpData)
-			if parseErr == nil {
-				proposal.Add = &AddProposal{KeyPackage: kp}
-				break
-			}
+		kp, err := keypackages.UnmarshalKeyPackageFromReader(r)
+		if err == nil && r.Remaining() == 0 {
+			proposal.Add = &AddProposal{KeyPackage: kp}
+			break
 		}
 
 		r.SetPosition(pos)
-		kp, err := keypackages.UnmarshalKeyPackage(r.BytesAfterPosition())
+		kpData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("parsing add proposal key package: %w", err)
+		}
+		kp, err = keypackages.UnmarshalKeyPackage(kpData)
 		if err != nil {
 			return nil, fmt.Errorf("parsing add proposal key package: %w", err)
 		}
@@ -182,17 +185,18 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 
 	case ProposalTypeUpdate:
 		pos := r.Position()
-		lnData, err := r.ReadVLBytes()
-		if err == nil {
-			ln, parseErr := keypackages.UnmarshalLeafNode(lnData)
-			if parseErr == nil {
-				proposal.Update = &UpdateProposal{LeafNode: ln}
-				break
-			}
+		ln, err := keypackages.UnmarshalLeafNodeFromReader(r)
+		if err == nil && r.Remaining() == 0 {
+			proposal.Update = &UpdateProposal{LeafNode: ln}
+			break
 		}
 
 		r.SetPosition(pos)
-		ln, err := keypackages.UnmarshalLeafNode(r.BytesAfterPosition())
+		lnData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("parsing update proposal leaf node: %w", err)
+		}
+		ln, err = keypackages.UnmarshalLeafNode(lnData)
 		if err != nil {
 			return nil, fmt.Errorf("parsing update proposal leaf node: %w", err)
 		}
@@ -306,27 +310,30 @@ func readProposalInlineBody(r *tls.Reader, propType ProposalType) error {
 	switch propType {
 	case ProposalTypeAdd:
 		pos := r.Position()
-		kpData, err := r.ReadVLBytes()
-		if err == nil {
-			if _, kpErr := keypackages.UnmarshalKeyPackage(kpData); kpErr == nil {
-				return nil
-			}
+		if _, err := keypackages.UnmarshalKeyPackageFromReader(r); err == nil {
+			return nil
 		}
 		r.SetPosition(pos)
-		if _, err := keypackages.UnmarshalKeyPackageFromReader(r); err != nil {
+		kpData, err := r.ReadVLBytes()
+		if err != nil {
+			return fmt.Errorf("parsing add proposal: %w", err)
+		}
+		if _, err := keypackages.UnmarshalKeyPackage(kpData); err != nil {
 			return fmt.Errorf("parsing add proposal: %w", err)
 		}
 		return nil
 
 	case ProposalTypeUpdate:
 		pos := r.Position()
-		if lnData, err := r.ReadVLBytes(); err == nil {
-			if _, lnErr := keypackages.UnmarshalLeafNode(lnData); lnErr == nil {
-				return nil
-			}
+		if _, err := keypackages.UnmarshalLeafNodeFromReader(r); err == nil {
+			return nil
 		}
 		r.SetPosition(pos)
-		if _, err := keypackages.UnmarshalLeafNodeFromReader(r); err != nil {
+		lnData, err := r.ReadVLBytes()
+		if err != nil {
+			return fmt.Errorf("parsing update proposal: %w", err)
+		}
+		if _, err := keypackages.UnmarshalLeafNode(lnData); err != nil {
 			return fmt.Errorf("parsing update proposal: %w", err)
 		}
 		return nil
@@ -419,6 +426,11 @@ func (ps *ProposalStore) AddProposal(proposal *Proposal, sender LeafNodeIndex) {
 	ps.Proposals = append(ps.Proposals, StoredProposal{Proposal: proposal, Sender: sender})
 }
 
+// AddProposalWithRef adds a network-received proposal with its ProposalRef.
+func (ps *ProposalStore) AddProposalWithRef(proposal *Proposal, sender LeafNodeIndex, ref []byte) {
+	ps.Proposals = append(ps.Proposals, StoredProposal{Proposal: proposal, Sender: sender, Ref: ref})
+}
+
 // Clear clears all proposals.
 func (ps *ProposalStore) Clear() {
 	ps.Proposals = make([]StoredProposal, 0)
@@ -443,6 +455,9 @@ type Member struct {
 type StoredProposal struct {
 	Proposal *Proposal
 	Sender   LeafNodeIndex
+	// Ref is the ProposalRef bytes if this proposal was received from the network.
+	// Nil for proposals generated locally by the committer.
+	Ref []byte
 }
 
 // ExternalSender represents an allowed external sender per RFC 9420 §12.1.8.1.
@@ -456,21 +471,23 @@ type ExternalSender struct {
 
 // parseExternalSenders deserializes an ExternalSenders extension payload.
 //
-// The extension data is a variable-length vector of ExternalSender structs
-// per RFC 9420 §12.1.8.1.
+// RFC 9420 §12.1.8.1: ExternalSender external_senders<V> — the data is
+// a VL-prefixed vector of ExternalSender structs, each encoded as
+// VL(signature_key) || Credential (inline TLS encoding, no extra VL wrapper).
 func parseExternalSenders(data []byte) ([]ExternalSender, error) {
 	r := tls.NewReader(data)
+	innerBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading external_senders vector: %w", err)
+	}
+	r2 := tls.NewReader(innerBytes)
 	var senders []ExternalSender
-	for r.Remaining() > 0 {
-		sigKey, err := r.ReadVLBytes()
+	for r2.Remaining() > 0 {
+		sigKey, err := r2.ReadVLBytes()
 		if err != nil {
 			return nil, fmt.Errorf("reading external sender signature key: %w", err)
 		}
-		credBytes, err := r.ReadVLBytes()
-		if err != nil {
-			return nil, fmt.Errorf("reading external sender credential: %w", err)
-		}
-		cred, err := credentials.UnmarshalCredential(credBytes)
+		cred, err := credentials.UnmarshalCredentialFromReader(r2)
 		if err != nil {
 			return nil, fmt.Errorf("parsing external sender credential: %w", err)
 		}

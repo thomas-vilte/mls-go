@@ -75,11 +75,29 @@ func unmarshalPublicKey(data []byte, cs ciphersuite.CipherSuite) (*ecdh.PublicKe
 // Format: VL(byte_count) || optional<Node>*
 // Each node is encoded as: 0x00 (absent) or 0x01 || nodeType(u8) || nodeData.
 //
-// This is the interoperable format expected by OpenMLS and other RFC-compliant
-// implementations. It differs from the internal MarshalTree() format.
+// Per RFC 9420 §7.4.1 the rightmost node in the serialized array MUST be
+// non-blank (minimal encoding). The internal tree may be padded to power-of-2
+// leaves for correct parent/child indexing, so we find the rightmost non-blank
+// leaf and serialize only 2*(leafIdx+1)-1 nodes.
 func (t *RatchetTree) MarshalTreeRFC() []byte {
+	// Find rightmost non-blank leaf to determine minimal node count.
+	minimalNodes := len(t.Nodes)
+	for minimalNodes > 1 {
+		lastNodeIdx := minimalNodes - 1
+		if !IsLeaf(NodeIndex(lastNodeIdx)) {
+			// Should not happen (leaves are at even indices), but be safe.
+			break
+		}
+		node := &t.Nodes[lastNodeIdx]
+		if node.State != NodeStateEmpty && node.State != NodeStateBlank {
+			break
+		}
+		// Last node is blank; shrink by 2 (remove rightmost leaf + its parent).
+		minimalNodes -= 2
+	}
+
 	nodesBuf := tls.NewWriter()
-	for i := range t.Nodes {
+	for i := 0; i < minimalNodes; i++ {
 		node := &t.Nodes[i]
 		if node.State == NodeStateEmpty || node.State == NodeStateBlank {
 			nodesBuf.WriteUint8(0) // absent
@@ -290,8 +308,10 @@ func UnmarshalTreeFromExtension(data []byte, cs ciphersuite.CipherSuite) (*Ratch
 		return UnmarshalTree(data, cs)
 	}
 
+	numLeaves := uint32((len(nodes) + 1) / 2)
 	return &RatchetTree{
 		Nodes:     nodes,
-		NumLeaves: uint32((len(nodes) + 1) / 2),
+		NumLeaves: numLeaves,
+		cs:        cs,
 	}, nil
 }
