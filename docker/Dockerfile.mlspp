@@ -1,0 +1,46 @@
+FROM ubuntu:24.04
+
+RUN apt-get -y update && apt-get -y install \
+    git make cmake clang curl zip pkg-config \
+    ninja-build autoconf libtool nasm \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m user
+USER user
+WORKDIR /home/user
+
+RUN git clone --recursive https://github.com/cisco/mlspp.git
+WORKDIR mlspp
+
+RUN sed -i 's/#if !defined(P256_SHA256)/#if defined(WITH_PQ)/g' src/crypto.cpp
+RUN sed -i '/"liboqs"/d' alternatives/openssl_1.1/vcpkg.json && \
+    sed -i 's/"nlohmann-json"/"nlohmann-json", "grpc", "protobuf", "gflags"/g' alternatives/openssl_1.1/vcpkg.json
+ENV CMAKE_GENERATOR=Ninja
+ENV TOOLCHAIN=/home/user/mlspp/vcpkg/scripts/buildsystems/vcpkg.cmake
+ENV MANIFEST=/home/user/mlspp/alternatives/openssl_1.1
+
+RUN ./vcpkg/bootstrap-vcpkg.sh
+
+RUN cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN} \
+    -DVCPKG_MANIFEST_DIR=${MANIFEST} \
+    -DMLSPP_TESTING=OFF \
+    -DDISABLE_PQ=ON \
+    . && cmake --build build --parallel 4
+
+WORKDIR cmd/interop
+
+RUN sed -i 's/all_supported_suites/all_supported_cipher_suites/g' src/main.cpp && \
+    sed -i 's/all_supported_suites/all_supported_cipher_suites/g' src/mls_client_impl.cpp
+
+RUN cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN} \
+    -DVCPKG_MANIFEST_DIR=${MANIFEST} \
+    -DDISABLE_PQ=ON \
+    . && cmake --build build --parallel 4
+
+EXPOSE 50051
+
+ENTRYPOINT ["./build/mlspp_client"]

@@ -1,112 +1,102 @@
 # Interoperability Testing
 
-Interoperability testing against other MLS implementations using standardized test vectors.
+Interop is Docker-first in this repository.
 
-## Overview
+That is not just for convenience. It is the supported path.
 
-Test vectors are JSON files containing deterministic test cases. Multiple implementations generate and validate the same vectors — matching output confirms interoperability.
+Running everything in containers avoids the usual setup drift: different Go versions, missing system packages, different `mlspp` builds, or some stale binary sitting in a random directory. If you want reproducible results, use Docker.
 
-This follows the [MLS Interoperability Test Vectors](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/) format used by the MLS working group.
+## What is in here
 
-## Test Vector Format
+- `interop/server/` contains the `mls-go` gRPC interop server
+- `interop/testrunner/` contains the test runner source used to build the Docker image
+- `docker/` contains the Compose file, Dockerfiles, and the helper script used to run the suite
 
-```json
-{
-  "name": "MLS-Interop",
-  "description": "Test vectors for interoperability testing",
-  "vectors": [
-    {
-      "name": "one-to-one-join",
-      "cipher_suite": 2,
-      "group_id": "hex_encoded_group_id",
-      "epoch": 0,
-      "key_packages": [...],
-      "commits": [...],
-      "welcomes": [...],
-      "expected_tree_hash": "...",
-      "expected_epoch": 1,
-      "expected_num_members": 2
-    }
-  ]
-}
-```
+## The supported way to run interop
 
-## Usage
+### Self-interop
 
-### Running Interop Tests
+This runs `mls-go` against itself:
 
 ```bash
-# Run all interop tests
-go test ./interop/... -v
-
-# Run a specific test
-go test ./interop/... -v -run TestOneToOneJoinScenario
-
-# Cross-implementation testing (requires external test vectors)
-export MLS_TEST_VECTORS=path/to/vectors.json
-go test ./interop/... -v -run TestCrossImplementationRoundTrip
+./docker/run-interop.sh self
 ```
 
-### Generating Test Vectors
+### Cross-interop
 
-```go
-package main
+This runs `mls-go` against `mlspp`:
 
-import (
-    "github.com/thomas-vilte/mls-go/interop"
-)
-
-func main() {
-    tvs, err := interop.GenerateInteropTestVectors()
-    if err != nil {
-        panic(err)
-    }
-
-    err = tvs.ExportToFile("go_test_vectors.json")
-    if err != nil {
-        panic(err)
-    }
-}
+```bash
+./docker/run-interop.sh cross
 ```
 
-## Test Scenarios
+### Everything
 
-### One-to-One Join
+This runs self-interop first and then cross-interop:
 
-Covers the basic group formation flow:
+```bash
+./docker/run-interop.sh all
+```
 
-1. Alice creates a group (epoch 0)
-2. Alice adds Bob via Add proposal + Commit
-3. Bob processes Welcome and joins at epoch 1
-4. Both verify matching group state and tree hash
+## Suites
 
-This exercises RFC 9420 section 11.2.1 (Adding Members).
+The script supports these cipher suites:
 
-### Planned Scenarios
+- `1` - `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`
+- `2` - `MLS_128_DHKEMP256_AES128GCM_SHA256_P256`
+- `3` - `MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`
 
-- Multi-party join (3+ members)
-- Multiple concurrent additions
-- Member removal (RFC 9420 section 11.2.3)
-- Member updates / key rotation (RFC 9420 section 11.2.2)
-- External commits (RFC 9420 section 11.3)
-- Group reinitialization
+If you only want one suite:
 
-## Implementation Status
+```bash
+SUITES=2 ./docker/run-interop.sh cross
+```
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Test vector generation | Done | Basic scenarios |
-| Test vector import/export | Done | JSON format |
-| 1:1 join scenario | Done | RFC 9420 section 11.2.1 |
-| Multi-party join | Planned | |
-| External commits | Planned | RFC 9420 section 11.3 |
-| All cipher suites | Partial | Only MLS128DHKEMP256 (0x0002) tested |
+## Configs
+
+The standard config set is:
+
+- `welcome_join`
+- `application`
+- `commit`
+- `external_join`
+- `external_proposals`
+- `reinit`
+- `branch`
+
+Self-interop also runs `deep_random`.
+
+Cross-interop skips `deep_random` by default because it is a stress case. If you want the heavier run, opt in explicitly.
+
+```bash
+RUN_STRESS=1 ./docker/run-interop.sh cross
+```
+
+You can also run a single config:
+
+```bash
+./docker/run-interop.sh cross external_proposals
+SUITES=3 ./docker/run-interop.sh self reinit
+```
+
+## Output
+
+The Docker helper prints progress in a plain `PASS` / `FAIL` format.
+
+Examples:
+
+- `PASS: [self] suite=2 config=external_proposals`
+- `PASS: [cross] suite=3 config=branch`
+
+If something fails, the script prints the captured log for that case and exits non-zero.
+
+## Notes
+
+- `docker/docker-compose.yml` starts `mlspp` with `-live 50051`, which is required for cross-interop.
+- `interop/testrunner/main.go` is kept in this repository so the Docker runner image is built from local source, not from an external checkout.
+- The old local shell wrappers were removed on purpose. If someone needs interop results, they should get them from the Docker flow.
 
 ## References
 
-- [MLS Interop Test Vectors](https://github.com/mlswg/mls-implementations/blob/master/test-vectors/)
+- [MLS WG interoperability repository](https://github.com/mlswg/mls-implementations)
 - [RFC 9420 - The Messaging Layer Security (MLS) Protocol](https://www.rfc-editor.org/rfc/rfc9420)
-- [RFC 9420 Section 11.2.1 - Adding Members](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.1)
-- [RFC 9420 Section 11.2.2 - Member Updates](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.2)
-- [RFC 9420 Section 11.2.3 - Member Removal](https://www.rfc-editor.org/rfc/rfc9420#section-11.2.3)
-- [RFC 9420 Section 11.3 - External Commits](https://www.rfc-editor.org/rfc/rfc9420#section-11.3)

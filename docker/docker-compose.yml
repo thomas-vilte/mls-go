@@ -1,0 +1,63 @@
+name: mls-interop
+
+networks:
+  mls-interop:
+    driver: bridge
+
+services:
+  mls-go:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mls-go
+    networks: [mls-interop]
+    expose: ["50051"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  mlspp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlspp
+    command: ["-live", "50051"]
+    networks: [mls-interop]
+    expose: ["50051"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  openmls:
+    build:
+      context: .
+      dockerfile: Dockerfile.openmls
+    networks: [mls-interop]
+    expose: ["50051"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test-runner
+    networks: [mls-interop]
+    volumes:
+      - ../interop/testrunner/configs:/configs:ro
+    profiles: ["manual"]

@@ -1,0 +1,5 @@
+FROM golang:1.26-alpine
+RUN apk add --no-cache git make
+WORKDIR /build
+EXPOSE 50051
+ENTRYPOINT ["sh", "-c", "echo 'Building mls-go...' && cd /build/interop/server && go build -o /tmp/mls-go-server . && echo 'Starting server...' && /tmp/mls-go-server --port 50051"]

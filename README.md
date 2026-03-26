@@ -106,6 +106,40 @@ go test ./schedule/... -run TestKeyScheduleInteropVectors -v
 go test ./group/... -run TestPassiveClientCommitVectors -v
 ```
 
+## Interoperability
+
+Interop is meant to run through Docker.
+
+That is deliberate. Keeping the Go server, `mlspp`, and the test runner inside the same Docker setup avoids the usual local-machine problems: mismatched toolchains, missing packages, old binaries, and "it works here" surprises.
+
+If you want interop results, use one of these:
+
+```bash
+# Self-interop: mls-go vs mls-go
+./docker/run-interop.sh self
+
+# Cross-interop: mls-go vs mlspp
+./docker/run-interop.sh cross
+
+# Both
+./docker/run-interop.sh all
+```
+
+Handy variants:
+
+```bash
+# Run one config only
+./docker/run-interop.sh cross external_proposals
+
+# Run one suite only
+SUITES=2 ./docker/run-interop.sh self
+
+# Include deep_random in cross runs
+RUN_STRESS=1 ./docker/run-interop.sh cross
+```
+
+More detail lives in `interop/README.md`.
+
 ---
 
 ## Roadmap
