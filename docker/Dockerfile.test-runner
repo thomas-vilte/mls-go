@@ -1,0 +1,18 @@
+FROM golang:1.26-alpine AS builder
+WORKDIR /build
+
+COPY interop/server/go.mod interop/server/go.sum ./interop/server/
+COPY interop/testrunner/go.mod ./interop/testrunner/
+
+WORKDIR /build/interop/testrunner
+RUN go mod download
+
+WORKDIR /build
+COPY . .
+
+WORKDIR /build/interop/testrunner
+RUN go build -o /test-runner .
+
+FROM alpine:3.21
+COPY --from=builder /test-runner /test-runner
+ENTRYPOINT ["/test-runner"]

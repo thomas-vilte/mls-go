@@ -1,0 +1,25 @@
+.git/
+.gitmodules
+
+docker/
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+interop/server/mls-go-server
+interop/server/server
+interop/testrunner/test-runner
+
+openmls/
+
+MLS-Implementation/
+
+# Test data (large, already embedded via go:embed or read from path)
+# testdata/   <- keep: needed for interop test vectors
+
+# Misc
+*.log
+tmp/
+.claude/

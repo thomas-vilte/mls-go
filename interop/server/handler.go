@@ -1941,21 +1941,23 @@ func mlsReadVLBytes(data []byte) (inner []byte, consumed int, err error) {
 	var n int
 	var hdrLen int
 	switch data[0] >> 6 {
-	case 0, 1: // 1-byte varint
+	case 0: // 1-byte varint
 		n = int(data[0])
 		hdrLen = 1
-	case 2: // 2-byte varint
+	case 1: // 2-byte varint
 		if len(data) < 2 {
 			return nil, 0, fmt.Errorf("truncated 2-byte varint")
 		}
 		n = int(data[0]&0x3f)<<8 | int(data[1])
 		hdrLen = 2
-	default: // 4-byte varint
+	case 2: // 4-byte varint
 		if len(data) < 4 {
 			return nil, 0, fmt.Errorf("truncated 4-byte varint")
 		}
 		n = int(data[0]&0x3f)<<24 | int(data[1])<<16 | int(data[2])<<8 | int(data[3])
 		hdrLen = 4
+	default:
+		return nil, 0, fmt.Errorf("invalid varint prefix")
 	}
 	total := hdrLen + n
 	if len(data) < total {

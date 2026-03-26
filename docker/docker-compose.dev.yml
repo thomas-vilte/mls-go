@@ -1,0 +1,15 @@
+name: mls-interop-dev
+
+services:
+  mls-go:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mls-go-dev
+    volumes:
+      - ..:/app
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
