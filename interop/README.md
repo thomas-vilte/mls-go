@@ -36,6 +36,15 @@ If you want to run against OpenMLS instead:
 CROSS_TARGET=openmls ./docker/run-interop.sh cross
 ```
 
+When `CROSS_TARGET=openmls`, the helper runs the subset that currently passes against upstream OpenMLS by default:
+
+- `welcome_join`
+- `application`
+- `external_join`
+- `deep_random`
+
+That set passes on suites `1`, `2`, and `3`.
+
 ### Everything
 
 This runs self-interop first and then cross-interop:
@@ -78,6 +87,8 @@ Cross-interop skips `deep_random` by default because it is a stress case. If you
 RUN_STRESS=1 ./docker/run-interop.sh cross
 ```
 
+That behavior is specific to the default `mlspp` target. OpenMLS uses its own default cross-config set, because upstream OpenMLS does not yet implement the full MLS WG interop scenario list.
+
 You can also run a single config:
 
 ```bash
@@ -106,6 +117,14 @@ If something fails, the script prints the captured log for that case and exits n
 ## OpenMLS status
 
 OpenMLS support in this repository is experimental.
+
+After patching the upstream OpenMLS interop client to use mixed wire-format policies, the currently passing OpenMLS matrix in this repository is:
+
+- suite `1`: `welcome_join`, `application`, `external_join`, `deep_random`
+- suite `2`: `welcome_join`, `application`, `external_join`, `deep_random`
+- suite `3`: `welcome_join`, `application`, `external_join`, `deep_random`
+
+That is `12/12` passing for the scenarios OpenMLS currently supports here.
 
 The Docker image applies a small patch to the upstream OpenMLS interop client so it uses OpenMLS' mixed wire-format policies instead of the pure policies. Without that patch, `deep_random` can fail with a wire-format policy error when `encrypt_handshake` is enabled and the scenario mixes public and private handshake messages.
 

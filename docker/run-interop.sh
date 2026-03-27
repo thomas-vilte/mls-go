@@ -19,10 +19,16 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SELF_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch deep_random)
-CROSS_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
+MLSPP_CROSS_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
+OPENMLS_CROSS_CONFIGS=(welcome_join application external_join deep_random)
 
-if [ -n "$RUN_STRESS" ]; then
-    CROSS_CONFIGS+=(deep_random)
+if [ "$CROSS_TARGET" = "openmls" ]; then
+    CROSS_CONFIGS=("${OPENMLS_CROSS_CONFIGS[@]}")
+else
+    CROSS_CONFIGS=("${MLSPP_CROSS_CONFIGS[@]}")
+    if [ -n "$RUN_STRESS" ]; then
+        CROSS_CONFIGS+=(deep_random)
+    fi
 fi
 
 cleanup() {
@@ -65,6 +71,9 @@ run_mode() {
     local configs_str="${configs[*]}"
 
     echo -e "${BLUE}Running Docker ${kind} interop${NC}"
+    if [ "$kind" = "cross" ]; then
+        echo -e "${YELLOW}Target:${NC} $CROSS_TARGET"
+    fi
     echo -e "${YELLOW}Suites:${NC} $SUITES"
     echo -e "${YELLOW}Configs:${NC} $configs_str"
 

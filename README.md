@@ -128,6 +128,8 @@ CROSS_TARGET=openmls ./docker/run-interop.sh cross
 ./docker/run-interop.sh all
 ```
 
+For `OpenMLS`, the helper automatically runs the subset that currently passes upstream: `welcome_join`, `application`, `external_join`, and `deep_random` on suites `1`, `2`, and `3`.
+
 Handy variants:
 
 ```bash
@@ -141,7 +143,7 @@ SUITES=2 ./docker/run-interop.sh self
 RUN_STRESS=1 ./docker/run-interop.sh cross
 ```
 
-More detail lives in `interop/README.md`, including the current OpenMLS limitations and why some upstream interop handlers are still out of scope.
+More detail lives in `interop/README.md`, including the current OpenMLS pass matrix, remaining upstream limitations, and why some interop handlers are still out of scope.
 
 ---
 
