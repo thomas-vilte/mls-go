@@ -1,17 +1,37 @@
-FROM rust:latest
+FROM rust:latest AS builder
 
-RUN apt-get -y update && apt-get -y install protobuf-compiler
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m user
-USER user
-WORKDIR /home/user
+WORKDIR /src
 
 RUN git clone https://github.com/openmls/openmls.git
 
-WORKDIR openmls/interop_client
+COPY openmls-interop-client-wire-format.patch /tmp/openmls-interop-client-wire-format.patch
+
+WORKDIR /src/openmls
+
+RUN git apply /tmp/openmls-interop-client-wire-format.patch
+
+WORKDIR /src/openmls/interop_client
+
+RUN cargo build --release
+
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV RUST_LOG=interop=info
 
+COPY --from=builder /src/openmls/target/release/interop_client /usr/local/bin/interop_client
+
 EXPOSE 50051
 
-ENTRYPOINT ["cargo", "run", "--"]
+ENTRYPOINT ["/usr/local/bin/interop_client"]

@@ -2,7 +2,7 @@
 
 Basic examples showing how to use mls-go.
 
-**Note:** API may change until v1.0.0. These examples work with v0.2.0.
+**Note:** API may change until v1.0.0. These examples target the current `v0.3.x` API.
 
 ---
 
