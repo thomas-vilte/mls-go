@@ -16,7 +16,7 @@ mls-go is a native Go implementation of [RFC 9420](https://www.rfc-editor.org/rf
 
 MLS is the industry standard for end-to-end encrypted group messaging, used by Matrix, Cisco Webex, and others. The hard part is key management: every time someone joins or leaves, keys rotate — without tgoing the server. MLS solves this with a ratchet tree (TreeKEM).
 
-**Current status:** Beta (v0.2.0). API may change before v1.0.0.
+**Current status:** Beta (v0.3.0). The core protocol flow is in place and interop is in good shape, but the API may still change before v1.0.0.
 
 ---
 
@@ -26,7 +26,7 @@ I needed MLS for a Go project. There's no native implementation. So I built mls-
 
 ---
 
-## What works (v0.2.0)
+## What works (v0.3.0)
 
 **Cipher suites:**
 - CS1: `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` ✅
@@ -112,6 +112,27 @@ Interop is meant to run through Docker.
 
 That is deliberate. Keeping the Go server, `mlspp`, and the test runner inside the same Docker setup avoids the usual local-machine problems: mismatched toolchains, missing packages, old binaries, and "it works here" surprises.
 
+Current status, from the runs in this repository:
+
+| Scenario | `mls-go` self | `mlspp` cross | `OpenMLS` cross |
+| --- | --- | --- | --- |
+| `welcome_join` | PASS | PASS | PASS |
+| `application` | PASS | PASS | PASS |
+| `commit` | PASS | PASS | not supported upstream |
+| `external_join` | PASS | PASS | PASS |
+| `external_proposals` | PASS | PASS | not supported upstream |
+| `reinit` | PASS | PASS | not supported upstream |
+| `branch` | PASS | PASS | not supported upstream |
+| `deep_random` | PASS | PASS | PASS |
+
+The practical reading of that table is:
+
+- `mls-go` self-interop passes the full scenario set on suites `1`, `2`, and `3`
+- `mlspp` cross-interop also passes the full scenario set on suites `1`, `2`, and `3`
+- `OpenMLS` cross-interop currently passes the subset that upstream OpenMLS actually implements here: `welcome_join`, `application`, `external_join`, and `deep_random`, again on suites `1`, `2`, and `3`
+
+The missing OpenMLS scenarios are not hidden test failures on the Go side. They map to handlers that are still `todo!()` or `unimplemented` in the upstream OpenMLS interop client.
+
 If you want interop results, use one of these:
 
 ```bash
@@ -143,7 +164,7 @@ SUITES=2 ./docker/run-interop.sh self
 RUN_STRESS=1 ./docker/run-interop.sh cross
 ```
 
-More detail lives in `interop/README.md`, including the current OpenMLS pass matrix, remaining upstream limitations, and why some interop handlers are still out of scope.
+More detail lives in `interop/README.md`, including the OpenMLS pass matrix, the wire-format patch used in Docker, and the specific upstream handlers that are still missing.
 
 ---
 
@@ -163,6 +184,8 @@ More detail lives in `interop/README.md`, including the current OpenMLS pass mat
 - [ ] Full RFC 9420 compliance
 - [ ] Security audit
 - [ ] Examples and documentation
+
+The short version: this project is not at `v1.0.0` yet because there are still known protocol and security-related gaps in the implementation, even though the main group flow and interoperability story are already strong. Reaching `v1.0.0` should mean that the public API has settled down, the remaining documented gaps are closed or intentionally scoped out, and the library is something other people can integrate without having to guess which edges are still moving.
 
 ---
 

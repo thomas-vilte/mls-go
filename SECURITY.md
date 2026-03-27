@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | ✅        |
-| < 0.2.0 | ❌        |
+| 0.3.x   | ✅        |
+| < 0.3.0 | ❌        |
 
 This is beta software. Security fixes go into the latest minor version only.
 
@@ -19,7 +19,7 @@ Include a description of the issue, steps to reproduce, and the potential impact
 
 ## Current limitations
 
-These are known gaps, not vulnerabilities — they're documented and expected for v0.2.0:
+These are known gaps, not vulnerabilities. They are documented here because the project is still pre-1.0 and these edges matter:
 
 - Received `AuthenticatedContent` signatures not verified (commits/proposals from peers)
 - PSKs not resolved in the commit receiver path

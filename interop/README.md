@@ -126,9 +126,11 @@ After patching the upstream OpenMLS interop client to use mixed wire-format poli
 
 That is `12/12` passing for the scenarios OpenMLS currently supports here.
 
+This matters because the helper script is now opinionated on purpose. When you run `CROSS_TARGET=openmls ./docker/run-interop.sh cross`, it does not pretend that OpenMLS supports the same scenario set as `mlspp`. It runs the set that is known to pass today, and it keeps the unsupported scenarios documented instead of quietly failing halfway through a "normal" cross run.
+
 The Docker image applies a small patch to the upstream OpenMLS interop client so it uses OpenMLS' mixed wire-format policies instead of the pure policies. Without that patch, `deep_random` can fail with a wire-format policy error when `encrypt_handshake` is enabled and the scenario mixes public and private handshake messages.
 
-That patch only addresses the wire-format mismatch. It does not add missing protocol features to OpenMLS.
+That patch only addresses the wire-format mismatch. It does not add protocol coverage that OpenMLS does not already have.
 
 At the moment, the upstream OpenMLS interop client still contains several `todo!()` or `unimplemented` handlers in `openmls/interop_client/src/main.rs`, including:
 
@@ -153,9 +155,14 @@ These gaps map directly to the failing OpenMLS configs:
 - `reinit` fails because the ReInit proposal and follow-up handlers are not implemented.
 - `branch` fails because branch creation and branch handling are still `todo!()`.
 
-This is not just an interop harness issue. The upstream OpenMLS library itself does not currently expose complete public APIs for these flows, especially around ReInit and branching, so implementing those handlers locally would mean carrying deeper changes in a third-party project rather than filling in a few thin wrappers.
+This is not just an interop harness issue. The upstream OpenMLS library itself does not currently expose complete public APIs for these flows, especially around ReInit and branching. In other words, the missing pieces are lower than the gRPC wrapper layer. Filling them in locally would mean forking behavior into a third-party project, carrying Rust-side protocol work in Docker patches, and then pretending that was normal support. That would be misleading.
 
-In practice, that means OpenMLS is useful here for a limited cross-check on the flows it already supports, but it is not yet a full drop-in cross-interop target for the whole MLS WG scenario set.
+So the line we draw in this repository is simple:
+
+- we patch OpenMLS where it improves interoperability without changing protocol scope, like the wire-format policy mismatch
+- we do not patch in missing protocol features that upstream OpenMLS has not implemented yet
+
+In practice, that makes OpenMLS useful here as a real cross-check for the flows it already handles, but not yet a full drop-in target for the whole MLS WG scenario set.
 
 ## References
 
