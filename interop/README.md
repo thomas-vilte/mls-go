@@ -30,6 +30,12 @@ This runs `mls-go` against `mlspp`:
 ./docker/run-interop.sh cross
 ```
 
+If you want to run against OpenMLS instead:
+
+```bash
+CROSS_TARGET=openmls ./docker/run-interop.sh cross
+```
+
 ### Everything
 
 This runs self-interop first and then cross-interop:
@@ -93,8 +99,44 @@ If something fails, the script prints the captured log for that case and exits n
 ## Notes
 
 - `docker/docker-compose.yml` starts `mlspp` with `-live 50051`, which is required for cross-interop.
+- `docker/Dockerfile.openmls` builds the OpenMLS interop client binary during the image build and runs the compiled binary directly at container startup. That keeps OpenMLS startup predictable and avoids recompiling the Rust project every time the container starts.
 - `interop/testrunner/main.go` is kept in this repository so the Docker runner image is built from local source, not from an external checkout.
 - The old local shell wrappers were removed on purpose. If someone needs interop results, they should get them from the Docker flow.
+
+## OpenMLS status
+
+OpenMLS support in this repository is experimental.
+
+The Docker image applies a small patch to the upstream OpenMLS interop client so it uses OpenMLS' mixed wire-format policies instead of the pure policies. Without that patch, `deep_random` can fail with a wire-format policy error when `encrypt_handshake` is enabled and the scenario mixes public and private handshake messages.
+
+That patch only addresses the wire-format mismatch. It does not add missing protocol features to OpenMLS.
+
+At the moment, the upstream OpenMLS interop client still contains several `todo!()` or `unimplemented` handlers in `openmls/interop_client/src/main.rs`, including:
+
+- `group_context_extensions_proposal`
+- `re_init_proposal`
+- `re_init_commit`
+- `handle_pending_re_init_commit`
+- `handle_re_init_commit`
+- `re_init_welcome`
+- `handle_re_init_welcome`
+- `create_branch`
+- `handle_branch`
+- `new_member_add_proposal`
+- `create_external_signer`
+- `add_external_signer`
+- `external_signer_proposal`
+
+These gaps map directly to the failing OpenMLS configs:
+
+- `commit` fails because `group_context_extensions_proposal` is still unimplemented.
+- `external_proposals` fails because the external signer and new-member add handlers are still `todo!()`.
+- `reinit` fails because the ReInit proposal and follow-up handlers are not implemented.
+- `branch` fails because branch creation and branch handling are still `todo!()`.
+
+This is not just an interop harness issue. The upstream OpenMLS library itself does not currently expose complete public APIs for these flows, especially around ReInit and branching, so implementing those handlers locally would mean carrying deeper changes in a third-party project rather than filling in a few thin wrappers.
+
+In practice, that means OpenMLS is useful here for a limited cross-check on the flows it already supports, but it is not yet a full drop-in cross-interop target for the whole MLS WG scenario set.
 
 ## References
 

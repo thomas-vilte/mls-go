@@ -121,6 +121,9 @@ If you want interop results, use one of these:
 # Cross-interop: mls-go vs mlspp
 ./docker/run-interop.sh cross
 
+# Cross-interop: mls-go vs OpenMLS
+CROSS_TARGET=openmls ./docker/run-interop.sh cross
+
 # Both
 ./docker/run-interop.sh all
 ```
@@ -138,7 +141,7 @@ SUITES=2 ./docker/run-interop.sh self
 RUN_STRESS=1 ./docker/run-interop.sh cross
 ```
 
-More detail lives in `interop/README.md`.
+More detail lives in `interop/README.md`, including the current OpenMLS limitations and why some upstream interop handlers are still out of scope.
 
 ---
 

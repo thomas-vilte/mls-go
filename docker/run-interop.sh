@@ -10,6 +10,7 @@ CONFIG_ARG="${2:-all}"
 SUITES="${SUITES:-1 2 3}"
 RUN_STRESS="${RUN_STRESS:-}"
 WAIT_SECS="${WAIT_SECS:-8}"
+CROSS_TARGET="${CROSS_TARGET:-mlspp}"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -100,7 +101,7 @@ echo -e "${YELLOW}Starting Docker services...${NC}"
 if [ "$MODE" = "self" ]; then
     docker compose -f "$COMPOSE_FILE" up -d mls-go >/dev/null
 else
-    docker compose -f "$COMPOSE_FILE" up -d mls-go mlspp >/dev/null
+    docker compose -f "$COMPOSE_FILE" up -d mls-go "$CROSS_TARGET" >/dev/null
 fi
 
 sleep "$WAIT_SECS"
@@ -114,7 +115,7 @@ fi
 if [ "$MODE" = "all" ] || [ "$MODE" = "cross" ]; then
     declare -a selected_cross
     select_configs cross selected_cross
-    run_mode cross "mls-go:50051" "mlspp:50051" "${selected_cross[@]}"
+    run_mode cross "mls-go:50051" "$CROSS_TARGET:50051" "${selected_cross[@]}"
 fi
 
 echo -e "${GREEN}Docker interop OK${NC}"

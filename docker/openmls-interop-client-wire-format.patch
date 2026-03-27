@@ -1,0 +1,27 @@
+diff --git a/interop_client/src/main.rs b/interop_client/src/main.rs
+index 192bbc2..8f9742b 100644
+--- a/interop_client/src/main.rs
++++ b/interop_client/src/main.rs
+@@ -19,8 +19,9 @@ use openmls::{
+     credentials::{BasicCredential, Credential, CredentialType, CredentialWithKey},
+     framing::{MlsMessageBodyIn, MlsMessageIn, MlsMessageOut, ProcessedMessageContent},
+     group::{
+-        GroupEpoch, GroupId, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig, StagedWelcome,
+-        WireFormatPolicy, PURE_CIPHERTEXT_WIRE_FORMAT_POLICY, PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
++        GroupEpoch, GroupId, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig,
++        StagedWelcome, WireFormatPolicy, MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY,
++        MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
+     },
+     key_packages::{KeyPackage, KeyPackageBundle},
+     prelude::{Capabilities, ExtensionType, SenderRatchetConfiguration},
+@@ -134,8 +135,8 @@ pub fn write(file_name: &str, payload: &[u8]) {
+ // A helper function translating the bool in the protobuf to OpenMLS' WireFormat
+ pub fn wire_format_policy(encrypt: bool) -> WireFormatPolicy {
+     match encrypt {
+-        false => PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
+-        true => PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
++        false => MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
++        true => MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY,
+     }
+ }
+ 
