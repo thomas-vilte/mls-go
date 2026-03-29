@@ -207,16 +207,16 @@ func TestSignaturePublicKeyMethods(t *testing.T) {
 	}
 }
 
-// TestOpenMlsSignaturePublicKeyMethods prueba métodos de OpenMlsSignaturePublicKey.
-func TestOpenMlsSignaturePublicKeyMethods(t *testing.T) {
+// TestMLSSignaturePublicKeyMethods prueba métodos de MLSSignaturePublicKey.
+func TestMLSSignaturePublicKeyMethods(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	pubKey := privKey.PublicKey()
 	pubKeyBytes := pubKey.AsSlice()
 
-	// NewOpenMlsSignaturePublicKey
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKeyBytes, ECDSA_SECP256R1_SHA256)
+	// NewMLSSignaturePublicKey
+	mlsPubKey := NewMLSSignaturePublicKey(pubKeyBytes, ECDSA_SECP256R1_SHA256)
 	if mlsPubKey == nil {
-		t.Fatal("NewOpenMlsSignaturePublicKey() returned nil")
+		t.Fatal("NewMLSSignaturePublicKey() returned nil")
 	}
 
 	// AsSlice

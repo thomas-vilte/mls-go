@@ -269,7 +269,7 @@ func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
 		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {

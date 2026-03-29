@@ -32,8 +32,8 @@ func TestSignature_GenerateVerify(t *testing.T) {
 		t.Fatal("PublicKey() returned nil")
 	}
 
-	// Crear OpenMlsSignaturePublicKey
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	// Crear MLSSignaturePublicKey
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	// Verify
 	err = mlsPubKey.Verify(data, signature)
@@ -49,7 +49,7 @@ func TestSignature_WrongData(t *testing.T) {
 	data := []byte("Original message")
 	signature, _ := privKey.Sign(data)
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	// Modificar datos
 	wrongData := []byte("Modified message")
@@ -68,7 +68,7 @@ func TestSignature_TamperedSignature(t *testing.T) {
 	data := []byte("Message")
 	signature, _ := privKey.Sign(data)
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	// Tamper con la signature
 	tamperedSig := make([]byte, len(signature.AsSlice()))
@@ -98,7 +98,7 @@ func TestSignature_EmptyData(t *testing.T) {
 
 	// Verify
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	err = mlsPubKey.Verify(data, signature)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestSignature_LargeData(t *testing.T) {
 
 	// Verify
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	err = mlsPubKey.Verify(data, signature)
 	if err != nil {
@@ -214,7 +214,7 @@ func TestSignWithLabel(t *testing.T) {
 
 	// Verify with label
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	err = VerifyWithLabel(mlsPubKey, label, payload, signature)
 	if err != nil {
@@ -238,7 +238,7 @@ func TestSignature_NonDeterministic(t *testing.T) {
 
 	// Pero ambas deberían verificar
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	if err := mlsPubKey.Verify(data, sig1); err != nil {
 		t.Errorf("First signature verification failed: %v", err)
@@ -284,7 +284,7 @@ func BenchmarkSignature_Verify(b *testing.B) {
 		b.Fatal(err)
 	}
 	pubKey := privKey.PublicKey()
-	mlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

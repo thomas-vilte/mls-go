@@ -470,7 +470,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 
 	// RFC §12.4.3.2: if remove_prior is set, find the joiner's prior leaf in the tree
 	// matched by credential identity and include a Remove proposal.
-	removePriorLeaf := -1
+	var removePriorLeaf *group.LeafNodeIndex
 	if req.RemovePrior {
 		// Find the ratchet tree — prefer groupInfo.RatchetTree, fall back to extensions.
 		rtree := groupInfo.RatchetTree
@@ -498,7 +498,8 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 					continue
 				}
 				if string(leaf.LeafData.Credential.Identity) == string(req.Identity) {
-					removePriorLeaf = int(i)
+					leafIndex := group.LeafNodeIndex(i)
+					removePriorLeaf = &leafIndex
 					break
 				}
 			}
@@ -907,7 +908,13 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// Create Welcome for new members if any Add proposals were committed.
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := g.CreateWelcome(newMemberKPs, joinerSecret, nil, sigKey, staged.PskIDs, staged.RawPskSecret, staged)
+		welcome, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
+			JoinerSecret:  joinerSecret,
+			SignerPrivKey: sigKey,
+			PskIDs:        staged.PskIDs(),
+			PskSecret:     staged.RawPskSecret(),
+			StagedCommit:  staged,
+		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating welcome: %v", err)
 		}
@@ -1295,7 +1302,13 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, state.SigPrivKey, staged.PskIDs, staged.RawPskSecret, staged)
+		welcome, err := newGroup.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
+			JoinerSecret:  joinerSecret,
+			SignerPrivKey: state.SigPrivKey,
+			PskIDs:        staged.PskIDs(),
+			PskSecret:     staged.RawPskSecret(),
+			StagedCommit:  staged,
+		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating reinit welcome: %v", err)
 		}
@@ -1446,7 +1459,13 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcome(newMemberKPs, joinerSecret, nil, newSigKey, staged.PskIDs, staged.RawPskSecret, staged)
+		welcome, err := newGroup.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
+			JoinerSecret:  joinerSecret,
+			SignerPrivKey: newSigKey,
+			PskIDs:        staged.PskIDs(),
+			PskSecret:     staged.RawPskSecret(),
+			StagedCommit:  staged,
+		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating branch welcome: %v", err)
 		}

@@ -70,14 +70,11 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 	if err = aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit: %v", err)
 	}
-	welcome, err := aliceGroup.CreateWelcome(
-		[]*keypackages.KeyPackage{bob.kp},
-		joinerSecret,
-		pathSecret,
-		alice.sigPriv,
-		nil,
-		nil,
-	)
+	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bob.kp}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		PathSecret:    pathSecret,
+		SignerPrivKey: alice.sigPriv,
+	})
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
@@ -164,7 +161,7 @@ func TestExternalCommitRoundTrip(t *testing.T) {
 		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
@@ -207,7 +204,7 @@ func TestConfirmationTagPersistence(t *testing.T) {
 		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
@@ -253,7 +250,7 @@ func TestExternalCommitReceiver(t *testing.T) {
 		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {

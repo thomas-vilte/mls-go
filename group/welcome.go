@@ -445,6 +445,34 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 //   - §11.2.2: Welcome Message Structure
 //   - §12.4.3.1: Creating a Welcome
 //   - §8: Key Schedule for Welcome
+type CreateWelcomeOptions struct {
+	JoinerSecret  *ciphersuite.Secret
+	PathSecret    []byte
+	SignerPrivKey *ciphersuite.SignaturePrivateKey
+	PskIDs        []PskID
+	PskSecret     *ciphersuite.Secret
+	StagedCommit  *StagedCommit
+}
+
+// CreateWelcomeWithOptions creates a Welcome message using an options struct.
+func (g *Group) CreateWelcomeWithOptions(
+	newMemberKeyPackages []*keypackages.KeyPackage,
+	opts CreateWelcomeOptions,
+) (*Welcome, error) {
+	return g.createWelcome(
+		newMemberKeyPackages,
+		opts.JoinerSecret,
+		opts.PathSecret,
+		opts.SignerPrivKey,
+		opts.PskIDs,
+		opts.PskSecret,
+		opts.StagedCommit,
+	)
+}
+
+// CreateWelcome creates a Welcome message.
+//
+// Deprecated: prefer CreateWelcomeWithOptions for new code.
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
@@ -453,6 +481,31 @@ func (g *Group) CreateWelcome(
 	pskIDs []PskID,
 	pskSecret *ciphersuite.Secret,
 	staged ...*StagedCommit, // optional: if provided, per-joiner path_secret is derived from it
+) (*Welcome, error) {
+	var stagedCommit *StagedCommit
+	if len(staged) > 0 {
+		stagedCommit = staged[0]
+	}
+
+	return g.createWelcome(
+		newMemberKeyPackages,
+		joinerSecret,
+		pathSecret,
+		signerPrivKey,
+		pskIDs,
+		pskSecret,
+		stagedCommit,
+	)
+}
+
+func (g *Group) createWelcome(
+	newMemberKeyPackages []*keypackages.KeyPackage,
+	joinerSecret *ciphersuite.Secret,
+	pathSecret []byte,
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+	pskIDs []PskID,
+	pskSecret *ciphersuite.Secret,
+	staged *StagedCommit,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
@@ -516,8 +569,8 @@ func (g *Group) CreateWelcome(
 		// This correctly handles newly added joiners whose LCA with the committer
 		// is below the filtered path (because their copath node was excluded).
 		joinerPathSecret := pathSecret
-		if len(staged) > 0 && staged[0] != nil && staged[0].pathSecrets != nil {
-			sc := staged[0]
+		if staged != nil && staged.pathSecrets != nil {
+			sc := staged
 			N := len(sc.committerDirectPath) - 1
 			F := len(sc.committerFilteredLevels)
 
@@ -749,7 +802,7 @@ func JoinFromWelcomeWithContext(
 		rawKey := signerLeaf.LeafData.SigKeyBytes()
 		if len(rawKey) > 0 {
 			cs := groupInfo.GroupContext.CipherSuite
-			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
+			pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
 			sig := ciphersuite.NewSignature(groupInfo.Signature)
 			if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
 				return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
@@ -921,7 +974,7 @@ func verifyGroupInfoSignature(groupInfo *GroupInfo, tree *treesync.RatchetTree) 
 		return fmt.Errorf("missing signature key for signer leaf")
 	}
 	cs := groupInfo.GroupContext.CipherSuite
-	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
+	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
 	sig := ciphersuite.NewSignature(groupInfo.Signature)
 	if err := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); err != nil {
 		return fmt.Errorf("invalid group info signature: %w", err)

@@ -57,7 +57,7 @@ func TestProperty_EncryptDecrypt_Identity(t *testing.T) {
 		// Decrypt needs a fresh secret tree to read the first message
 		decTree, _ := secrettree.NewTree(ciphersuite.NewSecret(make([]byte, 32)), 2, cs)
 
-		openPub := ciphersuite.NewOpenMlsSignaturePublicKey(sigPriv.PublicKey().AsSlice(), ciphersuite.ECDSA_SECP256R1_SHA256)
+		openPub := ciphersuite.NewMLSSignaturePublicKey(sigPriv.PublicKey().AsSlice(), ciphersuite.ECDSA_SECP256R1_SHA256)
 		decrypted, err := Decrypt(pm, DecryptParams{
 			CipherSuite:      cs,
 			SenderDataSecret: senderDataSecret,

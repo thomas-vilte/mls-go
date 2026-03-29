@@ -152,10 +152,10 @@ func (g *Group) ReceiveMessage(
 	// Resolve sender signature pubkey from ratchet tree.
 	// Use SigKeyBytes() to handle both ECDSA (SignatureKey) and Ed25519 (SignatureKeyRaw).
 	senderLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(senderLeafIdx))
-	var sigPubKey *ciphersuite.OpenMlsSignaturePublicKey
+	var sigPubKey *ciphersuite.MLSSignaturePublicKey
 	if senderLeaf != nil && senderLeaf.LeafData != nil {
 		if raw := senderLeaf.LeafData.SigKeyBytes(); len(raw) > 0 {
-			sigPubKey = ciphersuite.NewOpenMlsSignaturePublicKey(raw, g.cipherSuite.SignatureScheme())
+			sigPubKey = ciphersuite.NewMLSSignaturePublicKey(raw, g.cipherSuite.SignatureScheme())
 		}
 	}
 
@@ -260,7 +260,7 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 		return nil, nil, fmt.Errorf("missing sender signature key")
 	}
 
-	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
+	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
 	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 		return nil, nil, fmt.Errorf("private message signature invalid: %w", err)
 	}

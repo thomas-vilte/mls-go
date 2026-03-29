@@ -52,8 +52,8 @@ func BenchmarkVerify(b *testing.B) {
 	rand.Read(data)
 	sig, _ := priv.Sign(data)
 
-	// Create OpenMlsSignaturePublicKey for verify
-	openPub := NewOpenMlsSignaturePublicKey(pub.AsSlice(), ECDSA_SECP256R1_SHA256)
+	// Create MLSSignaturePublicKey for verify
+	openPub := NewMLSSignaturePublicKey(pub.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

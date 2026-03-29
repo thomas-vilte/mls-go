@@ -294,15 +294,15 @@ func LowestCommonAncestor(x, y LeafIndex) NodeIndex {
 	return NodeIndex((xn << k) + (1 << (k - 1)) - 1)
 }
 
-// FindLeafByEncKey returns the leaf index of a leaf with the given encryption key, or -1 if not found.
-func (t *RatchetTree) FindLeafByEncKey(encKey []byte) LeafIndex {
+// FindLeafByEncKey returns the leaf index of a leaf with the given encryption key.
+func (t *RatchetTree) FindLeafByEncKey(encKey []byte) (LeafIndex, bool) {
 	for i := LeafIndex(0); i < LeafIndex(t.NumLeaves); i++ {
 		node := t.GetLeaf(i)
 		if node != nil && node.LeafData != nil && bytes.Equal(node.LeafData.EncryptionKey, encKey) {
-			return i
+			return i, true
 		}
 	}
-	return LeafIndex(0xFFFFFFFF) // not found sentinel
+	return 0, false
 }
 
 // Root returns the root node index per RFC Appendix C:

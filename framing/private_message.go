@@ -279,7 +279,7 @@ type DecryptParams struct {
 	SecretTree       *secrettree.Tree
 	// SigPubKey is used to verify the sender's signature after decryption.
 	// If nil, verification is skipped (not recommended in production).
-	SigPubKey    *ciphersuite.OpenMlsSignaturePublicKey
+	SigPubKey    *ciphersuite.MLSSignaturePublicKey
 	GroupContext []byte // Serialized GroupContext; required for TBS verification
 }
 

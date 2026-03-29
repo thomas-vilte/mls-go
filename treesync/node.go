@@ -390,7 +390,7 @@ func (l *LeafNodeData) Verify(cs ciphersuite.CipherSuite) error {
 func (l *LeafNodeData) VerifyWithContext(cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
 	tbs := l.MarshalTBSWithContext(groupID, leafIndex)
 	pubKeyBytes := l.marshalSignatureKey()
-	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
+	pk := ciphersuite.NewMLSSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(l.Signature))
 }
 

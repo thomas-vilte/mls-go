@@ -178,34 +178,42 @@ func (k *SignaturePrivateKey) Sign(data []byte) (*Signature, error) {
 	return NewSignature(sigDER), nil
 }
 
-// OpenMlsSignaturePublicKey is an enriched public key with signature scheme.
-type OpenMlsSignaturePublicKey struct {
+// MLSSignaturePublicKey is an enriched public key with signature scheme.
+type MLSSignaturePublicKey struct {
 	SignatureScheme SignatureScheme
 	Value           []byte
 }
 
-// NewOpenMlsSignaturePublicKey creates an enriched public key.
-func NewOpenMlsSignaturePublicKey(value []byte, scheme SignatureScheme) *OpenMlsSignaturePublicKey {
-	return &OpenMlsSignaturePublicKey{
+// OpenMlsSignaturePublicKey is kept as an alias for the old public API name.
+type OpenMlsSignaturePublicKey = MLSSignaturePublicKey
+
+// NewMLSSignaturePublicKey creates an enriched public key.
+func NewMLSSignaturePublicKey(value []byte, scheme SignatureScheme) *MLSSignaturePublicKey {
+	return &MLSSignaturePublicKey{
 		SignatureScheme: scheme,
 		Value:           value,
 	}
 }
 
+// NewOpenMlsSignaturePublicKey creates an enriched public key.
+func NewOpenMlsSignaturePublicKey(value []byte, scheme SignatureScheme) *OpenMlsSignaturePublicKey {
+	return NewMLSSignaturePublicKey(value, scheme)
+}
+
 // AsSlice returns the key bytes.
-func (k *OpenMlsSignaturePublicKey) AsSlice() []byte {
+func (k *MLSSignaturePublicKey) AsSlice() []byte {
 	return k.Value
 }
 
 // Scheme returns the signature scheme.
-func (k *OpenMlsSignaturePublicKey) Scheme() SignatureScheme {
+func (k *MLSSignaturePublicKey) Scheme() SignatureScheme {
 	return k.SignatureScheme
 }
 
 // Verify verifies a signature using the appropriate algorithm for the signature scheme.
 // For ECDSA: expects signature in ASN.1 DER format.
 // For Ed25519: expects raw 64-byte signature.
-func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
+func (k *MLSSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 	switch k.SignatureScheme {
 	case ECDSA_SECP256R1_SHA256:
 		return k.verifyECDSA(data, sig)
@@ -218,7 +226,7 @@ func (k *OpenMlsSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 
 // verifyECDSA verifies an ECDSA signature by pre-hashing with the scheme's hash function
 // (SHA-256 for ECDSA-P256, RFC 9420 §5.1.2) and then calling ecdsa.VerifyASN1.
-func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
+func (k *MLSSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
 	pubKey, err := NewSignaturePublicKey(k.Value).ToECDSA()
 	if err != nil {
 		return err
@@ -238,7 +246,7 @@ func (k *OpenMlsSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) err
 }
 
 // verifyEd25519 verifies an Ed25519 signature.
-func (k *OpenMlsSignaturePublicKey) verifyEd25519(data []byte, sig *Signature) error {
+func (k *MLSSignaturePublicKey) verifyEd25519(data []byte, sig *Signature) error {
 	// Ed25519 public keys are Ed25519KeySize = 32 bytes (RFC 8410 §3).
 	if len(k.Value) != Ed25519KeySize {
 		return fmt.Errorf("invalid Ed25519 public key length: %d", len(k.Value))
@@ -290,7 +298,7 @@ func (sc *SignContent) Marshal() []byte {
 //
 // This is a lower-level function for custom signing scenarios.
 // Prefer Verify() for RFC 9420 compliance.
-func VerifyWithLabel(pk *OpenMlsSignaturePublicKey, label string, payload []byte, sig *Signature) error {
+func VerifyWithLabel(pk *MLSSignaturePublicKey, label string, payload []byte, sig *Signature) error {
 	signContent := NewSignContent(label, payload)
 	signContentBytes := signContent.Marshal()
 	return pk.Verify(signContentBytes, sig)

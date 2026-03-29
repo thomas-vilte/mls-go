@@ -1242,7 +1242,7 @@ func (g *Group) ProcessReceivedCommit(
 		if len(rawKey) == 0 {
 			return fmt.Errorf("missing sender signature key")
 		}
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("commit signature verification failed: %w", err)
 		}
@@ -1255,7 +1255,7 @@ func (g *Group) ProcessReceivedCommit(
 		if len(rawKey) == 0 {
 			return fmt.Errorf("external commit missing leaf node signature key")
 		}
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("external commit signature verification failed: %w", err)
 		}
@@ -1519,7 +1519,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				return fmt.Errorf("missing sender signature key for commit verification")
 			}
 
-			pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+			pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 			ac := &framing.AuthenticatedContent{
 				WireFormat:   stagedCommit.authenticatedContent.WireFormat,
 				Content:      stagedCommit.authenticatedContent.Content,
@@ -2059,7 +2059,7 @@ func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.Auth
 	if len(rawKey) == 0 {
 		return nil, 0, fmt.Errorf("missing sender signature key")
 	}
-	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 		return nil, 0, fmt.Errorf("private message signature invalid: %w", err)
 	}
@@ -2508,7 +2508,7 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		if len(rawKey) == 0 {
 			return fmt.Errorf("missing sender signature key")
 		}
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,
@@ -2530,7 +2530,7 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		if err != nil {
 			return fmt.Errorf("external sender: %w", err)
 		}
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(sigKey, g.cipherSuite.SignatureScheme())
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(sigKey, g.cipherSuite.SignatureScheme())
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,
@@ -2562,7 +2562,7 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 			return fmt.Errorf("new member commit missing leaf node signature key")
 		}
 
-		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 		ac := &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pm.Content,

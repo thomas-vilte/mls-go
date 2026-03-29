@@ -21,7 +21,7 @@ import (
 // and an UpdatePath, and creates an external commit that adds them to the group.
 // Returns the resulting group state and the PublicMessage to broadcast to other members.
 //
-// If removePriorLeaf >= 0, a Remove proposal for that leaf index is included before
+// If removePriorLeaf is non-nil, a Remove proposal for that leaf index is included before
 // the ExternalInit proposal (RFC §12.4.3.2: external commit may contain Remove proposals
 // to remove prior appearance of this member).
 func ExternalCommit(
@@ -29,7 +29,7 @@ func ExternalCommit(
 	cs ciphersuite.CipherSuite,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
-	removePriorLeaf int, // -1 means no removal; >= 0 is the leaf index to remove
+	removePriorLeaf *LeafNodeIndex,
 	credential *credentials.Credential, // identity credential for the new leaf node
 ) (*Group, *StagedCommit, error) {
 	if groupInfo == nil || groupInfo.GroupContext == nil {
@@ -98,8 +98,8 @@ func ExternalCommit(
 	// Clone tree. If removing a prior leaf, blank it first (RFC §12.4.3.2).
 	treeDiff := tree.Clone()
 	var removeProposal *Proposal
-	if removePriorLeaf >= 0 {
-		priorLeaf := treesync.LeafIndex(removePriorLeaf)
+	if removePriorLeaf != nil {
+		priorLeaf := treesync.LeafIndex(*removePriorLeaf)
 		removeProposal = &Proposal{
 			Type:   ProposalTypeRemove,
 			Remove: &RemoveProposal{Removed: LeafNodeIndex(priorLeaf)},

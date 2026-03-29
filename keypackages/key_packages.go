@@ -790,7 +790,7 @@ func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
 	}
 
 	// Create MLS public key
-	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
+	pk := ciphersuite.NewMLSSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
 
 	// Verify signature
 	sig := ciphersuite.NewSignature(kp.Signature)
