@@ -14,10 +14,10 @@ func tamperApplicationMessageSignature(t *testing.T, senderGroup *Group, pm *fra
 	t.Helper()
 
 	ac, err := framing.Decrypt(pm, framing.DecryptParams{
-		CipherSuite:      senderGroup.CipherSuite,
-		SenderDataSecret: senderGroup.EpochSecrets.SenderDataSecret,
-		SecretTree:       senderGroup.SecretTree,
-		GroupContext:     senderGroup.GroupContext.Marshal(),
+		CipherSuite:      senderGroup.cipherSuite,
+		SenderDataSecret: senderGroup.epochSecrets.SenderDataSecret,
+		SecretTree:       senderGroup.secretTree,
+		GroupContext:     senderGroup.groupContext.Marshal(),
 	})
 	if err != nil {
 		t.Fatalf("Decrypt(sender): %v", err)
@@ -31,11 +31,11 @@ func tamperApplicationMessageSignature(t *testing.T, senderGroup *Group, pm *fra
 
 	tampered, err := framing.Encrypt(framing.EncryptParams{
 		AuthContent:      ac,
-		SenderLeafIndex:  uint32(senderGroup.OwnLeafIndex),
-		CipherSuite:      senderGroup.CipherSuite,
-		PaddingSize:      senderGroup.PaddingSize,
-		SenderDataSecret: senderGroup.EpochSecrets.SenderDataSecret,
-		SecretTree:       senderGroup.SecretTree,
+		SenderLeafIndex:  uint32(senderGroup.ownLeafIndex),
+		CipherSuite:      senderGroup.cipherSuite,
+		PaddingSize:      senderGroup.paddingSize,
+		SenderDataSecret: senderGroup.epochSecrets.SenderDataSecret,
+		SecretTree:       senderGroup.secretTree,
 	})
 	if err != nil {
 		t.Fatalf("Encrypt(tampered): %v", err)
@@ -144,8 +144,8 @@ func TestSendMessage_NoSecretTree(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
 	// Corromper el grupo removiendo el SecretTree (solo para test)
-	originalTree := aliceGroup.SecretTree
-	aliceGroup.SecretTree = nil
+	originalTree := aliceGroup.secretTree
+	aliceGroup.secretTree = nil
 
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	_, err := aliceGroup.SendMessage([]byte("hola"), aliceSigPriv)
@@ -154,7 +154,7 @@ func TestSendMessage_NoSecretTree(t *testing.T) {
 	}
 
 	// Restaurar
-	aliceGroup.SecretTree = originalTree
+	aliceGroup.secretTree = originalTree
 }
 
 // TestReceiveMessage_NoSecretTree verifies that ReceiveMessage fails sin SecretTree
@@ -162,8 +162,8 @@ func TestReceiveMessage_NoSecretTree(t *testing.T) {
 	_, bobGroup, _, _ := setupTwoMemberGroup(t)
 
 	// Corromper el grupo removiendo el SecretTree (solo para test)
-	originalTree := bobGroup.SecretTree
-	bobGroup.SecretTree = nil
+	originalTree := bobGroup.secretTree
+	bobGroup.secretTree = nil
 
 	pm := &framing.PrivateMessage{}
 	_, err := bobGroup.ReceiveMessage(pm, 0)
@@ -172,7 +172,7 @@ func TestReceiveMessage_NoSecretTree(t *testing.T) {
 	}
 
 	// Restaurar
-	bobGroup.SecretTree = originalTree
+	bobGroup.secretTree = originalTree
 }
 
 func TestReceiveApplicationMessage_VerifiesSignature(t *testing.T) {
@@ -235,7 +235,7 @@ func TestReceiveApplicationMessage_OldEpochUsesHistoricalContext(t *testing.T) {
 		t.Fatalf("MergeCommit(alice): %v", err)
 	}
 
-	history, ok := bobGroup.EpochHistory[1]
+	history, ok := bobGroup.epochHistory[1]
 	if !ok {
 		t.Fatal("epoch 1 not cached in EpochHistory")
 	}
@@ -266,7 +266,7 @@ func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
 
 	_, stagedCommit, err := ExternalCommit(
 		groupInfo,
-		aliceGroup.CipherSuite,
+		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
 		-1,
@@ -277,8 +277,8 @@ func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
 	}
 
 	pm := &framing.PublicMessage{
-		Content: stagedCommit.AuthenticatedContent.Content,
-		Auth:    stagedCommit.AuthenticatedContent.Auth,
+		Content: stagedCommit.authenticatedContent.Content,
+		Auth:    stagedCommit.authenticatedContent.Auth,
 	}
 	if err := aliceGroup.VerifyPublicMessage(pm); err != nil {
 		t.Fatalf("VerifyPublicMessage(valid): %v", err)
@@ -297,7 +297,7 @@ func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
 func TestSendMessage_UsesConfiguredPadding(t *testing.T) {
 	aliceNoPad, _, alicePrivNoPad, _ := setupTwoMemberGroup(t)
 	alicePad, _, alicePrivPad, _ := setupTwoMemberGroup(t)
-	alicePad.PaddingSize = 32
+	alicePad.SetPaddingSize(32)
 
 	msg := []byte("short")
 	pmNoPad, err := aliceNoPad.SendMessage(msg, ciphersuite.NewSignaturePrivateKey(alicePrivNoPad.SignatureKey))
@@ -317,7 +317,7 @@ func TestSendMessage_UsesConfiguredPadding(t *testing.T) {
 func TestSendApplicationMessage_UsesConfiguredPadding(t *testing.T) {
 	aliceNoPad, _, alicePrivNoPad, _ := setupTwoMemberGroup(t)
 	alicePad, _, alicePrivPad, _ := setupTwoMemberGroup(t)
-	alicePad.PaddingSize = 32
+	alicePad.SetPaddingSize(32)
 
 	msg := []byte("short")
 	aad := []byte("aad")

@@ -464,14 +464,14 @@ func (g *Group) CreateWelcome(
 	// We use a copy to preserve joiner_secret (needed for GroupSecrets).
 	// The psk_secret must match what was used in the epoch key schedule.
 	if pskSecret == nil {
-		pskSecret = ciphersuite.ZeroSecret(g.CipherSuite.HashLength())
+		pskSecret = ciphersuite.ZeroSecret(g.cipherSuite.HashLength())
 	}
 	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
 	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(pskSecret)
 	if err != nil {
 		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
 	}
-	welcomeSecret, err := memberSecretForWelcome.DeriveSecret(g.CipherSuite, "welcome")
+	welcomeSecret, err := memberSecretForWelcome.DeriveSecret(g.cipherSuite, "welcome")
 	if err != nil {
 		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
@@ -483,11 +483,11 @@ func (g *Group) CreateWelcome(
 
 	// Encrypt GroupInfo (including signature) with welcome_secret per RFC 9420 §11.2.2
 	groupInfoBytes := groupInfo.Marshal()
-	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.CipherSuite.AeadKeyLength())
+	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.cipherSuite.AeadKeyLength())
 	if err != nil {
 		return nil, err
 	}
-	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, g.CipherSuite.AeadNonceLength())
+	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, g.cipherSuite.AeadNonceLength())
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +497,7 @@ func (g *Group) CreateWelcome(
 		welcomeNonce.AsSlice(),
 		groupInfoBytes,
 		[]byte{}, // empty AAD
-		g.CipherSuite,
+		g.cipherSuite,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting group info: %w", err)
@@ -508,7 +508,7 @@ func (g *Group) CreateWelcome(
 
 	for _, kp := range newMemberKeyPackages {
 		// Compute key_package_ref (hash of the key package)
-		kpRef := keyPackageRef(kp, g.CipherSuite)
+		kpRef := keyPackageRef(kp, g.cipherSuite)
 
 		// Compute per-joiner path_secret from the staged commit if available.
 		// RFC 9420 §12.4.3.1: the path_secret for a joiner is the one at the
@@ -516,18 +516,18 @@ func (g *Group) CreateWelcome(
 		// This correctly handles newly added joiners whose LCA with the committer
 		// is below the filtered path (because their copath node was excluded).
 		joinerPathSecret := pathSecret
-		if len(staged) > 0 && staged[0] != nil && staged[0].PathSecrets != nil {
+		if len(staged) > 0 && staged[0] != nil && staged[0].pathSecrets != nil {
 			sc := staged[0]
-			N := len(sc.CommitterDirectPath) - 1
-			F := len(sc.CommitterFilteredLevels)
+			N := len(sc.committerDirectPath) - 1
+			F := len(sc.committerFilteredLevels)
 
-			if sc.TreeAfterProposals != nil {
+			if sc.treeAfterProposals != nil {
 				encKey := kp.LeafNode.EncryptionKey
 				// Find the lowest filtered level whose subtree contains the joiner.
-				for m, level := range sc.CommitterFilteredLevels {
-					nodeIdx := sc.CommitterDirectPath[level+1]
-					if sc.TreeAfterProposals.SubtreeContainsLeafByKey(nodeIdx, encKey) {
-						ps := sc.PathSecrets[N-F+m+1]
+				for m, level := range sc.committerFilteredLevels {
+					nodeIdx := sc.committerDirectPath[level+1]
+					if sc.treeAfterProposals.SubtreeContainsLeafByKey(nodeIdx, encKey) {
+						ps := sc.pathSecrets[N-F+m+1]
 						joinerPathSecret = ps.AsSlice()
 						break
 					}
@@ -549,7 +549,7 @@ func (g *Group) CreateWelcome(
 			"Welcome",
 			encryptedGroupInfo,
 			secretsBytes,
-			g.CipherSuite,
+			g.cipherSuite,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("encrypting group secrets: %w", err)
@@ -563,7 +563,7 @@ func (g *Group) CreateWelcome(
 
 	return &Welcome{
 		Version:            1, // MLS 1.0
-		CipherSuite:        g.CipherSuite,
+		CipherSuite:        g.cipherSuite,
 		Secrets:            encryptedSecrets,
 		EncryptedGroupInfo: encryptedGroupInfo,
 		GroupInfo:          groupInfo,
@@ -802,34 +802,34 @@ func JoinFromWelcomeWithContext(
 	}
 	// Create Group
 	group := &Group{
-		GroupID:         groupContext.GroupID,
-		Epoch:           groupContext.Epoch,
-		CipherSuite:     welcome.CipherSuite,
-		GroupContext:    groupContext,
-		RatchetTree:     ratchetTree,
-		OwnLeafIndex:    ownLeafIndex,
-		EpochSecrets:    epochSecrets,
-		ConfirmationTag: groupInfo.ConfirmationTag,
-		InterimTranscriptHash: schedule.ComputeInterimTranscriptHash(
+		groupID:         groupContext.GroupID,
+		epoch:           groupContext.Epoch,
+		cipherSuite:     welcome.CipherSuite,
+		groupContext:    groupContext,
+		ratchetTree:     ratchetTree,
+		ownLeafIndex:    ownLeafIndex,
+		epochSecrets:    epochSecrets,
+		confirmationTag: groupInfo.ConfirmationTag,
+		interimTranscriptHash: schedule.ComputeInterimTranscriptHash(
 			welcome.CipherSuite,
 			groupContext.ConfirmedTranscriptHash,
 			groupInfo.ConfirmationTag,
 		),
-		Members:     make(map[LeafNodeIndex]*Member),
+		members:     make(map[LeafNodeIndex]*Member),
 		state:       StateOperational,
-		KeySchedule: keySchedule,
-		Proposals:   NewProposalStore(),
-		CachedPsks:  make(map[string][]byte),
+		keySchedule: keySchedule,
+		proposals:   NewProposalStore(),
+		cachedPsks:  make(map[string][]byte),
 	}
-	group.ProposalByRef = make(map[string]*Proposal)
+	group.proposalByRef = make(map[string]*Proposal)
 	// Store the leaf's private HPKE key to decrypt path secrets in commits.
 	if myPrivateKeys.EncryptionKey != nil {
-		group.MyLeafEncryptionKey = myPrivateKeys.EncryptionKey.Bytes()
+		group.myLeafEncryptionKey = myPrivateKeys.EncryptionKey.Bytes()
 	} else if myPrivateKeys.InitKey != nil {
-		group.MyLeafEncryptionKey = myPrivateKeys.InitKey.Bytes()
+		group.myLeafEncryptionKey = myPrivateKeys.InitKey.Bytes()
 	}
 	for id, pskBytes := range externalPsks {
-		group.CachedPsks[id] = append([]byte(nil), pskBytes...)
+		group.cachedPsks[id] = append([]byte(nil), pskBytes...)
 	}
 
 	// Derive PathNodePrivKeys from path_secret (RFC 9420 §12.4.3.1).
@@ -863,15 +863,15 @@ func JoinFromWelcomeWithContext(
 					continue // joiner is not in this node's subtree
 				}
 				started = true
-				if group.PathNodePrivKeys == nil {
-					group.PathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+				if group.pathNodePrivKeys == nil {
+					group.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
 				}
 			}
 			nodeSecret, nsErr := ps.DeriveSecret(welcome.CipherSuite, "node")
 			if nsErr == nil {
 				privKey, pkErr := ciphersuite.DeriveKeyPair(welcome.CipherSuite, nodeSecret.AsSlice())
 				if pkErr == nil {
-					group.PathNodePrivKeys[nodeIdx] = privKey.Bytes()
+					group.pathNodePrivKeys[nodeIdx] = privKey.Bytes()
 				}
 			}
 			ps, _ = ps.DeriveSecret(welcome.CipherSuite, "path")
@@ -882,14 +882,14 @@ func JoinFromWelcomeWithContext(
 	// resumption PSK proposals referencing this epoch can resolve it.
 	if epochSecrets.ResumptionSecret != nil {
 		rKey := ResumptionPskCacheKey(groupContext.GroupID.AsSlice(), groupContext.Epoch.AsUint64())
-		group.CachedPsks[rKey] = append([]byte(nil), epochSecrets.ResumptionSecret.AsSlice()...)
+		group.cachedPsks[rKey] = append([]byte(nil), epochSecrets.ResumptionSecret.AsSlice()...)
 	}
 
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
 			leafIdx := LeafNodeIndex(i)
-			group.Members[leafIdx] = &Member{
+			group.members[leafIdx] = &Member{
 				LeafIndex:  leafIdx,
 				Credential: leaf.LeafData.Credential,
 				Active:     true,
@@ -897,7 +897,7 @@ func JoinFromWelcomeWithContext(
 		}
 	}
 
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, welcome.CipherSuite)
+	group.secretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, welcome.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}

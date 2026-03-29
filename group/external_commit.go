@@ -399,25 +399,25 @@ func ExternalCommit(
 
 	// Build local group state for the new member.
 	group := &Group{
-		GroupID:               groupContext.GroupID,
-		Epoch:                 NewGroupEpoch(groupContext.Epoch.AsUint64() + 1),
-		CipherSuite:           cs,
-		GroupContext:          newGC,
-		RatchetTree:           treeDiff,
-		OwnLeafIndex:          ownLeafIndex,
-		EpochSecrets:          epochSecrets,
-		Proposals:             NewProposalStore(),
-		ProposalByRef:         make(map[string]*Proposal),
-		KeySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
-		InterimTranscriptHash: newInterimHash,
-		Members:               make(map[LeafNodeIndex]*Member),
+		groupID:               groupContext.GroupID,
+		epoch:                 NewGroupEpoch(groupContext.Epoch.AsUint64() + 1),
+		cipherSuite:           cs,
+		groupContext:          newGC,
+		ratchetTree:           treeDiff,
+		ownLeafIndex:          ownLeafIndex,
+		epochSecrets:          epochSecrets,
+		proposals:             NewProposalStore(),
+		proposalByRef:         make(map[string]*Proposal),
+		keySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
+		interimTranscriptHash: newInterimHash,
+		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
-		CachedPsks:            make(map[string][]byte),
-		MyLeafEncryptionKey:   leafPrivKey.Bytes(),
-		PathNodePrivKeys:      pathNodePrivKeys,
+		cachedPsks:            make(map[string][]byte),
+		myLeafEncryptionKey:   leafPrivKey.Bytes(),
+		pathNodePrivKeys:      pathNodePrivKeys,
 	}
 
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)
+	group.secretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
@@ -426,7 +426,7 @@ func ExternalCommit(
 		leaf := treeDiff.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
 			leafIdx := LeafNodeIndex(i)
-			group.Members[leafIdx] = &Member{
+			group.members[leafIdx] = &Member{
 				LeafIndex:  leafIdx,
 				Credential: leaf.LeafData.Credential,
 				Active:     true,
@@ -435,13 +435,13 @@ func ExternalCommit(
 	}
 
 	stagedCommit := &StagedCommit{
-		Commit:                  commit,
-		Proposals:               []*Proposal{externalInitProposal},
-		AuthenticatedContent:    ac,
-		RootPathSecret:          commitSecret,
-		PrecomputedEpochSecrets: epochSecrets,
-		PrecomputedGroupContext: newGC,
-		PrecomputedInterimHash:  newInterimHash,
+		commit:                  commit,
+		proposals:               []*Proposal{externalInitProposal},
+		authenticatedContent:    ac,
+		rootPathSecret:          commitSecret,
+		precomputedEpochSecrets: epochSecrets,
+		precomputedGroupContext: newGC,
+		precomputedInterimHash:  newInterimHash,
 	}
 
 	return group, stagedCommit, nil

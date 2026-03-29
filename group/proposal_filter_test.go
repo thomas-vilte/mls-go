@@ -55,7 +55,7 @@ func createValidUpdateProposal(t *testing.T, g *Group, sender LeafNodeIndex) *Pr
 	lnData := keyPackageLeafToTreeSync(leafNode)
 
 	// Firmar con el contexto del grupo
-	tbs := lnData.MarshalTBSWithContext(g.GroupContext.GroupID.AsSlice(), uint32(sender))
+	tbs := lnData.MarshalTBSWithContext(g.groupContext.GroupID.AsSlice(), uint32(sender))
 	sigPrivKey := ciphersuite.NewSignaturePrivateKey(cred.PrivateKey)
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
 	if err != nil {
@@ -68,8 +68,8 @@ func createValidUpdateProposal(t *testing.T, g *Group, sender LeafNodeIndex) *Pr
 
 func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 	group, kp := createTestGroup(t)
-	group.Members[1] = &Member{LeafIndex: 1, Active: true}
-	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+	group.members[1] = &Member{LeafIndex: 1, Active: true}
+	_, _ = group.ratchetTree.AddLeaf(treesync.LeafNodeData{
 		EncryptionKey: []byte{1},
 		SignatureKey:  kp.LeafNode.SignatureKey,
 		Credential:    kp.LeafNode.Credential,
@@ -78,11 +78,11 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 	})
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	tests := []struct {
@@ -102,14 +102,14 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 			name: "committer cannot update itself",
 			proposal: FilteredProposal{
 				Proposal: NewUpdateProposal(kp.LeafNode),
-				Sender:   group.OwnLeafIndex,
+				Sender:   group.ownLeafIndex,
 			},
 			wantError: true,
 		},
 		{
 			name: "cannot remove committer",
 			proposal: FilteredProposal{
-				Proposal: NewRemoveProposal(group.OwnLeafIndex),
+				Proposal: NewRemoveProposal(group.ownLeafIndex),
 				Sender:   1,
 			},
 			wantError: true,
@@ -147,23 +147,23 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 
 func TestProposalFilter_CheckDuplicates(t *testing.T) {
 	group, kp := createTestGroup(t)
-	group.Members[1] = &Member{LeafIndex: 1, Active: true}
-	group.Members[2] = &Member{LeafIndex: 2, Active: true}
-	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+	group.members[1] = &Member{LeafIndex: 1, Active: true}
+	group.members[2] = &Member{LeafIndex: 2, Active: true}
+	_, _ = group.ratchetTree.AddLeaf(treesync.LeafNodeData{
 		EncryptionKey: []byte{1}, SignatureKey: kp.LeafNode.SignatureKey, Credential: kp.LeafNode.Credential,
 		Capabilities: toTreeSyncCapabilities(kp.LeafNode.Capabilities), Signature: []byte{1},
 	})
-	_, _ = group.RatchetTree.AddLeaf(treesync.LeafNodeData{
+	_, _ = group.ratchetTree.AddLeaf(treesync.LeafNodeData{
 		EncryptionKey: []byte{2}, SignatureKey: kp.LeafNode.SignatureKey, Credential: kp.LeafNode.Credential,
 		Capabilities: toTreeSyncCapabilities(kp.LeafNode.Capabilities), Signature: []byte{1},
 	})
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	tests := []struct {
@@ -223,11 +223,11 @@ func TestProposalFilter_ValidateCombinations(t *testing.T) {
 	group, kp := createTestGroup(t)
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	tests := []struct {
@@ -275,14 +275,14 @@ func TestProposalFilter_ValidateCombinations(t *testing.T) {
 
 func TestProposalFilter_SortProposals(t *testing.T) {
 	group, kp := createTestGroup(t)
-	committer := group.OwnLeafIndex
+	committer := group.ownLeafIndex
 
 	pf := NewProposalFilter(
-		group.GroupContext,
+		group.groupContext,
 		committer,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	// Create proposals en orden aleatorio
@@ -364,7 +364,7 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	if err := group.applyAddProposal(&AddProposal{KeyPackage: newKp}); err != nil {
 		t.Fatalf("applyAddProposal failed: %v", err)
 	}
-	group.Members[1] = &Member{LeafIndex: 1, Active: true}
+	group.members[1] = &Member{LeafIndex: 1, Active: true}
 
 	// Generate a third key package with unique keys for the Add proposal.
 	thirdCred, _, err := credentials.GenerateCredentialWithKey([]byte("third"))
@@ -377,11 +377,11 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	}
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	// Valid proposals: Add with new key package (unique keys), Remove + Update from existing member.
@@ -438,11 +438,11 @@ func TestProposalFilter_AddInvalidSignature(t *testing.T) {
 	newKp.Signature[0] ^= 0xFF
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	caps := &keypackages.Capabilities{
@@ -480,9 +480,9 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 	}
 
 	// Add the member to the tree
-	group.Members[1] = &Member{LeafIndex: 1, Active: true}
+	group.members[1] = &Member{LeafIndex: 1, Active: true}
 	leafData := keyPackageLeafToTreeSync(existingKp.LeafNode)
-	_, _ = group.RatchetTree.AddLeaf(*leafData)
+	_, _ = group.ratchetTree.AddLeaf(*leafData)
 
 	// Create an Update proposal with invalid signature LeafNode
 	updateLeafNode := kp.LeafNode
@@ -492,11 +492,11 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 	updateLeafNode.Signature[0] ^= 0xFF
 
 	pf := NewProposalFilter(
-		group.GroupContext,
-		group.OwnLeafIndex,
-		group.Members,
-		group.CipherSuite,
-		group.RatchetTree,
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
 	)
 
 	caps := &keypackages.Capabilities{
@@ -526,11 +526,11 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 
 	mkPF := func() *ProposalFilter {
 		return NewProposalFilter(
-			group.GroupContext,
-			group.OwnLeafIndex,
-			group.Members,
-			group.CipherSuite,
-			group.RatchetTree,
+			group.groupContext,
+			group.ownLeafIndex,
+			group.members,
+			group.cipherSuite,
+			group.ratchetTree,
 		)
 	}
 	caps := &keypackages.Capabilities{

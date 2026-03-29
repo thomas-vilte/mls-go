@@ -50,8 +50,8 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 	}
 
 	// Corromper la firma (flip un byte)
-	if len(stagedCommit.AuthenticatedContent.Auth.Signature.AsSlice()) > 0 {
-		sigBytes := stagedCommit.AuthenticatedContent.Auth.Signature.AsSlice()
+	if len(stagedCommit.authenticatedContent.Auth.Signature.AsSlice()) > 0 {
+		sigBytes := stagedCommit.authenticatedContent.Auth.Signature.AsSlice()
 		sigBytes[0] ^= 0xFF
 	}
 
@@ -128,7 +128,7 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 
 	// Cambiar el sender para que parezca de Alice (0) en vez de Bob (1)
 	// Esto should hacer failsr la verificación de firma
-	stagedCommit2.AuthenticatedContent.Content.Sender.LeafIndex = 0
+	stagedCommit2.authenticatedContent.Content.Sender.LeafIndex = 0
 
 	// Intentar mergear debe failsr porque la firma no coincide con el sender
 	err = aliceGroup.MergeCommit(stagedCommit2)
@@ -178,24 +178,24 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 	}
 
 	// Guardar epoch actual
-	currentEpoch := aliceGroup.GroupContext.Epoch.AsUint64()
+	currentEpoch := aliceGroup.groupContext.Epoch.AsUint64()
 
 	// Caso 1: Commit con epoch futuro (current + 1)
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch + 1
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch + 1
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with future epoch")
 	}
 
 	// Caso 2: Commit con epoch pasado (current - 1, simulando replay)
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch - 1
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch - 1
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with past epoch (replay)")
 	}
 
 	// Caso 3: Commit con epoch correcto debe work
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err != nil {
 		t.Errorf("MergeCommit should succeed with correct epoch: %v", err)
@@ -243,7 +243,7 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 	}
 
 	// Cambiar GroupID
-	stagedCommit.AuthenticatedContent.Content.GroupID = []byte("wrong-group")
+	stagedCommit.authenticatedContent.Content.GroupID = []byte("wrong-group")
 
 	// Intentar mergear debe failsr por GroupID incorrecto
 	err = aliceGroup.MergeCommit(stagedCommit)
@@ -334,8 +334,8 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 
 	// Intentar procesar el commit de other-group en aliceGroup debe failsr
 	err = aliceGroup.ProcessReceivedCommit(
-		stagedCommit2.AuthenticatedContent,
-		treesync.LeafIndex(aliceGroup.OwnLeafIndex),
+		stagedCommit2.authenticatedContent,
+		treesync.LeafIndex(aliceGroup.ownLeafIndex),
 		bobPrivKeys.InitKey.Bytes(),
 	)
 	if err == nil {
@@ -408,12 +408,12 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 	}
 
 	// Corromper epoch
-	stagedCommit2.AuthenticatedContent.Content.Epoch = 999
+	stagedCommit2.authenticatedContent.Content.Epoch = 999
 
 	// Bob intenta procesar el commit - debe failsr por epoch
 	err = aliceGroup.ProcessReceivedCommit(
-		stagedCommit2.AuthenticatedContent,
-		treesync.LeafIndex(aliceGroup.OwnLeafIndex),
+		stagedCommit2.authenticatedContent,
+		treesync.LeafIndex(aliceGroup.ownLeafIndex),
 		bobPrivKeys.InitKey.Bytes(),
 	)
 	if err == nil {

@@ -122,7 +122,7 @@ func TestLoadPsk_StoresAndRetrieves(t *testing.T) {
 	secret := []byte("test-psk-secret")
 	g.LoadPsk(id, secret)
 
-	got, ok := g.CachedPsks[string(id)]
+	got, ok := g.cachedPsks[string(id)]
 	if !ok {
 		t.Fatal("LoadPsk did not store PSK in CachedPsks")
 	}

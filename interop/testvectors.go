@@ -134,17 +134,17 @@ func (tvg *TestVectorGenerator) GenerateOneToOneJoin() (*TestVector, error) {
 	}
 
 	var joinerSecretHex string
-	if stagedCommit.JoinerSecret != nil {
-		joinerSecretHex = hex.EncodeToString(stagedCommit.JoinerSecret.AsSlice())
+	if joinerSecret := stagedCommit.JoinerSecret(); joinerSecret != nil {
+		joinerSecretHex = hex.EncodeToString(joinerSecret.AsSlice())
 	}
 
 	var updatePathHex string
-	if stagedCommit.Commit != nil && stagedCommit.Commit.Path != nil {
-		updatePathHex = hex.EncodeToString(stagedCommit.Commit.Path.Marshal())
+	if commit := stagedCommit.Commit(); commit != nil && commit.Path != nil {
+		updatePathHex = hex.EncodeToString(commit.Path.Marshal())
 	}
 
-	if stagedCommit.Commit != nil {
-		commitData := stagedCommit.Commit.Marshal()
+	if commit := stagedCommit.Commit(); commit != nil {
+		commitData := commit.Marshal()
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:        0,
 			CommitMsg:    hex.EncodeToString(commitData),
@@ -164,8 +164,8 @@ func (tvg *TestVectorGenerator) GenerateOneToOneJoin() (*TestVector, error) {
 		})
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext.TreeHash)
-	tv.ExpectedEpoch = aliceGroup.Epoch.AsUint64()
+	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 
 	_ = bobPriv
@@ -236,14 +236,14 @@ func (tvg *TestVectorGenerator) GenerateThreePartyJoin() (*TestVector, error) {
 		return nil, fmt.Errorf("commit 1: %w", err)
 	}
 
-	if stagedCommit1.Commit != nil {
+	if commit := stagedCommit1.Commit(); commit != nil {
 		var joinerSecret1 string
-		if stagedCommit1.JoinerSecret != nil {
-			joinerSecret1 = hex.EncodeToString(stagedCommit1.JoinerSecret.AsSlice())
+		if joinerSecret := stagedCommit1.JoinerSecret(); joinerSecret != nil {
+			joinerSecret1 = hex.EncodeToString(joinerSecret.AsSlice())
 		}
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:        0,
-			CommitMsg:    hex.EncodeToString(stagedCommit1.Commit.Marshal()),
+			CommitMsg:    hex.EncodeToString(commit.Marshal()),
 			JoinerSecret: joinerSecret1,
 		})
 	}
@@ -263,14 +263,14 @@ func (tvg *TestVectorGenerator) GenerateThreePartyJoin() (*TestVector, error) {
 		return nil, fmt.Errorf("commit 2: %w", err)
 	}
 
-	if stagedCommit2.Commit != nil {
+	if commit := stagedCommit2.Commit(); commit != nil {
 		var joinerSecret2 string
-		if stagedCommit2.JoinerSecret != nil {
-			joinerSecret2 = hex.EncodeToString(stagedCommit2.JoinerSecret.AsSlice())
+		if joinerSecret := stagedCommit2.JoinerSecret(); joinerSecret != nil {
+			joinerSecret2 = hex.EncodeToString(joinerSecret.AsSlice())
 		}
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:        1,
-			CommitMsg:    hex.EncodeToString(stagedCommit2.Commit.Marshal()),
+			CommitMsg:    hex.EncodeToString(commit.Marshal()),
 			JoinerSecret: joinerSecret2,
 		})
 	}
@@ -280,8 +280,8 @@ func (tvg *TestVectorGenerator) GenerateThreePartyJoin() (*TestVector, error) {
 		return nil, fmt.Errorf("merging commit 2: %w", err)
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext.TreeHash)
-	tv.ExpectedEpoch = aliceGroup.Epoch.AsUint64()
+	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 
 	return tv, nil
@@ -350,10 +350,10 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 		return nil, fmt.Errorf("commit 1: %w", err)
 	}
 
-	if stagedCommit1.Commit != nil {
+	if commit := stagedCommit1.Commit(); commit != nil {
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:     0,
-			CommitMsg: hex.EncodeToString(stagedCommit1.Commit.Marshal()),
+			CommitMsg: hex.EncodeToString(commit.Marshal()),
 		})
 	}
 
@@ -371,10 +371,10 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 		return nil, fmt.Errorf("commit 2: %w", err)
 	}
 
-	if stagedCommit2.Commit != nil {
+	if commit := stagedCommit2.Commit(); commit != nil {
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:     1,
-			CommitMsg: hex.EncodeToString(stagedCommit2.Commit.Marshal()),
+			CommitMsg: hex.EncodeToString(commit.Marshal()),
 		})
 	}
 
@@ -392,10 +392,10 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 		return nil, fmt.Errorf("commit 3 (removal): %w", err)
 	}
 
-	if stagedCommit3.Commit != nil {
+	if commit := stagedCommit3.Commit(); commit != nil {
 		tv.Commits = append(tv.Commits, CommitVector{
 			Epoch:     2,
-			CommitMsg: hex.EncodeToString(stagedCommit3.Commit.Marshal()),
+			CommitMsg: hex.EncodeToString(commit.Marshal()),
 		})
 	}
 
@@ -403,8 +403,8 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 		return nil, fmt.Errorf("merging commit 3: %w", err)
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext.TreeHash)
-	tv.ExpectedEpoch = aliceGroup.Epoch.AsUint64()
+	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 
 	return tv, nil

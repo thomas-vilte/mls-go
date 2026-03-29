@@ -23,7 +23,7 @@ func TestMemoryZeroing_AfterCommit(t *testing.T) {
 	kp2, _, _ := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
 
 	// Guardar una referencia a los secrets del epoch 0
-	oldSecrets := aliceGroup.EpochSecrets
+	oldSecrets := aliceGroup.epochSecrets
 
 	// Alice agrega a Bob y hace commit
 	_, _ = aliceGroup.AddMember(kp2)
@@ -40,15 +40,15 @@ func TestMemoryZeroing_AfterCommit(t *testing.T) {
 	}
 
 	// Old epoch (0) must be cached in EpochHistory.
-	if aliceGroup.EpochHistory == nil {
+	if aliceGroup.epochHistory == nil {
 		t.Fatal("EpochHistory is nil after commit")
 	}
-	if _, ok := aliceGroup.EpochHistory[0]; !ok {
+	if _, ok := aliceGroup.epochHistory[0]; !ok {
 		t.Fatal("epoch 0 not cached in EpochHistory")
 	}
 
 	// New EpochSecrets must differ from the old ones.
-	newSecrets := aliceGroup.EpochSecrets
+	newSecrets := aliceGroup.epochSecrets
 	if newSecrets == oldSecrets {
 		t.Fatal("EpochSecrets pointer unchanged after commit")
 	}

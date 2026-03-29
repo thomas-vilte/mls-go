@@ -84,7 +84,7 @@ func TestTreeOperationsVectors(t *testing.T) {
 				t.Fatalf("UnmarshalProposal: %v", err)
 			}
 
-			g := &Group{GroupContext: &GroupContext{}}
+			g := &Group{groupContext: &GroupContext{}}
 			if err := g.applyProposalToTree(proposal, tree, LeafNodeIndex(v.ProposalSender)); err != nil {
 				t.Fatalf("applyProposalToTree: %v", err)
 			}

@@ -417,17 +417,17 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 func (g *Group) FilterProposalsForCommit(
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
-	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
-	for _, sp := range g.Proposals.Proposals {
+	filtered := make([]FilteredProposal, 0, len(g.proposals.Proposals))
+	for _, sp := range g.proposals.Proposals {
 		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender, Ref: sp.Ref})
 	}
 
 	pf := NewProposalFilter(
-		g.GroupContext,
-		g.OwnLeafIndex,
-		g.Members,
-		g.CipherSuite,
-		g.RatchetTree,
+		g.groupContext,
+		g.ownLeafIndex,
+		g.members,
+		g.cipherSuite,
+		g.ratchetTree,
 	)
 
 	return pf.FilterAndValidateProposals(filtered, capabilities)
