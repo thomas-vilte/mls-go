@@ -293,6 +293,25 @@ func TestClone(t *testing.T) {
 	}
 }
 
+func TestFindLeafByEncKey(t *testing.T) {
+	tree := NewRatchetTree(2)
+	leaf := createTestLeaf(t, "Test")
+	leaf.EncryptionKey = []byte{0xAA, 0xBB, 0xCC}
+	leafIdx, _ := tree.AddLeaf(leaf)
+
+	got, ok := tree.FindLeafByEncKey([]byte{0xAA, 0xBB, 0xCC})
+	if !ok {
+		t.Fatal("FindLeafByEncKey() = not found, want found")
+	}
+	if got != leafIdx {
+		t.Fatalf("FindLeafByEncKey() = %d, want %d", got, leafIdx)
+	}
+
+	if _, ok := tree.FindLeafByEncKey([]byte{0xFF}); ok {
+		t.Fatal("FindLeafByEncKey() found unexpected leaf")
+	}
+}
+
 func nodeIndexSliceEqual(a, b []NodeIndex) bool {
 	if len(a) != len(b) {
 		return false

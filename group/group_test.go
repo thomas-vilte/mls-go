@@ -1,6 +1,7 @@
 package group
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -103,6 +104,61 @@ func TestGroupAddMember(t *testing.T) {
 	// Verify proposal was stored
 	if len(group.proposals.Proposals) != 1 {
 		t.Errorf("Should have 1 proposal, got %d", len(group.proposals.Proposals))
+	}
+}
+
+func TestGroupAccessors_ReturnCopies(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("AccessorUser"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, err := NewGroupIDRandom()
+	if err != nil {
+		t.Fatalf("NewGroupIDRandom failed: %v", err)
+	}
+
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	g.SetPaddingSize(32)
+	if g.PaddingSize() != 32 {
+		t.Fatalf("PaddingSize() = %d, want 32", g.PaddingSize())
+	}
+
+	groupIDCopy := g.GroupID()
+	if groupIDCopy == nil || !bytes.Equal(groupIDCopy.AsSlice(), g.groupID.AsSlice()) {
+		t.Fatal("GroupID() returned wrong value")
+	}
+	groupIDCopy.Value[0] ^= 0xFF
+	if bytes.Equal(groupIDCopy.AsSlice(), g.groupID.AsSlice()) {
+		t.Fatal("GroupID() should return a copy")
+	}
+
+	contextCopy := g.GroupContext()
+	if contextCopy == nil || !bytes.Equal(contextCopy.GroupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
+		t.Fatal("GroupContext() returned wrong value")
+	}
+	contextCopy.GroupID.Value[0] ^= 0xFF
+	if bytes.Equal(contextCopy.GroupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
+		t.Fatal("GroupContext() should return a deep copy")
+	}
+
+	if g.CipherSuite() != g.cipherSuite {
+		t.Fatal("CipherSuite() returned wrong value")
+	}
+	if g.Epoch() != g.epoch {
+		t.Fatal("Epoch() returned wrong value")
+	}
+	if g.OwnLeafIndex() != g.ownLeafIndex {
+		t.Fatal("OwnLeafIndex() returned wrong value")
 	}
 }
 

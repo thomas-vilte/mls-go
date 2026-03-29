@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"testing"
+	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -543,6 +544,24 @@ func TestValidateLeafNodeLifetime_NotYetValid(t *testing.T) {
 	lt := &LeafNodeLifetime{NotBefore: 9999999999, NotAfter: 99999999999}
 	if err := ValidateLeafNodeLifetime(lt); err == nil {
 		t.Fatal("expected error for future not_before")
+	}
+}
+
+func TestValidateLeafNodeLifetimeAt(t *testing.T) {
+	now := time.Unix(100, 0)
+	valid := &LeafNodeLifetime{NotBefore: 90, NotAfter: 110}
+	if err := ValidateLeafNodeLifetimeAt(valid, now); err != nil {
+		t.Fatalf("ValidateLeafNodeLifetimeAt(valid): %v", err)
+	}
+
+	notYetValid := &LeafNodeLifetime{NotBefore: 101, NotAfter: 110}
+	if err := ValidateLeafNodeLifetimeAt(notYetValid, now); err == nil {
+		t.Fatal("ValidateLeafNodeLifetimeAt(notYetValid) should fail")
+	}
+
+	expired := &LeafNodeLifetime{NotBefore: 90, NotAfter: 99}
+	if err := ValidateLeafNodeLifetimeAt(expired, now); err == nil {
+		t.Fatal("ValidateLeafNodeLifetimeAt(expired) should fail")
 	}
 }
 

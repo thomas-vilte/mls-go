@@ -54,7 +54,7 @@ func (gc *GroupContext) Clone() *GroupContext {
 	return &GroupContext{
 		Version:                 gc.Version,
 		CipherSuite:             gc.CipherSuite,
-		GroupID:                 NewGroupID(gc.GroupID.AsSlice()),
+		GroupID:                 NewGroupID(append([]byte(nil), gc.GroupID.AsSlice()...)),
 		Epoch:                   gc.Epoch,
 		TreeHash:                append([]byte(nil), gc.TreeHash...),
 		ConfirmedTranscriptHash: append([]byte(nil), gc.ConfirmedTranscriptHash...),

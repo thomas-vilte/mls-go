@@ -107,6 +107,44 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 	return aliceGroup, bobGroup, alicePriv, bobPriv
 }
 
+func TestCreateWelcomeWithOptions(t *testing.T) {
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("Bob2"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Bob2): %v", err)
+	}
+	bobKP, bobPriv, err := keypackages.Generate(bobCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Bob2): %v", err)
+	}
+
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	joinerSecret, err := ciphersuite.NewSecretRandomCS(aliceGroup.cipherSuite)
+	if err != nil {
+		t.Fatalf("NewSecretRandomCS: %v", err)
+	}
+
+	welcomeFromOptions, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		SignerPrivKey: aliceSigPriv,
+	})
+	if err != nil {
+		t.Fatalf("CreateWelcomeWithOptions: %v", err)
+	}
+
+	if len(welcomeFromOptions.Marshal()) == 0 {
+		t.Fatal("CreateWelcomeWithOptions() returned an empty Welcome")
+	}
+
+	joinedGroup, err := JoinFromWelcome(welcomeFromOptions, bobKP, bobPriv, nil)
+	if err != nil {
+		t.Fatalf("JoinFromWelcome(CreateWelcomeWithOptions): %v", err)
+	}
+	if joinedGroup == nil {
+		t.Fatal("JoinFromWelcome(CreateWelcomeWithOptions) returned nil group")
+	}
+}
+
 // TestProcessCommit_Valid verifies that a valid commit is processed correctly
 func TestProcessCommit_Valid(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
