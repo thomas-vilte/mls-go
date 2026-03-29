@@ -4,212 +4,123 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/thomas-vilte/mls-go)](https://goreportcard.com/report/github.com/thomas-vilte/mls-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Pure Go implementation of Messaging Layer Security (MLS) per RFC 9420.
+Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420).
 
-**62 Go files | 13 packages | 3 cipher suites | 0 CGO dependencies | 74% coverage**
+**Current status:** beta, `v0.3.0`.
 
----
+The implementation covers the main MLS group flow, the currently targeted cipher suites, and Docker-based interoperability with `mls-go`, `mlspp`, and the subset of OpenMLS scenarios that upstream currently supports.
 
-## What is this?
+## Overview
 
-mls-go is a native Go implementation of [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420.html) — the MLS protocol. This is a pure Go project with zero CGO dependencies.
+This repository is a native Go MLS implementation with no CGO dependency. The main packages are:
 
-MLS is the industry standard for end-to-end encrypted group messaging, used by Matrix, Cisco Webex, and others. The hard part is key management: every time someone joins or leaves, keys rotate — without tgoing the server. MLS solves this with a ratchet tree (TreeKEM).
+- `ciphersuite`: AEAD, HPKE, HKDF, signatures, hash references
+- `credentials`: MLS credentials
+- `extensions`: extension types and helpers
+- `framing`: MLSMessage, PublicMessage, PrivateMessage
+- `group`: group lifecycle, commits, proposals, Welcome handling
+- `keypackages`: KeyPackage generation and validation
+- `schedule`: key schedule and exporter support
+- `secrettree`: per-sender secret tree ratchets
+- `treesync`: ratchet tree and TreeKEM helpers
+- `interop`: interop helpers and Docker test infrastructure
 
-**Current status:** Beta (v0.3.0). The core protocol flow is in place and interop is in good shape, but the API may still change before v1.0.0.
+## What Works
 
----
+- Group creation
+- Add / Update / Remove proposals
+- Commit generation and processing
+- Welcome creation and join-from-Welcome flows
+- PrivateMessage protection for application data
+- PublicMessage handling for proposal and commit flows used by the current group implementation
+- Secret tree and key schedule support per RFC 9420 sections 8 and 9
+- Cipher suites:
+  - `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`
+  - `MLS_128_DHKEMP256_AES128GCM_SHA256_P256`
+  - `MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`
 
-## Why this exists
+## Known Gaps
 
-I needed MLS for a Go project. There's no native implementation. So I built mls-go. It's not complete, but it works. If you need MLS in Go without CGO, this might help.
+The project is not `v1.0.0` yet. Known gaps and caveats are tracked in `SECURITY.md` and in the remaining roadmap work. In particular:
 
----
+- the public API is still settling
+- some protocol paths need more review before calling the library stable
+- documentation and example coverage still lag behind the implementation in a few places
 
-## What works (v0.3.0)
+## Quick Start
 
-**Cipher suites:**
-- CS1: `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` ✅
-- CS2: `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` ✅
-- CS3: `MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519` ✅
+The most accurate usage examples today are the integration tests in `group/`.
 
-**Protocol:**
-- Group creation and lifecycle
-- Add/Update/Remove proposals
-- Commit with UpdatePath (TreeKEM)
-- Welcome messages — create and process (JoinFromWelcome)
-- Key schedule per RFC 9420 §8
-- Secret tree with per-sender ratchet (RFC 9420 §9)
-- PrivateMessage encrypt/decrypt
-- PublicMessage framing
-- Extensions: ApplicationID, ExternalPub, RatchetTree, LastResort
-- TLS presentation language encoder/decoder (RFC 9420 §3.5)
+A typical flow is:
 
-**Interoperability (CS2):**
-- Key schedule vectors ✅
-- Crypto basics vectors ✅
-- TreeKEM vectors (11/11) ✅
-- Secret tree vectors ✅
-- Message protection vectors ✅
-- Welcome vectors ✅
-- Passive client commit vectors (13/13) ✅
+1. create credentials and key packages
+2. create a group with `group.NewGroup`
+3. add members with `AddMember`
+4. commit with `Commit`
+5. build or consume Welcome messages with `CreateWelcomeWithOptions` and `JoinFromWelcome`
+6. protect application messages with `SendMessage` and `ReceiveMessage`
 
----
+Useful starting points:
 
-## What doesn't work yet
+- `group/integration_test.go`
+- `group/group_process_commit_test.go`
+- `group/messaging_test.go`
 
-Being honest:
-
-- PSKs in the commit receiver path — proposals with PSK type are parsed but not resolved
-- `NewGroupFromReInit` is incomplete (empty GroupContext for joiner_secret)
-- Received `AuthenticatedContent` signatures not verified on commit/proposal messages
-- Ratchet tree not truncated after member removals
-- PublicMessage processing not implemented
-- CS4–CS7 not planned (CS1/2/3 cover all practical use cases)
-
----
-
-## Project structure
-
-```
-mls-go/
-├── ciphersuite/     # AEAD, HPKE, HKDF, signatures — CS1/CS2/CS3
-├── credentials/     # Basic credentials + key generation
-├── extensions/      # Group extensions framework
-├── framing/         # PublicMessage, PrivateMessage, MLSMessage
-├── group/           # Group lifecycle, proposals, commits
-├── keypackages/     # KeyPackage generation and validation
-├── messages/        # Welcome, Commit, Proposal types
-├── schedule/        # Key schedule (RFC 9420 §8)
-├── secrettree/      # Secret tree for per-sender encryption
-├── treesync/        # Ratchet tree, TreeKEM
-├── interop/         # Interoperability helpers
-└── internal/tls/    # TLS presentation language codec
-```
-
----
-
-## Testing
+## Build And Test
 
 ```bash
-# All tests
+go build ./...
 go test ./...
-
-# Race detector + coverage
-go test -race -cover ./...
-
-# Specific package
-go test ./group/... -v
-
-# Interop vectors
-go test ./schedule/... -run TestKeyScheduleInteropVectors -v
-go test ./group/... -run TestPassiveClientCommitVectors -v
+go test -race ./...
+go vet ./...
 ```
 
 ## Interoperability
 
-Interop is meant to run through Docker.
+Interop is Docker-first on purpose. The repository ships a Compose setup that keeps the Go server, cross-interop targets, and test runner in a consistent environment.
 
-That is deliberate. Keeping the Go server, `mlspp`, and the test runner inside the same Docker setup avoids the usual local-machine problems: mismatched toolchains, missing packages, old binaries, and "it works here" surprises.
-
-Current status, from the runs in this repository:
-
-| Scenario | `mls-go` self | `mlspp` cross | `OpenMLS` cross |
-| --- | --- | --- | --- |
-| `welcome_join` | PASS | PASS | PASS |
-| `application` | PASS | PASS | PASS |
-| `commit` | PASS | PASS | not supported upstream |
-| `external_join` | PASS | PASS | PASS |
-| `external_proposals` | PASS | PASS | not supported upstream |
-| `reinit` | PASS | PASS | not supported upstream |
-| `branch` | PASS | PASS | not supported upstream |
-| `deep_random` | PASS | PASS | PASS |
-
-The practical reading of that table is:
-
-- `mls-go` self-interop passes the full scenario set on suites `1`, `2`, and `3`
-- `mlspp` cross-interop also passes the full scenario set on suites `1`, `2`, and `3`
-- `OpenMLS` cross-interop currently passes the subset that upstream OpenMLS actually implements here: `welcome_join`, `application`, `external_join`, and `deep_random`, again on suites `1`, `2`, and `3`
-
-The missing OpenMLS scenarios are not hidden test failures on the Go side. They map to handlers that are still `todo!()` or `unimplemented` in the upstream OpenMLS interop client.
-
-If you want interop results, use one of these:
+Rebuild the `mls-go` image after local code changes:
 
 ```bash
-# Self-interop: mls-go vs mls-go
-./docker/run-interop.sh self
+docker compose -f docker/docker-compose.yml build mls-go
+```
 
-# Cross-interop: mls-go vs mlspp
+Then run interop per suite to avoid long tool timeouts:
+
+```bash
+SUITES="1" ./docker/run-interop.sh self
+SUITES="2" ./docker/run-interop.sh self
+SUITES="3" ./docker/run-interop.sh self
+```
+
+Cross-interop examples:
+
+```bash
 ./docker/run-interop.sh cross
-
-# Cross-interop: mls-go vs OpenMLS
 CROSS_TARGET=openmls ./docker/run-interop.sh cross
-
-# Both
-./docker/run-interop.sh all
 ```
 
-For `OpenMLS`, the helper automatically runs the subset that currently passes upstream: `welcome_join`, `application`, `external_join`, and `deep_random` on suites `1`, `2`, and `3`.
+Current practical status:
 
-Handy variants:
+- `mls-go` self-interop passes the supported scenario matrix on suites `1`, `2`, and `3`
+- `mlspp` cross-interop passes the supported scenario matrix on suites `1`, `2`, and `3`
+- `OpenMLS` cross-interop passes the subset that upstream currently implements here: `welcome_join`, `application`, `external_join`, and `deep_random`
 
-```bash
-# Run one config only
-./docker/run-interop.sh cross external_proposals
-
-# Run one suite only
-SUITES=2 ./docker/run-interop.sh self
-
-# Include deep_random in cross runs
-RUN_STRESS=1 ./docker/run-interop.sh cross
-```
-
-More detail lives in `interop/README.md`, including the OpenMLS pass matrix, the wire-format patch used in Docker, and the specific upstream handlers that are still missing.
-
----
+The unsupported OpenMLS scenarios are upstream limitations in the reference interop client, not hidden failures on the Go side.
 
 ## Roadmap
 
-### v0.3.0
+Before `v1.0.0`, the remaining work is mainly:
 
-- [ ] PSK resolution in commit receiver path
-- [ ] `NewGroupFromReInit` — complete implementation
-- [ ] Verify received `AuthenticatedContent` signatures
-- [ ] Ratchet tree truncation after removals
-- [ ] PublicMessage processing
-
-### v1.0.0
-
-- [ ] Stable API
-- [ ] Full RFC 9420 compliance
-- [ ] Security audit
-- [ ] Examples and documentation
-
-The short version: this project is not at `v1.0.0` yet because there are still known protocol and security-related gaps in the implementation, even though the main group flow and interoperability story are already strong. Reaching `v1.0.0` should mean that the public API has settled down, the remaining documented gaps are closed or intentionally scoped out, and the library is something other people can integrate without having to guess which edges are still moving.
-
----
+- API cleanup and stabilization
+- documentation polish and maintained examples
+- broader test, fuzz, and benchmark coverage
+- closing the remaining documented protocol and security gaps
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). All code, comments, and docs must be in English.
-
----
-
-## Support
-
-- **Issues:** [GitHub Issues](https://github.com/thomas-vilte/mls-go/issues)
-- **Email:** viltetomas2003@gmail.com
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md). All code, comments, errors, tests, and docs must be in English.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
----
-
-## Acknowledgments
-
-- [RFC 9420](https://datatracker.ietf.org/doc/html/rfc9420) — MLS Protocol
-- [RFC 9180](https://datatracker.ietf.org/doc/html/rfc9180) — HPKE
-- [RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869) — HKDF
+MIT. See [LICENSE](LICENSE).

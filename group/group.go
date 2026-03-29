@@ -733,7 +733,7 @@ func (g *Group) CommitWithContext(
 		return nil, fmt.Errorf("computing confirmed transcript hash: %w", err)
 	}
 
-	// Build provisional GroupContext para el nuevo epoch
+	// Build the provisional GroupContext for the next epoch.
 	newTreeHash := treeDiff.TreeHash()
 	newGC := &GroupContext{
 		Version:                 g.groupContext.Version,
@@ -745,7 +745,7 @@ func (g *Group) CommitWithContext(
 		Extensions:              newExtensions,
 	}
 
-	// Advance key schedule to compute confirmation_key del nuevo epoch
+	// Advance the key schedule to compute the next epoch confirmation_key.
 	newGCBytes := newGC.Marshal()
 	newKS := schedule.NewKeySchedule(g.cipherSuite, g.epochSecrets.InitSecret)
 	newKS.SetCommitSecret(commitSecret)
@@ -2008,7 +2008,7 @@ func (g *Group) ProcessPrivateMessage(pm *framing.PrivateMessage) error {
 		return fmt.Errorf("sender_data_secret not available")
 	}
 
-	// RFC 9420 §6: rechazar mensajes de otra época
+	// RFC 9420 §6: reject messages from a different epoch.
 	if pm.Epoch != g.groupContext.Epoch.AsUint64() {
 		return fmt.Errorf("wrong epoch: got %d, want %d", pm.Epoch, g.groupContext.Epoch.AsUint64())
 	}
@@ -2054,7 +2054,7 @@ func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.Auth
 		return nil, 0, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
 	}
 
-	// RFC 9420 §6.1: verificar firma del FramedContent con la clave pública del sender
+	// RFC 9420 §6.1: verify the FramedContent signature with the sender's public key.
 	rawKey := senderLeaf.LeafData.SigKeyBytes()
 	if len(rawKey) == 0 {
 		return nil, 0, fmt.Errorf("missing sender signature key")
