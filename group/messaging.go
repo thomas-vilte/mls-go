@@ -43,7 +43,7 @@ func (g *Group) SendMessage(
 		Content:          content,
 		SenderLeafIndex:  uint32(g.OwnLeafIndex),
 		CipherSuite:      g.CipherSuite,
-		PaddingSize:      0,
+		PaddingSize:      g.PaddingSize,
 		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
 		SecretTree:       g.SecretTree,
 		SigKey:           sigPrivKey,
@@ -85,7 +85,7 @@ func (g *Group) SendApplicationMessage(
 		Content:          content,
 		SenderLeafIndex:  uint32(g.OwnLeafIndex),
 		CipherSuite:      g.CipherSuite,
-		PaddingSize:      0,
+		PaddingSize:      g.PaddingSize,
 		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
 		SecretTree:       g.SecretTree,
 		SigKey:           sigPrivKey,
@@ -179,14 +179,14 @@ func (g *Group) ReceiveMessage(
 
 // ReceiveApplicationMessage decrypts an application PrivateMessage without
 // requiring the caller to supply the sender's leaf index. The leaf index is
-// extracted from the encrypted SenderData (RFC 9420 §6.3.2). Signature
-// verification is skipped; use ReceiveMessage when the sender is known.
+// extracted from the encrypted SenderData (RFC 9420 §6.3.2). After decryption,
+// the sender's signature is verified using the ratchet tree for the message's epoch.
 //
 // This is the entry point used by the MLSWG interop gRPC Unprotect RPC,
 // where the ciphertext is opaque and the sender is determined at decrypt time.
 //
-// Messages from previous epochs are decrypted using the cached EpochHistory
-// to support out-of-order delivery across epoch boundaries.
+// Messages from previous epochs are decrypted and verified using the cached
+// EpochHistory to support out-of-order delivery across epoch boundaries.
 func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext, authenticatedData []byte, err error) {
 	if g.state != StateOperational {
 		return nil, nil, fmt.Errorf("group not operational")
@@ -197,38 +197,72 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 
 	var senderDataSecret *ciphersuite.Secret
 	var secretTree *secrettree.Tree
+	var ratchetTree *treesync.RatchetTree
+	var groupContextBytes []byte
+	var cs ciphersuite.CipherSuite
 
 	if pm.Epoch == g.Epoch.AsUint64() {
-		// Current epoch — use live secrets.
 		if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
 			return nil, nil, fmt.Errorf("sender_data_secret not available")
 		}
 		if g.SecretTree == nil {
 			return nil, nil, fmt.Errorf("secret tree not available")
 		}
+		if g.RatchetTree == nil {
+			return nil, nil, fmt.Errorf("ratchet tree not available")
+		}
 		senderDataSecret = g.EpochSecrets.SenderDataSecret
 		secretTree = g.SecretTree
+		ratchetTree = g.RatchetTree
+		groupContextBytes = g.GroupContext.Marshal()
+		cs = g.CipherSuite
 	} else {
-		// Old epoch — look up cached epoch history.
 		if state, ok := g.EpochHistory[pm.Epoch]; ok {
 			senderDataSecret = state.SenderDataSecret
 			secretTree = state.SecretTree
+			ratchetTree = state.RatchetTree
+			if state.GroupContext == nil {
+				return nil, nil, fmt.Errorf("group context not available for epoch %d", pm.Epoch)
+			}
+			groupContextBytes = state.GroupContext.Marshal()
+			cs = state.CipherSuite
 		} else {
 			return nil, nil, fmt.Errorf("message from unknown epoch %d (current: %d)", pm.Epoch, g.Epoch.AsUint64())
 		}
 	}
 
-	// Decrypt without signature verification — sender identity is not available
-	// before decrypting SenderData. SigPubKey: nil skips the verify step in
-	// framing.Decrypt while still advancing the SecretTree ratchet correctly.
 	ac, decErr := framing.Decrypt(pm, framing.DecryptParams{
-		CipherSuite:      g.CipherSuite,
+		CipherSuite:      cs,
 		SenderDataSecret: senderDataSecret,
 		SecretTree:       secretTree,
-		GroupContext:     g.GroupContext.Marshal(),
+		GroupContext:     groupContextBytes,
 	})
 	if decErr != nil {
 		return nil, nil, &ErrDecryptionFailed{Reason: "message", Err: decErr}
+	}
+
+	senderLeafIdx := treesync.LeafIndex(ac.Content.Sender.LeafIndex)
+	if ratchetTree == nil {
+		return nil, nil, fmt.Errorf("ratchet tree not available for epoch %d", pm.Epoch)
+	}
+
+	if uint32(senderLeafIdx) >= ratchetTree.NumLeaves {
+		return nil, nil, fmt.Errorf("sender index %d out of bounds (tree has %d leaves)", senderLeafIdx, ratchetTree.NumLeaves)
+	}
+
+	senderLeaf := ratchetTree.GetLeaf(senderLeafIdx)
+	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent || senderLeaf.LeafData == nil {
+		return nil, nil, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
+	}
+
+	rawKey := senderLeaf.LeafData.SigKeyBytes()
+	if len(rawKey) == 0 {
+		return nil, nil, fmt.Errorf("missing sender signature key")
+	}
+
+	pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, cs.SignatureScheme())
+	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
+		return nil, nil, fmt.Errorf("private message signature invalid: %w", err)
 	}
 
 	data, ok := ac.Content.ApplicationData()

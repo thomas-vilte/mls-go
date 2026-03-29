@@ -21,13 +21,18 @@ Include a description of the issue, steps to reproduce, and the potential impact
 
 These are known gaps, not vulnerabilities. They are documented here because the project is still pre-1.0 and these edges matter:
 
-- Received `AuthenticatedContent` signatures not verified (commits/proposals from peers)
-- PSKs not resolved in the commit receiver path
-- `NewGroupFromReInit` uses empty GroupContext for joiner_secret derivation
-- Ratchet tree not truncated after member removals
-- `PublicMessage` processing not implemented
+- `NewGroupFromReInit` still needs a tighter review of its `joiner_secret` derivation path
+- `new_member_proposal` PublicMessages do not yet verify the outer message signature independently
+- Application message padding defaults to zero unless `Group.PaddingSize` is configured explicitly
 
-None of these affect the confidentiality of encrypted messages in the normal group flow. They do limit the security guarantees on edge cases.
+Recent fixes:
+
+- Received `AuthenticatedContent` signatures are now verified for application messages, commits, and supported PublicMessage flows
+- PSKs are resolved in the commit receiver path
+- Ratchet trees are truncated after member removals
+- `PublicMessage` processing is implemented
+
+These limitations do not break the normal encrypted group flow, but they do reduce assurance on specific edge cases.
 
 ## Cryptographic foundation
 
@@ -46,4 +51,4 @@ No custom crypto implementations. All primitives come from audited libraries.
 - Protect private keys with secure storage; clear them from memory after use
 - This is beta software — not recommended for production handling sensitive data until v1.0.0
 
-For production use today, consider [other implementation]() (Go, production-ready).
+For production use today, consider evaluating a mature MLS implementation that has already completed an external security review.

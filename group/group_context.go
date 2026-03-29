@@ -36,6 +36,31 @@ type GroupContext struct {
 	Extensions              []Extension
 }
 
+// Clone returns a deep copy of the GroupContext.
+func (gc *GroupContext) Clone() *GroupContext {
+	if gc == nil {
+		return nil
+	}
+
+	clonedExtensions := make([]Extension, len(gc.Extensions))
+	for i, ext := range gc.Extensions {
+		clonedExtensions[i] = Extension{
+			Type: ext.Type,
+			Data: append([]byte(nil), ext.Data...),
+		}
+	}
+
+	return &GroupContext{
+		Version:                 gc.Version,
+		CipherSuite:             gc.CipherSuite,
+		GroupID:                 NewGroupID(gc.GroupID.AsSlice()),
+		Epoch:                   gc.Epoch,
+		TreeHash:                append([]byte(nil), gc.TreeHash...),
+		ConfirmedTranscriptHash: append([]byte(nil), gc.ConfirmedTranscriptHash...),
+		Extensions:              clonedExtensions,
+	}
+}
+
 // IncrementEpoch increments the epoch counter.
 //
 // Called after a commit is merged to advance to the next epoch.

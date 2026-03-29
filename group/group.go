@@ -90,6 +90,9 @@ type Group struct {
 	SecretTree            *secrettree.Tree
 	CachedPsks            map[string][]byte
 	PSKStore              PSKStore
+	// PaddingSize controls the block size used to pad encrypted application
+	// messages (RFC 9420 §14). Zero disables padding.
+	PaddingSize int
 	// MyLeafEncryptionKey is the private HPKE key of the own leaf, used for
 	// decrypting path secrets in received commits (RFC 9420 §12.4.2).
 	MyLeafEncryptionKey []byte
@@ -113,33 +116,49 @@ type Group struct {
 	EpochHistory map[uint64]*epochState
 }
 
-// epochState holds the decryption material for a past epoch.
+// epochState holds the decryption and verification material for a past epoch.
 type epochState struct {
 	SenderDataSecret *ciphersuite.Secret
 	SecretTree       *secrettree.Tree
+	RatchetTree      *treesync.RatchetTree
+	GroupContext     *GroupContext
+	CipherSuite      ciphersuite.CipherSuite
 }
 
 // maxCachedEpochs is the number of past epochs to keep for out-of-order decryption.
 const maxCachedEpochs = 5
 
-// cacheOldEpoch saves the current epoch's decryption material into EpochHistory
-// so that out-of-order messages from that epoch can be decrypted after the epoch
-// advances. Called by MergeCommit right before replacing EpochSecrets.
-//
-// g.Epoch has already been incremented at this point, so the old epoch number
-// is g.Epoch.AsUint64() - 1.
-func (g *Group) cacheOldEpoch() {
-	if g.EpochSecrets == nil {
+// cacheOldEpoch saves an old epoch's decryption material into EpochHistory so
+// out-of-order messages from that epoch can still be decrypted and verified
+// after the group advances.
+func (g *Group) cacheOldEpoch(
+	oldEpoch uint64,
+	oldEpochSecrets *schedule.EpochSecrets,
+	oldSecretTree *secrettree.Tree,
+	oldRatchetTree *treesync.RatchetTree,
+	oldGroupContext *GroupContext,
+	oldCipherSuite ciphersuite.CipherSuite,
+) {
+	if oldEpochSecrets == nil {
 		return
 	}
-	oldEpoch := g.Epoch.AsUint64() - 1
 	if g.EpochHistory == nil {
 		g.EpochHistory = make(map[uint64]*epochState)
 	}
-	g.EpochHistory[oldEpoch] = &epochState{
-		SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-		SecretTree:       g.SecretTree,
+
+	var historicalTree *treesync.RatchetTree
+	if oldRatchetTree != nil {
+		historicalTree = oldRatchetTree.Clone()
 	}
+
+	g.EpochHistory[oldEpoch] = &epochState{
+		SenderDataSecret: oldEpochSecrets.SenderDataSecret,
+		SecretTree:       oldSecretTree,
+		RatchetTree:      historicalTree,
+		GroupContext:     oldGroupContext.Clone(),
+		CipherSuite:      oldCipherSuite,
+	}
+
 	// Evict entries older than maxCachedEpochs.
 	if oldEpoch >= maxCachedEpochs {
 		cutoff := oldEpoch - uint64(maxCachedEpochs)
@@ -1598,6 +1617,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	}
 
 	// Recompute TreeHash from treesync
+	oldEpoch := g.Epoch.AsUint64()
+	oldEpochSecrets := g.EpochSecrets
+	oldSecretTree := g.SecretTree
+	oldRatchetTree := g.RatchetTree
+	oldGroupContext := g.GroupContext.Clone()
+	oldCipherSuite := g.CipherSuite
+
 	treeHash := g.RatchetTree.TreeHash()
 
 	// Compute ConfirmedTranscriptHash nuevo
@@ -1638,7 +1664,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		// Committer: use precomputed epoch secrets from Commit()
 
 		// Cache current epoch secrets for out-of-order decryption before replacing.
-		g.cacheOldEpoch()
+		g.cacheOldEpoch(oldEpoch, oldEpochSecrets, oldSecretTree, oldRatchetTree, oldGroupContext, oldCipherSuite)
 
 		g.EpochSecrets = stagedCommit.PrecomputedEpochSecrets
 	} else {
@@ -1719,7 +1745,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 
 		// Cache current epoch secrets for out-of-order decryption before replacing.
-		g.cacheOldEpoch()
+		g.cacheOldEpoch(oldEpoch, oldEpochSecrets, oldSecretTree, oldRatchetTree, oldGroupContext, oldCipherSuite)
 
 		g.EpochSecrets = newEpochSecrets
 	}
@@ -2409,7 +2435,37 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 			return fmt.Errorf("external public message signature verification failed: %w", err)
 		}
 		return nil
-	case framing.SenderTypeNewMemberProposal, framing.SenderTypeNewMemberCommit:
+	case framing.SenderTypeNewMemberProposal:
+		return nil
+	case framing.SenderTypeNewMemberCommit:
+		commitBody, ok := pm.Content.Body.(framing.CommitBody)
+		if !ok {
+			return fmt.Errorf("new member commit has no commit body")
+		}
+
+		commit, err := UnmarshalCommit(commitBody.Data)
+		if err != nil {
+			return fmt.Errorf("unmarshaling new member commit: %w", err)
+		}
+		if commit.Path == nil || commit.Path.LeafNode == nil {
+			return fmt.Errorf("new member commit missing update path leaf node")
+		}
+
+		rawKey := commit.Path.LeafNode.SigKeyBytes()
+		if len(rawKey) == 0 {
+			return fmt.Errorf("new member commit missing leaf node signature key")
+		}
+
+		pubKey := ciphersuite.NewOpenMlsSignaturePublicKey(rawKey, g.CipherSuite.SignatureScheme())
+		ac := &framing.AuthenticatedContent{
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pm.Content,
+			Auth:         pm.Auth,
+			GroupContext: g.GroupContext.Marshal(),
+		}
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), pm.Auth.Signature); err != nil {
+			return fmt.Errorf("new member commit signature verification failed: %w", err)
+		}
 		return nil
 	default:
 		return nil

@@ -1,6 +1,7 @@
 package group
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -8,6 +9,40 @@ import (
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
+
+func tamperApplicationMessageSignature(t *testing.T, senderGroup *Group, pm *framing.PrivateMessage) *framing.PrivateMessage {
+	t.Helper()
+
+	ac, err := framing.Decrypt(pm, framing.DecryptParams{
+		CipherSuite:      senderGroup.CipherSuite,
+		SenderDataSecret: senderGroup.EpochSecrets.SenderDataSecret,
+		SecretTree:       senderGroup.SecretTree,
+		GroupContext:     senderGroup.GroupContext.Marshal(),
+	})
+	if err != nil {
+		t.Fatalf("Decrypt(sender): %v", err)
+	}
+
+	sig := ac.Auth.Signature.AsSlice()
+	if len(sig) == 0 {
+		t.Fatal("signature is empty")
+	}
+	sig[0] ^= 0xFF
+
+	tampered, err := framing.Encrypt(framing.EncryptParams{
+		AuthContent:      ac,
+		SenderLeafIndex:  uint32(senderGroup.OwnLeafIndex),
+		CipherSuite:      senderGroup.CipherSuite,
+		PaddingSize:      senderGroup.PaddingSize,
+		SenderDataSecret: senderGroup.EpochSecrets.SenderDataSecret,
+		SecretTree:       senderGroup.SecretTree,
+	})
+	if err != nil {
+		t.Fatalf("Encrypt(tampered): %v", err)
+	}
+
+	return tampered
+}
 
 // TestSendMessage_EmptyPayload verifies that SendMessage funciona con payload vacío
 func TestSendMessage_EmptyPayload(t *testing.T) {
@@ -138,4 +173,164 @@ func TestReceiveMessage_NoSecretTree(t *testing.T) {
 
 	// Restaurar
 	bobGroup.SecretTree = originalTree
+}
+
+func TestReceiveApplicationMessage_VerifiesSignature(t *testing.T) {
+	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
+
+	msg := []byte("hello bob")
+	aad := []byte("aad")
+	pm, err := aliceGroup.SendApplicationMessage(msg, aad, alice.sigPriv)
+	if err != nil {
+		t.Fatalf("SendApplicationMessage: %v", err)
+	}
+
+	got, gotAAD, err := bobGroup.ReceiveApplicationMessage(pm)
+	if err != nil {
+		t.Fatalf("ReceiveApplicationMessage(valid): %v", err)
+	}
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("plaintext = %q, want %q", got, msg)
+	}
+	if !bytes.Equal(gotAAD, aad) {
+		t.Fatalf("authenticated data = %x, want %x", gotAAD, aad)
+	}
+
+	tampered := tamperApplicationMessageSignature(t, aliceGroup, pm)
+	if _, _, err := bobGroup.ReceiveApplicationMessage(tampered); err == nil {
+		t.Fatal("ReceiveApplicationMessage should fail with tampered signature")
+	}
+}
+
+func TestReceiveApplicationMessage_OldEpochUsesHistoricalContext(t *testing.T) {
+	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
+
+	msg := []byte("message from previous epoch")
+	aad := []byte("epoch1")
+	pm, err := aliceGroup.SendApplicationMessage(msg, aad, alice.sigPriv)
+	if err != nil {
+		t.Fatalf("SendApplicationMessage: %v", err)
+	}
+
+	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("Charlie-OldEpoch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Charlie): %v", err)
+	}
+	charlieKP, _, err := keypackages.Generate(charlieCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Charlie): %v", err)
+	}
+
+	if _, err := aliceGroup.AddMember(charlieKP); err != nil {
+		t.Fatalf("AddMember(Charlie): %v", err)
+	}
+	stagedCommit, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := bobGroup.ProcessCommit(stagedCommit); err != nil {
+		t.Fatalf("ProcessCommit(bob): %v", err)
+	}
+	if err := aliceGroup.MergeCommit(stagedCommit); err != nil {
+		t.Fatalf("MergeCommit(alice): %v", err)
+	}
+
+	history, ok := bobGroup.EpochHistory[1]
+	if !ok {
+		t.Fatal("epoch 1 not cached in EpochHistory")
+	}
+	if history.GroupContext == nil {
+		t.Fatal("historical GroupContext is nil")
+	}
+
+	got, gotAAD, err := bobGroup.ReceiveApplicationMessage(pm)
+	if err != nil {
+		t.Fatalf("ReceiveApplicationMessage(old epoch): %v", err)
+	}
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("plaintext = %q, want %q", got, msg)
+	}
+	if !bytes.Equal(gotAAD, aad) {
+		t.Fatalf("authenticated data = %x, want %x", gotAAD, aad)
+	}
+}
+
+func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
+	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
+	charlie := newTestUser(t, "charlie-new-member-commit")
+
+	groupInfo, err := aliceGroup.GetGroupInfo(alice.sigPriv)
+	if err != nil {
+		t.Fatalf("GetGroupInfo: %v", err)
+	}
+
+	_, stagedCommit, err := ExternalCommit(
+		groupInfo,
+		aliceGroup.CipherSuite,
+		charlie.sigPriv,
+		charlie.sigPub,
+		-1,
+		charlie.kp.LeafNode.Credential,
+	)
+	if err != nil {
+		t.Fatalf("ExternalCommit: %v", err)
+	}
+
+	pm := &framing.PublicMessage{
+		Content: stagedCommit.AuthenticatedContent.Content,
+		Auth:    stagedCommit.AuthenticatedContent.Auth,
+	}
+	if err := aliceGroup.VerifyPublicMessage(pm); err != nil {
+		t.Fatalf("VerifyPublicMessage(valid): %v", err)
+	}
+
+	sig := pm.Auth.Signature.AsSlice()
+	if len(sig) == 0 {
+		t.Fatal("signature is empty")
+	}
+	sig[0] ^= 0xFF
+	if err := aliceGroup.VerifyPublicMessage(pm); err == nil {
+		t.Fatal("VerifyPublicMessage should fail with tampered new member commit signature")
+	}
+}
+
+func TestSendMessage_UsesConfiguredPadding(t *testing.T) {
+	aliceNoPad, _, alicePrivNoPad, _ := setupTwoMemberGroup(t)
+	alicePad, _, alicePrivPad, _ := setupTwoMemberGroup(t)
+	alicePad.PaddingSize = 32
+
+	msg := []byte("short")
+	pmNoPad, err := aliceNoPad.SendMessage(msg, ciphersuite.NewSignaturePrivateKey(alicePrivNoPad.SignatureKey))
+	if err != nil {
+		t.Fatalf("SendMessage(no padding): %v", err)
+	}
+	pmPad, err := alicePad.SendMessage(msg, ciphersuite.NewSignaturePrivateKey(alicePrivPad.SignatureKey))
+	if err != nil {
+		t.Fatalf("SendMessage(with padding): %v", err)
+	}
+
+	if len(pmPad.Ciphertext) <= len(pmNoPad.Ciphertext) {
+		t.Fatalf("padded ciphertext len = %d, want > %d", len(pmPad.Ciphertext), len(pmNoPad.Ciphertext))
+	}
+}
+
+func TestSendApplicationMessage_UsesConfiguredPadding(t *testing.T) {
+	aliceNoPad, _, alicePrivNoPad, _ := setupTwoMemberGroup(t)
+	alicePad, _, alicePrivPad, _ := setupTwoMemberGroup(t)
+	alicePad.PaddingSize = 32
+
+	msg := []byte("short")
+	aad := []byte("aad")
+	pmNoPad, err := aliceNoPad.SendApplicationMessage(msg, aad, ciphersuite.NewSignaturePrivateKey(alicePrivNoPad.SignatureKey))
+	if err != nil {
+		t.Fatalf("SendApplicationMessage(no padding): %v", err)
+	}
+	pmPad, err := alicePad.SendApplicationMessage(msg, aad, ciphersuite.NewSignaturePrivateKey(alicePrivPad.SignatureKey))
+	if err != nil {
+		t.Fatalf("SendApplicationMessage(with padding): %v", err)
+	}
+
+	if len(pmPad.Ciphertext) <= len(pmNoPad.Ciphertext) {
+		t.Fatalf("padded ciphertext len = %d, want > %d", len(pmPad.Ciphertext), len(pmNoPad.Ciphertext))
+	}
 }
