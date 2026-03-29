@@ -183,7 +183,7 @@ func (gi *GroupInfo) MarshalTBS() []byte {
 	w.WriteRaw(gi.GroupContext.Marshal())
 	extBuf := tls.NewWriter()
 	for _, ext := range gi.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	w.WriteVLBytes(extBuf.Bytes())
@@ -200,7 +200,7 @@ func (gi *GroupInfo) Marshal() []byte {
 	// Extensions
 	extBuf := tls.NewWriter()
 	for _, ext := range gi.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	w.WriteVLBytes(extBuf.Bytes())
@@ -720,7 +720,7 @@ func JoinFromWelcomeWithContext(
 	ratchetTree := groupInfo.RatchetTree
 	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+		if ext.Type == mlsext.ExtensionTypeRatchetTree {
 			parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if parseErr == nil {
 				// RFC §7.4.1: wire format is minimal (no trailing blanks), but the

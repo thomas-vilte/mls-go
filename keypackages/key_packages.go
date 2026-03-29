@@ -15,6 +15,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
@@ -88,11 +89,8 @@ type Lifetime struct {
 // LeafNodeLifetime is an alias for Lifetime.
 type LeafNodeLifetime = Lifetime
 
-// Extension represents a KeyPackage extension.
-type Extension struct {
-	Type uint16
-	Data []byte
-}
+// Extension re-exports the canonical MLS extension type.
+type Extension = mlsext.Extension
 
 // DefaultCapabilities returns the default capabilities for DAVE compatibility.
 func DefaultCapabilities() *Capabilities {
@@ -110,7 +108,7 @@ func DefaultCapabilities() *Capabilities {
 // and is required for cross-interop (OpenMLS rejects KeyPackages where not_before >= now).
 func DefaultLifetime() *Lifetime {
 	now := uint64(time.Now().Unix())
-	margin := uint64(60 * 60)              // 1 hour back (matches OpenMLS DEFAULT_KEY_PACKAGE_LIFETIME_MARGIN_SECONDS)
+	margin := uint64(60 * 60)             // 1 hour back (matches OpenMLS DEFAULT_KEY_PACKAGE_LIFETIME_MARGIN_SECONDS)
 	lifetime := uint64(83 * 24 * 60 * 60) // 83 days forward; total range < OpenMLS MAX (7261200s ≈ 84 days)
 	return &Lifetime{
 		NotBefore: now - margin,
@@ -244,7 +242,7 @@ func (kp *KeyPackage) marshalTBS() []byte {
 	// Extensions<V>
 	extBuf := tls.NewWriter()
 	for _, ext := range kp.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
@@ -322,7 +320,7 @@ func (ln *LeafNode) marshalTBS() []byte {
 	// Extensions come AFTER the conditional source data.
 	extBuf := tls.NewWriter()
 	for _, ext := range ln.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
@@ -418,7 +416,7 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 			if err != nil {
 				break
 			}
-			exts = append(exts, Extension{Type: extType, Data: extData})
+			exts = append(exts, Extension{Type: mlsext.ExtensionType(extType), Data: extData})
 		}
 	}
 
@@ -485,7 +483,7 @@ func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
 			if err != nil {
 				break
 			}
-			exts = append(exts, Extension{Type: extType, Data: extData})
+			exts = append(exts, Extension{Type: mlsext.ExtensionType(extType), Data: extData})
 		}
 	}
 	signature, err := r.ReadVLBytes()
@@ -599,7 +597,7 @@ func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 				break
 			}
 			leafNode.Extensions = append(leafNode.Extensions, Extension{
-				Type: extType,
+				Type: mlsext.ExtensionType(extType),
 				Data: extData,
 			})
 		}
@@ -751,7 +749,7 @@ func (ln *LeafNode) Validate() error {
 		for _, ext := range ln.Extensions {
 			declared := false
 			for _, capExt := range ln.Capabilities.Extensions {
-				if ext.Type == capExt {
+				if uint16(ext.Type) == capExt {
 					declared = true
 					break
 				}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
@@ -102,7 +103,7 @@ func (gc *GroupContext) Marshal() []byte {
 	// Extensions
 	extBuf := tls.NewWriter()
 	for _, ext := range gc.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	w.WriteVLBytes(extBuf.Bytes())
@@ -182,7 +183,7 @@ func parseExtensions(data []byte) ([]Extension, error) {
 		}
 
 		extensions = append(extensions, Extension{
-			Type: extType,
+			Type: mlsext.ExtensionType(extType),
 			Data: extData,
 		})
 	}

@@ -2456,7 +2456,7 @@ func (g *Group) buildSignedGroupInfo(
 
 	// ratchet_tree extension (RFC 9420 §11.2.2) — use RFC interoperable format.
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: uint16(mlsext.ExtensionTypeRatchetTree),
+		Type: mlsext.ExtensionTypeRatchetTree,
 		Data: g.ratchetTree.MarshalTreeRFC(),
 	})
 
@@ -2473,7 +2473,7 @@ func (g *Group) buildSignedGroupInfo(
 	extPubW := tls.NewWriter()
 	extPubW.WriteVLBytes(externalPriv.PublicKey().Bytes())
 	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: uint16(mlsext.ExtensionTypeExternalPub),
+		Type: mlsext.ExtensionTypeExternalPub,
 		Data: extPubW.Bytes(),
 	})
 
@@ -2623,7 +2623,7 @@ func keyPackageExtensionsToTreeSync(exts []keypackages.Extension) [][]byte {
 	out := make([][]byte, len(exts))
 	for i, ext := range exts {
 		w := tls.NewWriter()
-		w.WriteUint16(ext.Type)
+		w.WriteUint16(uint16(ext.Type))
 		w.WriteVLBytes(ext.Data)
 		out[i] = w.Bytes()
 	}

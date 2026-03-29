@@ -523,7 +523,7 @@ func validateCapabilitiesCompatible(
 // in the GroupContext and parses it. Returns nil if not present or unparseable.
 func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapabilitiesExtension {
 	for _, ext := range pf.groupContext.Extensions {
-		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
+		if ext.Type == extensions.ExtensionTypeRequiredCapabilities {
 			caps, err := extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {
 				return nil
@@ -539,7 +539,7 @@ func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapa
 func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) error {
 	var reqCaps *extensions.RequiredCapabilitiesExtension
 	for _, ext := range newExts {
-		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
+		if ext.Type == extensions.ExtensionTypeRequiredCapabilities {
 			var err error
 			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {

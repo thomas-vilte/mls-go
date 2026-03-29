@@ -43,7 +43,7 @@ func ExternalCommit(
 	// HPKEPublicKey is VLBytes in TLS encoding; unwrap VL prefix to get raw key bytes.
 	var externalPubBytes []byte
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == uint16(mlsext.ExtensionTypeExternalPub) {
+		if ext.Type == mlsext.ExtensionTypeExternalPub {
 			r := tls.NewReader(ext.Data)
 			raw, err := r.ReadVLBytes()
 			if err == nil && len(raw) > 0 {
@@ -64,7 +64,7 @@ func ExternalCommit(
 	// parsed tree_hash doesn't match GroupInfo's tree_hash.
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+		if ext.Type == mlsext.ExtensionTypeRatchetTree {
 			parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
 			if err != nil {
 				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
