@@ -116,6 +116,7 @@ type Group struct {
 	epochHistory map[uint64]*epochState
 }
 
+// GroupID returns the unique identifier of the group.
 func (g *Group) GroupID() *GroupID {
 	if g == nil || g.groupID == nil {
 		return nil
@@ -123,6 +124,7 @@ func (g *Group) GroupID() *GroupID {
 	return NewGroupID(append([]byte(nil), g.groupID.AsSlice()...))
 }
 
+// Epoch returns the current epoch of the group.
 func (g *Group) Epoch() GroupEpoch {
 	if g == nil {
 		return 0
@@ -130,6 +132,7 @@ func (g *Group) Epoch() GroupEpoch {
 	return g.epoch
 }
 
+// CipherSuite returns the cipher suite used by the group.
 func (g *Group) CipherSuite() ciphersuite.CipherSuite {
 	if g == nil {
 		return 0
@@ -137,6 +140,7 @@ func (g *Group) CipherSuite() ciphersuite.CipherSuite {
 	return g.cipherSuite
 }
 
+// GroupContext returns a clone of the current group context.
 func (g *Group) GroupContext() *GroupContext {
 	if g == nil || g.groupContext == nil {
 		return nil
@@ -144,6 +148,7 @@ func (g *Group) GroupContext() *GroupContext {
 	return g.groupContext.Clone()
 }
 
+// OwnLeafIndex returns the leaf node index of the local member.
 func (g *Group) OwnLeafIndex() LeafNodeIndex {
 	if g == nil {
 		return 0
@@ -151,6 +156,7 @@ func (g *Group) OwnLeafIndex() LeafNodeIndex {
 	return g.ownLeafIndex
 }
 
+// PaddingSize returns the padding size used for encrypted application messages.
 func (g *Group) PaddingSize() int {
 	if g == nil {
 		return 0
@@ -158,6 +164,7 @@ func (g *Group) PaddingSize() int {
 	return g.paddingSize
 }
 
+// SetPaddingSize sets the padding size used for encrypted application messages.
 func (g *Group) SetPaddingSize(size int) {
 	if g == nil {
 		return
@@ -168,6 +175,7 @@ func (g *Group) SetPaddingSize(size int) {
 	g.paddingSize = size
 }
 
+// ConfirmationTag returns the confirmation tag of the current epoch.
 func (g *Group) ConfirmationTag() []byte {
 	if g == nil {
 		return nil
@@ -175,6 +183,7 @@ func (g *Group) ConfirmationTag() []byte {
 	return append([]byte(nil), g.confirmationTag...)
 }
 
+// InterimTranscriptHash returns the interim transcript hash of the current epoch.
 func (g *Group) InterimTranscriptHash() []byte {
 	if g == nil {
 		return nil
@@ -182,6 +191,7 @@ func (g *Group) InterimTranscriptHash() []byte {
 	return append([]byte(nil), g.interimTranscriptHash...)
 }
 
+// PendingCommit returns the currently staged commit, if any.
 func (g *Group) PendingCommit() *StagedCommit {
 	if g == nil {
 		return nil
@@ -189,6 +199,7 @@ func (g *Group) PendingCommit() *StagedCommit {
 	return g.pendingCommit
 }
 
+// LastCommittedProposals returns the list of proposals applied in the last commit.
 func (g *Group) LastCommittedProposals() []*Proposal {
 	if g == nil {
 		return nil
@@ -198,6 +209,7 @@ func (g *Group) LastCommittedProposals() []*Proposal {
 	return out
 }
 
+// MarshalRatchetTree serializes the group's ratchet tree.
 func (g *Group) MarshalRatchetTree() []byte {
 	if g == nil || g.ratchetTree == nil {
 		return nil
@@ -205,11 +217,63 @@ func (g *Group) MarshalRatchetTree() []byte {
 	return g.ratchetTree.MarshalTree()
 }
 
+// MarshalRatchetTreeRFC serializes the group's ratchet tree using the RFC 9420 format.
 func (g *Group) MarshalRatchetTreeRFC() []byte {
 	if g == nil || g.ratchetTree == nil {
 		return nil
 	}
 	return g.ratchetTree.MarshalTreeRFC()
+}
+
+// EpochSecrets returns the current epoch's derived secrets.
+func (g *Group) EpochSecrets() *schedule.EpochSecrets { return g.epochSecrets }
+
+// SecretTree returns the current epoch's secret tree.
+func (g *Group) SecretTree() *secrettree.Tree { return g.secretTree }
+
+// CachedPsks returns the PSK cache (resumption PSKs and LoadPsk entries).
+func (g *Group) CachedPsks() map[string][]byte { return g.cachedPsks }
+
+// Proposals returns the current proposal store.
+func (g *Group) Proposals() *ProposalStore { return g.proposals }
+
+// MyLeafEncryptionKey returns the private HPKE key bytes of the own leaf.
+func (g *Group) MyLeafEncryptionKey() []byte { return g.myLeafEncryptionKey }
+
+// StoreProposalWithRef stores a proposal with a pre-computed reference hash.
+func (g *Group) StoreProposalWithRef(p *Proposal, sender LeafNodeIndex, ref []byte) {
+	if g.proposalByRef == nil {
+		g.proposalByRef = make(map[string]*Proposal)
+	}
+	g.proposalByRef[string(ref)] = p
+	g.proposals.AddProposalWithRef(p, sender, ref)
+}
+
+// FindMemberBySigKey returns the leaf index of the member whose current leaf
+// node carries the given signature key bytes. Returns 0, false if not found.
+func (g *Group) FindMemberBySigKey(sigKeyBytes []byte) (LeafNodeIndex, bool) {
+	for leafIdx, member := range g.members {
+		if !member.Active {
+			continue
+		}
+		leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
+		if leaf != nil && leaf.LeafData != nil && bytes.Equal(leaf.LeafData.SigKeyBytes(), sigKeyBytes) {
+			return leafIdx, true
+		}
+	}
+	return 0, false
+}
+
+// IterateMembers calls f for each entry in the members map (active or not).
+func (g *Group) IterateMembers(f func(leafIdx LeafNodeIndex, m *Member)) {
+	for leafIdx, m := range g.members {
+		f(leafIdx, m)
+	}
+}
+
+// GetTreeLeaf returns the leaf node at the given index from the ratchet tree.
+func (g *Group) GetTreeLeaf(leafIdx LeafNodeIndex) *treesync.Node {
+	return g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
 }
 
 // epochState holds the decryption and verification material for a past epoch.
@@ -761,7 +825,8 @@ func (g *Group) CommitWithContext(
 	if err != nil {
 		return nil, fmt.Errorf("collecting PSKs from proposals: %w", err)
 	}
-	allPsks := append(proposalPsks, externalPsks...)
+	allPsks := append([]schedule.Psk(nil), proposalPsks...)
+	allPsks = append(allPsks, externalPsks...)
 	if _, err = newKS.ComputePskSecret(allPsks); err != nil {
 		return nil, fmt.Errorf("new epoch psk secret: %w", err)
 	}
@@ -853,6 +918,8 @@ func filteredDirectPathLevels(tree *treesync.RatchetTree, senderLeafIdx treesync
 // Path secrets: pathSecrets[0] = leaf_secret; pathSecrets[k] = DeriveSecret^k(leaf_secret, "path").
 // Filtered level m encrypts pathSecrets[N-F+m+1] so receivers derive the node key as
 // DeriveKeyPair(DeriveSecret(decrypted, "node")) and chain F-m times to commitSecret = pathSecrets[N+1].
+//
+//nolint:gocritic // Needs multiple returns to avoid allocating an intermediate struct in a hot path
 func (g *Group) createUpdatePath(
 	tree *treesync.RatchetTree,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,

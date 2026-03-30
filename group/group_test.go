@@ -534,24 +534,25 @@ func TestProcessPrivateMessage_AddProposal(t *testing.T) {
 }
 
 // TestProcessPrivateMessage_Commit verifies that un commit enviado como PrivateMessage
-// es procesado correctamente: el receptor descifra, verifica la firma, aplica el commit
-// y avanza al siguiente epoch.
+// TestProcessPrivateMessage_Commit verifies that a private commit message is
+// processed correctly: the receiver decrypts it, verifies the signature,
+// applies the commit, and advances to the next epoch.
 func TestProcessPrivateMessage_Commit(t *testing.T) {
 	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
 
-	// Alice agrega a charlie para que haya un UpdatePath no trivial.
+	// Alice adds Charlie so the UpdatePath is non-trivial.
 	charlie := newTestUser(t, "charlie-pm-commit")
 	if _, err := aliceGroup.AddMember(charlie.kp); err != nil {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice crea el commit en epoch 1.
+	// Alice creates the commit in epoch 1.
 	sc, err := aliceGroup.CommitWithFormat(alice.sigPriv, alice.sigPub, nil, framing.WireFormatPrivateMessage)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Cifrar el commit como PrivateMessage usando los secrets de epoch 1 de alice.
+	// Encrypt the commit as a PrivateMessage using Alice's epoch 1 secrets.
 	// Tanto alice como bob comparten los sames EpochSecrets y SecretTree (ver makeTwoMemberGroups).
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		AuthContent:      sc.authenticatedContent,
@@ -565,7 +566,7 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 		t.Fatalf("Encrypt commit as PrivateMessage: %v", err)
 	}
 
-	// Alice mergea su propio commit → epoch 2.
+	// Alice merges her own commit and moves to epoch 2.
 	if err := aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit(alice): %v", err)
 	}
@@ -573,7 +574,7 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 		t.Fatalf("alice epoch = %d, want 2", aliceGroup.epoch.AsUint64())
 	}
 
-	// Bob procesa el commit via PrivateMessage → también debe avanzar a epoch 2.
+	// Bob processes the PrivateMessage commit and must also move to epoch 2.
 	if err := bobGroup.ProcessPrivateMessage(pm); err != nil {
 		t.Fatalf("ProcessPrivateMessage(bob): %v", err)
 	}
@@ -586,7 +587,7 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
 
-	// Create un mensaje válido en epoch 1, pero luego falsificar la época en el wire.
+	// Create a valid epoch 1 message and then falsify the wire epoch.
 	content := framing.FramedContent{
 		GroupID:           aliceGroup.groupID.AsSlice(),
 		Epoch:             aliceGroup.epoch.AsUint64(),
@@ -616,17 +617,18 @@ func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_InvalidSignature verifies that mensajes con firma inválida
-// son rechazados. El contenido se cifra con una clave de firma diferente a la del sender
-// en el árbol, por lo que la verificación de FramedContentTBS fails.
+// TestProcessPrivateMessage_InvalidSignature verifies that messages with an
+// invalid signature are rejected. The content is encrypted with a signing key
+// that does not match the sender's key in the tree, so FramedContentTBS
+// verification must fail.
 func TestProcessPrivateMessage_InvalidSignature(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := makeTwoMemberGroups(t)
 
-	// Create una clave de firma impostora (no corresponde a ningún miembro del árbol).
+	// Create an impostor signing key that does not belong to any member.
 	impostor := newTestUser(t, "impostor")
 
 	// Create un proposal desde el punto de vista de alice (leaf 0), pero firmado
-	// con la clave del impostor. El árbol de bob tiene la clave pública de alice
+	// with the impostor key. Bob's tree still contains Alice's public key
 	// en leaf 0, por lo que la verificación failsrá.
 	content := framing.FramedContent{
 		GroupID:           bobGroup.groupID.AsSlice(),
@@ -642,7 +644,7 @@ func TestProcessPrivateMessage_InvalidSignature(t *testing.T) {
 		PaddingSize:      0,
 		SenderDataSecret: bobGroup.epochSecrets.SenderDataSecret,
 		SecretTree:       bobGroup.secretTree,
-		SigKey:           impostor.sigPriv, // firma inválida
+		SigKey:           impostor.sigPriv, // invalid signature
 		GroupContext:     bobGroup.groupContext.Marshal(),
 	})
 	if err != nil {

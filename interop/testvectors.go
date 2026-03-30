@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -412,12 +413,13 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 
 // ExportToFile exports test vectors to a JSON file.
 func (tvs *TestVectorSet) ExportToFile(filename string) error {
+	cleanFilename := filepath.Clean(filename)
 	data, err := json.MarshalIndent(tvs, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling test vectors: %w", err)
 	}
 
-	err = os.WriteFile(filename, data, 0o644)
+	err = os.WriteFile(cleanFilename, data, 0o600)
 	if err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
@@ -427,7 +429,8 @@ func (tvs *TestVectorSet) ExportToFile(filename string) error {
 
 // ImportFromFile imports test vectors from a JSON file.
 func ImportFromFile(filename string) (*TestVectorSet, error) {
-	data, err := os.ReadFile(filename)
+	cleanFilename := filepath.Clean(filename)
+	data, err := os.ReadFile(cleanFilename)
 	if err != nil {
 		return nil, fmt.Errorf("reading file: %w", err)
 	}

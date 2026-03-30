@@ -64,15 +64,16 @@ func ExternalCommit(
 	// parsed tree_hash doesn't match GroupInfo's tree_hash.
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == mlsext.ExtensionTypeRatchetTree {
-			parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
-			if err != nil {
-				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
-			}
-			parsed = parsed.ExpandToPowerOf2()
-			tree = parsed
-			break
+		if ext.Type != mlsext.ExtensionTypeRatchetTree {
+			continue
 		}
+		parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
+		}
+		parsed = parsed.ExpandToPowerOf2()
+		tree = parsed
+		break
 	}
 	if tree == nil {
 		return nil, nil, fmt.Errorf("ratchet tree not present in GroupInfo")

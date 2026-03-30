@@ -53,7 +53,7 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice hace commit
+	// Alice commits the add proposal.
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	aliceSigPub := aliceSigPriv.PublicKey()
 
@@ -174,7 +174,7 @@ func TestProcessCommit_Valid(t *testing.T) {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice hace commit
+	// Alice commits the add proposal.
 	stagedCommit, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -211,8 +211,8 @@ func TestProcessCommit_Valid(t *testing.T) {
 }
 
 // TestProcessCommit_WrongEpoch verifies that a commit with incorrect epoch fails.
-// ProcessCommit no valida el epoch (solo llama a MergeCommit).
-// La validación de epoch existe únicamente en ReceiveMessage. RFC §12.4.1 gap.
+// ProcessCommit does not validate the epoch because it delegates to MergeCommit.
+// Epoch validation currently exists only in ReceiveMessage. RFC §12.4.1 gap.
 func TestProcessCommit_WrongEpoch(t *testing.T) {
 	t.Skip("epoch validation not implemented in ProcessCommit - RFC §12.4.1 gap")
 }

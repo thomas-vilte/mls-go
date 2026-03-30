@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestSignature_GenerateVerify prueba la generación y verificación de firmas.
+// TestSignature_GenerateVerify verifies signature generation and verification.
 func TestSignature_GenerateVerify(t *testing.T) {
 	// Generar key pair
 	privKey, err := GenerateSignaturePrivateKey()
@@ -32,7 +32,7 @@ func TestSignature_GenerateVerify(t *testing.T) {
 		t.Fatal("PublicKey() returned nil")
 	}
 
-	// Crear MLSSignaturePublicKey
+	// Create MLSSignaturePublicKey.
 	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
 	// Verify
@@ -42,7 +42,7 @@ func TestSignature_GenerateVerify(t *testing.T) {
 	}
 }
 
-// TestSignature_WrongData prueba que falla con datos modificados.
+// TestSignature_WrongData verifies that modified data fails verification.
 func TestSignature_WrongData(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
@@ -54,14 +54,14 @@ func TestSignature_WrongData(t *testing.T) {
 	// Modificar datos
 	wrongData := []byte("Modified message")
 
-	// Verify con datos modificados debe fallar
+	// Verification with modified data must fail.
 	err := mlsPubKey.Verify(wrongData, signature)
 	if err == nil {
 		t.Error("Verify() should fail with modified data")
 	}
 }
 
-// TestSignature_TamperedSignature prueba que falla con signature modificada.
+// TestSignature_TamperedSignature verifies that a tampered signature fails.
 func TestSignature_TamperedSignature(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
@@ -77,14 +77,14 @@ func TestSignature_TamperedSignature(t *testing.T) {
 
 	tamperedSignature := NewSignature(tamperedSig)
 
-	// Verify con signature modificada debe fallar
+	// Verification with a tampered signature must fail.
 	err := mlsPubKey.Verify(data, tamperedSignature)
 	if err == nil {
 		t.Error("Verify() should fail with tampered signature")
 	}
 }
 
-// TestSignature_EmptyData prueba firma de datos vacíos.
+// TestSignature_EmptyData verifies signing empty input.
 func TestSignature_EmptyData(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
@@ -106,7 +106,7 @@ func TestSignature_EmptyData(t *testing.T) {
 	}
 }
 
-// TestSignature_LargeData prueba firma de datos grandes.
+// TestSignature_LargeData verifies signing large input.
 func TestSignature_LargeData(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
@@ -132,7 +132,7 @@ func TestSignature_LargeData(t *testing.T) {
 	}
 }
 
-// TestSignature_PublicKeyFormat prueba el formato de la public key.
+// TestSignature_PublicKeyFormat verifies the public key encoding.
 func TestSignature_PublicKeyFormat(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	pubKey := privKey.PublicKey()
@@ -156,7 +156,7 @@ func TestSignature_PublicKeyFormat(t *testing.T) {
 	}
 }
 
-// TestSignature_InvalidPublicKeyFormat prueba que falla con formato inválido.
+// TestSignature_InvalidPublicKeyFormat verifies that invalid key formats fail.
 func TestSignature_InvalidPublicKeyFormat(t *testing.T) {
 	// Formato inválido (muy corto)
 	invalidKey := []byte("too short")
@@ -174,7 +174,7 @@ func TestSignature_InvalidPublicKeyFormat(t *testing.T) {
 	}
 }
 
-// TestSignContent prueba la creación y serialización de SignContent.
+// TestSignContent verifies SignContent creation and marshaling.
 func TestSignContent(t *testing.T) {
 	label := "test label"
 	content := []byte("content to sign")
@@ -199,7 +199,7 @@ func TestSignContent(t *testing.T) {
 	}
 }
 
-// TestSignWithLabel prueba el firmado con label específico.
+// TestSignWithLabel verifies labeled signing.
 func TestSignWithLabel(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
@@ -222,7 +222,7 @@ func TestSignWithLabel(t *testing.T) {
 	}
 }
 
-// TestSignature_Deterministic prueba que firmas del mismo dato son diferentes (por diseño ECDSA).
+// TestSignature_Deterministic verifies that ECDSA signatures differ for the same input.
 func TestSignature_NonDeterministic(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	data := []byte("Same data")
@@ -231,12 +231,12 @@ func TestSignature_NonDeterministic(t *testing.T) {
 	sig1, _ := privKey.Sign(data)
 	sig2, _ := privKey.Sign(data)
 
-	// Las firmas deberían ser diferentes (ECDSA usa randomness)
+	// Signatures should differ because ECDSA uses randomness.
 	if bytes.Equal(sig1.AsSlice(), sig2.AsSlice()) {
 		t.Error("ECDSA signatures should be non-deterministic")
 	}
 
-	// Pero ambas deberían verificar
+	// Both signatures should still verify.
 	pubKey := privKey.PublicKey()
 	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
@@ -248,7 +248,7 @@ func TestSignature_NonDeterministic(t *testing.T) {
 	}
 }
 
-// TestSignature_KeyConsistency prueba que la public key es consistente.
+// TestSignature_KeyConsistency verifies public key consistency.
 func TestSignature_KeyConsistency(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 

@@ -375,7 +375,7 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
 }
 
-// CreateWelcome generates a Welcome message for new members per RFC 9420 §12.4.3.1.
+// CreateWelcomeOptions configures Welcome message creation.
 //
 // The Welcome message allows new members to join an existing group by providing
 // them with the necessary cryptographic state to participate in the group.

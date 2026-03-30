@@ -81,6 +81,7 @@ type cachedGenSecret struct {
 // for out-of-order delivery. RFC 9420 §9.2 leaves this as a local decision.
 const maxCachedGenerations = 2048
 
+// LeafSecret tracks the per-leaf secret ratchets used for message protection.
 type LeafSecret struct {
 	cs                       ciphersuite.CipherSuite
 	leafIndex                uint32

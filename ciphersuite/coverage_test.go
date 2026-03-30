@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestHashReference prueba las referencias hash.
+// TestHashReference verifies hash references.
 func TestHashReference(t *testing.T) {
 	data := []byte("test data for hash reference")
 
@@ -28,7 +28,7 @@ func TestHashReference(t *testing.T) {
 	}
 }
 
-// TestMakeKeyPackageRef prueba la creación de referencias a KeyPackage.
+// TestMakeKeyPackageRef verifies KeyPackage reference creation.
 func TestMakeKeyPackageRef(t *testing.T) {
 	data := []byte("key package data")
 
@@ -44,7 +44,7 @@ func TestMakeKeyPackageRef(t *testing.T) {
 	}
 }
 
-// TestMakeProposalRef prueba la creación de referencias a Proposals.
+// TestMakeProposalRef verifies proposal reference creation.
 func TestMakeProposalRef(t *testing.T) {
 	data := []byte("proposal data")
 
@@ -60,7 +60,7 @@ func TestMakeProposalRef(t *testing.T) {
 	}
 }
 
-// TestHashReferenceMarshal prueba el marshaling de HashReference.
+// TestHashReferenceMarshal verifies HashReference marshaling.
 func TestHashReferenceMarshal(t *testing.T) {
 	// Usar datos de 32 bytes para simular un hash real
 	data := make([]byte, 32)
@@ -82,7 +82,7 @@ func TestHashReferenceMarshal(t *testing.T) {
 	}
 }
 
-// TestMakeHashReference prueba la función interna makeHashReference.
+// TestMakeHashReference verifies the internal makeHashReference helper.
 func TestMakeHashReference(t *testing.T) {
 	data := []byte("test data for internal hash")
 	label := []byte("test label")
@@ -98,7 +98,7 @@ func TestMakeHashReference(t *testing.T) {
 	}
 }
 
-// TestMac prueba las operaciones MAC.
+// TestMac verifies MAC operations.
 func TestMac(t *testing.T) {
 	value := []byte("mac value")
 
@@ -141,7 +141,7 @@ func TestMac(t *testing.T) {
 	}
 }
 
-// TestReuseGuard prueba las operaciones de ReuseGuard.
+// TestReuseGuard verifies ReuseGuard operations.
 func TestReuseGuard(t *testing.T) {
 	// NewReuseGuardRandom
 	rg, err := NewReuseGuardRandom()
@@ -175,7 +175,7 @@ func TestReuseGuard(t *testing.T) {
 	}
 }
 
-// TestSecret_FromSlice prueba FromSlice.
+// TestSecret_FromSlice verifies FromSlice.
 func TestSecret_FromSlice(t *testing.T) {
 	var secret Secret
 	data := []byte("secret data")
@@ -189,7 +189,7 @@ func TestSecret_FromSlice(t *testing.T) {
 	}
 }
 
-// TestSignaturePublicKeyMethods prueba métodos de SignaturePublicKey.
+// TestSignaturePublicKeyMethods verifies SignaturePublicKey methods.
 func TestSignaturePublicKeyMethods(t *testing.T) {
 	pubKey, _ := GenerateSignaturePrivateKey()
 	pubKeyBytes := pubKey.PublicKey().AsSlice()
@@ -207,7 +207,7 @@ func TestSignaturePublicKeyMethods(t *testing.T) {
 	}
 }
 
-// TestMLSSignaturePublicKeyMethods prueba métodos de MLSSignaturePublicKey.
+// TestMLSSignaturePublicKeyMethods verifies MLSSignaturePublicKey methods.
 func TestMLSSignaturePublicKeyMethods(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	pubKey := privKey.PublicKey()
@@ -232,7 +232,7 @@ func TestMLSSignaturePublicKeyMethods(t *testing.T) {
 	}
 }
 
-// TestSignatureError prueba SignatureError.
+// TestSignatureError verifies SignatureError.
 func TestSignatureError(t *testing.T) {
 	err := ErrVerificationError
 	str := err.Error()
@@ -247,7 +247,7 @@ func TestSignatureError(t *testing.T) {
 	}
 }
 
-// TestCryptoError prueba CryptoError.
+// TestCryptoError verifies CryptoError.
 func TestCryptoError(t *testing.T) {
 	// Los errores modernos son variables, no tipos
 	// Verificamos que los errores estándar existen y funcionan
@@ -261,7 +261,7 @@ func TestCryptoError(t *testing.T) {
 	}
 }
 
-// TestAeadAlgorithmMethods prueba métodos de AeadAlgorithm.
+// TestAeadAlgorithmMethods verifies AeadAlgorithm methods.
 func TestAeadAlgorithmMethods(t *testing.T) {
 	// NonceLength
 	nonceLen := AES128GCM.NonceLength()
@@ -270,7 +270,7 @@ func TestAeadAlgorithmMethods(t *testing.T) {
 	}
 }
 
-// TestHashAlgorithmMethods prueba métodos de HashAlgorithm.
+// TestHashAlgorithmMethods verifies HashAlgorithm methods.
 func TestHashAlgorithmMethods(t *testing.T) {
 	// Size
 	size := SHA256.Size()
@@ -279,7 +279,7 @@ func TestHashAlgorithmMethods(t *testing.T) {
 	}
 }
 
-// TestKEMAlgorithmMethods prueba métodos de KEMAlgorithm.
+// TestKEMAlgorithmMethods verifies KEMAlgorithm methods.
 func TestKEMAlgorithmMethods(t *testing.T) {
 	str := DHKEM_P256_HKDF_SHA256.String()
 	if str == "" {
@@ -287,7 +287,7 @@ func TestKEMAlgorithmMethods(t *testing.T) {
 	}
 }
 
-// TestKDFAlgorithmMethods prueba métodos de KDFAlgorithm.
+// TestKDFAlgorithmMethods verifies KDFAlgorithm methods.
 func TestKDFAlgorithmMethods(t *testing.T) {
 	str := HKDF_SHA256.String()
 	if str == "" {
@@ -295,7 +295,7 @@ func TestKDFAlgorithmMethods(t *testing.T) {
 	}
 }
 
-// TestHpkeCiphertext prueba HpkeCiphertext.
+// TestHpkeCiphertext verifies HpkeCiphertext.
 func TestHpkeCiphertext(t *testing.T) {
 	ciphertext := &HpkeCiphertext{
 		KEMOutput:  []byte("kem output"),

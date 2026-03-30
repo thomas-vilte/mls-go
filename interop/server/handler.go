@@ -268,7 +268,7 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 		s.encryptHandshake.Store(stateID, true)
 	}
 
-	log.Printf("JoinGroup: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+	log.Printf("JoinGroup: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex(), 0)
 
 	return &proto.JoinGroupResponse{
 		StateId:            stateID,
@@ -280,7 +280,7 @@ func (s *Server) collectResumptionPSKs() map[string][]byte {
 	psks := make(map[string][]byte)
 	s.groups.Range(func(_, value interface{}) bool {
 		g := value.(*group.Group)
-		for k, v := range g.CachedPsks {
+		for k, v := range g.CachedPsks() {
 			psks[k] = append([]byte(nil), v...)
 		}
 		return true
@@ -312,7 +312,7 @@ func (s *Server) GroupInfo(ctx context.Context, req *proto.GroupInfoRequest) (*p
 
 	var ratchetTree []byte
 	if req.ExternalTree {
-		ratchetTree = g.RatchetTree.MarshalTreeRFC()
+		ratchetTree = g.MarshalRatchetTreeRFC()
 	}
 
 	return &proto.GroupInfoResponse{
@@ -476,7 +476,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 		rtree := groupInfo.RatchetTree
 		if rtree == nil {
 			for _, ext := range groupInfo.Extensions {
-				if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
+				if ext.Type == mlsext.ExtensionTypeRatchetTree {
 					parsed, parseErr := treesync.UnmarshalTreeFromExtension(ext.Data, cs)
 					if parseErr == nil {
 						rtree = parsed
@@ -512,8 +512,8 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 
 	// Build ExternalCommit wire bytes: PublicMessage wrapping the signed AC.
 	pm := &framing.PublicMessage{
-		Content: staged.AuthenticatedContent.Content,
-		Auth:    staged.AuthenticatedContent.Auth,
+		Content: staged.AuthenticatedContent().Content,
+		Auth:    staged.AuthenticatedContent().Auth,
 	}
 	commitData := framing.NewMLSMessagePublic(pm).Marshal()
 
@@ -521,7 +521,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 	s.groups.Store(stateID, g)
 	s.signers.Store(stateID, sigPrivKey)
 
-	log.Printf("ExternalJoin: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+	log.Printf("ExternalJoin: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex(), 0)
 
 	return &proto.ExternalJoinResponse{
 		StateId:            stateID,
@@ -532,7 +532,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 
 // AddProposal creates an add proposal (Oleada 2).
 //
-// AddMember stores the proposal in g.Proposals automatically (RFC 9420 §12.1).
+// AddMember stores the proposal in g.Proposals() automatically (RFC 9420 §12.1).
 // The returned bytes are the raw Proposal TLV, used by the test runner to
 // reference proposals by value in subsequent Commit and HandleCommit calls.
 func (s *Server) AddProposal(ctx context.Context, req *proto.AddProposalRequest) (*proto.ProposalResponse, error) {
@@ -574,14 +574,14 @@ func (s *Server) UpdateProposal(ctx context.Context, req *proto.UpdateProposalRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "creating update proposal: %v", err)
 	}
-	log.Printf("UpdateProposal: state_id=%d ownLeaf=%d PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex, g.PendingUpdatePrivKey != nil)
+	log.Printf("UpdateProposal: state_id=%d ownLeaf=%d PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex(), false)
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
 // RemoveProposal creates a remove proposal (Oleada 2).
 //
 // Searches members by identity bytes to find the target leaf index.
-// RemoveMember stores the proposal in g.Proposals (RFC 9420 §12.1).
+// RemoveMember stores the proposal in g.Proposals() (RFC 9420 §12.1).
 func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
@@ -593,13 +593,12 @@ func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRe
 	// tree is sparse, so MemberCount() as a loop bound would miss high leaf indices.
 	targetLeafIndex := group.LeafNodeIndex(0)
 	found := false
-	for leafIdx, m := range g.Members {
-		if m.Active && string(m.Credential.Identity) == string(req.RemovedId) {
+	g.IterateMembers(func(leafIdx group.LeafNodeIndex, m *group.Member) {
+		if !found && m.Active && string(m.Credential.Identity) == string(req.RemovedId) {
 			targetLeafIndex = leafIdx
 			found = true
-			break
 		}
-	}
+	})
 
 	if !found {
 		return nil, status.Errorf(codes.NotFound, "member with identity %s not found", req.RemovedId)
@@ -622,7 +621,7 @@ func (s *Server) ExternalPSKProposal(ctx context.Context, req *proto.ExternalPSK
 	g := gVal.(*group.Group)
 
 	// RFC §8.4: psk_nonce MUST be a fresh random value of length KDF.Nh.
-	nonce := make([]byte, g.CipherSuite.HashLength())
+	nonce := make([]byte, g.CipherSuite().HashLength())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, status.Errorf(codes.Internal, "generating psk nonce: %v", err)
 	}
@@ -630,7 +629,7 @@ func (s *Server) ExternalPSKProposal(ctx context.Context, req *proto.ExternalPSK
 	proposal := group.NewPreSharedKeyProposal(1 /* external */, req.PskId)
 	proposal.PreSharedKey.PskID.Nonce = nonce
 
-	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
@@ -643,7 +642,7 @@ func (s *Server) ResumptionPSKProposal(ctx context.Context, req *proto.Resumptio
 	}
 	g := gVal.(*group.Group)
 
-	nonce := make([]byte, g.CipherSuite.HashLength())
+	nonce := make([]byte, g.CipherSuite().HashLength())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, status.Errorf(codes.Internal, "generating psk nonce: %v", err)
 	}
@@ -655,14 +654,14 @@ func (s *Server) ResumptionPSKProposal(ctx context.Context, req *proto.Resumptio
 			PskID: group.PskID{
 				PskType:    2,
 				Usage:      1, // application
-				PskGroupID: g.GroupID.AsSlice(),
+				PskGroupID: g.GroupID().AsSlice(),
 				PskEpoch:   req.EpochId,
 				Nonce:      nonce,
 			},
 		},
 	}
 
-	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
@@ -676,11 +675,11 @@ func (s *Server) GroupContextExtensionsProposal(ctx context.Context, req *proto.
 
 	exts := make([]group.Extension, len(req.Extensions))
 	for i, e := range req.Extensions {
-		exts[i] = group.Extension{Type: uint16(e.ExtensionType), Data: e.ExtensionData}
+		exts[i] = group.Extension{Type: mlsext.ExtensionType(e.ExtensionType), Data: e.ExtensionData}
 	}
 
 	proposal := group.NewGroupContextExtensionsProposal(exts)
-	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
@@ -715,15 +714,21 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 		// RemovedId is the identity bytes; find the leaf index.
 		// Iterate the Members map directly: after removals the tree is sparse,
 		// so using MemberCount() as an upper bound on leaf indices is wrong.
-		for leafIdx, m := range g.Members {
-			if m.Active && string(m.Credential.Identity) == string(desc.RemovedId) {
-				return group.NewRemoveProposal(leafIdx), nil
+		var removedLeaf group.LeafNodeIndex
+		removedFound := false
+		g.IterateMembers(func(leafIdx group.LeafNodeIndex, m *group.Member) {
+			if !removedFound && m.Active && string(m.Credential.Identity) == string(desc.RemovedId) {
+				removedLeaf = leafIdx
+				removedFound = true
 			}
+		})
+		if !removedFound {
+			return nil, fmt.Errorf("member with identity %s not found", desc.RemovedId)
 		}
-		return nil, fmt.Errorf("member with identity %s not found", desc.RemovedId)
+		return group.NewRemoveProposal(removedLeaf), nil
 
 	case "externalPSK":
-		nonce := make([]byte, g.CipherSuite.HashLength())
+		nonce := make([]byte, g.CipherSuite().HashLength())
 		if _, err := rand.Read(nonce); err != nil {
 			return nil, fmt.Errorf("generating psk nonce: %w", err)
 		}
@@ -732,8 +737,8 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 		return p, nil
 
 	case "resumptionPSK":
-		log.Printf("[BYVAL PSK] epochID=%d currentEpoch=%d", desc.EpochId, g.GroupContext.Epoch.AsUint64())
-		nonce := make([]byte, g.CipherSuite.HashLength())
+		log.Printf("[BYVAL PSK] epochID=%d currentEpoch=%d", desc.EpochId, g.GroupContext().Epoch.AsUint64())
+		nonce := make([]byte, g.CipherSuite().HashLength())
 		if _, err := rand.Read(nonce); err != nil {
 			return nil, fmt.Errorf("generating psk nonce: %w", err)
 		}
@@ -744,7 +749,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 				PskID: group.PskID{
 					PskType:    2,
 					Usage:      1,
-					PskGroupID: g.GroupID.AsSlice(),
+					PskGroupID: g.GroupID().AsSlice(),
 					PskEpoch:   desc.EpochId,
 					Nonce:      nonce,
 				},
@@ -754,7 +759,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 	case "groupContextExtensions":
 		exts := make([]group.Extension, len(desc.Extensions))
 		for i, e := range desc.Extensions {
-			exts[i] = group.Extension{Type: uint16(e.ExtensionType), Data: e.ExtensionData}
+			exts[i] = group.Extension{Type: mlsext.ExtensionType(e.ExtensionType), Data: e.ExtensionData}
 		}
 		return group.NewGroupContextExtensionsProposal(exts), nil
 
@@ -767,7 +772,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 //
 // Flow per RFC 9420 §12.4:
 //  1. Capture OLD epoch init_secret (needed for Welcome's joiner_secret derivation).
-//  2. CommitWithFormat → *StagedCommit (stores staged in g.PendingCommit).
+//  2. CommitWithFormat → *StagedCommit (stores staged in g.PendingCommit()).
 //  3. MergeCommit → advances committer's epoch to StateOperational.
 //  4. CreateWelcome for any new members added via pending Add proposals.
 //
@@ -785,7 +790,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	}
 	sigKey := signerVal.(*ciphersuite.SignaturePrivateKey)
 
-	// Add byReference proposals from other actors that aren't in g.Proposals yet.
+	// Add byReference proposals from other actors that aren't in g.Proposals() yet.
 	//
 	// Bytes may be either raw proposal bytes (group.ProposalMarshal output) or a
 	// full MLSMessage wrapping a PublicMessage (from ExternalSignerProposal/NewMemberAddProposal).
@@ -796,7 +801,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 		}
 		// Only add if not already present (own proposals are already there).
 		alreadyPresent := false
-		for _, sp := range g.Proposals.Proposals {
+		for _, sp := range g.Proposals().Proposals {
 			if string(group.ProposalMarshal(sp.Proposal)) == string(rawProp) {
 				alreadyPresent = true
 				break
@@ -809,38 +814,27 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 		// member whose current signature key matches the new leaf node's sig key
 		// (RFC §12.1.2: a member updates their own leaf). Default to OwnLeafIndex
 		// for other proposal types where sender identity doesn't affect validation.
-		sender := g.OwnLeafIndex
+		sender := g.OwnLeafIndex()
 		if p.Type == group.ProposalTypeUpdate && p.Update != nil {
 			newSigKey := p.Update.LeafNode.SignatureKeyBytes
-			// Iterate Members map directly: after removals the tree is sparse,
-			// so using MemberCount() as an upper bound on leaf indices is wrong.
-			for leafIdx, m := range g.Members {
-				if !m.Active {
-					continue
-				}
-				leaf := g.RatchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
-				if leaf != nil && leaf.LeafData != nil {
-					if string(leaf.LeafData.SigKeyBytes()) == string(newSigKey) {
-						sender = leafIdx
-						break
-					}
-				}
+			if idx, ok := g.FindMemberBySigKey(newSigKey); ok {
+				sender = idx
 			}
 		}
 		if len(ref) > 0 {
-			g.Proposals.AddProposalWithRef(p, sender, ref)
+			g.Proposals().AddProposalWithRef(p, sender, ref)
 		} else {
-			g.Proposals.AddProposal(p, sender)
+			g.Proposals().AddProposal(p, sender)
 		}
 	}
 
-	// Add any inline (byValue) proposals to g.Proposals before committing.
+	// Add any inline (byValue) proposals to g.Proposals() before committing.
 	for _, desc := range req.ByValue {
 		p, err := s.proposalFromDescription(g, desc)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "byValue proposal: %v", err)
 		}
-		g.Proposals.AddProposal(p, g.OwnLeafIndex)
+		g.Proposals().AddProposal(p, g.OwnLeafIndex())
 	}
 
 	encryptHS := s.isEncryptHandshake(req.StateId)
@@ -857,15 +851,15 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// staged.JoinerSecret is the actual joiner_secret = ExpandWithLabel(intermediate, "joiner", GC, Nh),
 	// cloned in CommitWithFormat before ComputePskSecret zeroes it via HKDFExtract.
 	// staged.RootPathSecret (commit_secret) is also zeroed by that point — don't use it.
-	joinerSecret := staged.JoinerSecret
+	joinerSecret := staged.JoinerSecret()
 
 	// Save old-epoch sender_data_secret and SecretTree for PrivateMessage encryption below.
 	// These will be moved to EpochHistory by MergeCommit, so capture before advancing.
 	var oldSenderDataSecret *ciphersuite.Secret
-	if encryptHS && g.EpochSecrets != nil {
-		oldSenderDataSecret = g.EpochSecrets.SenderDataSecret
+	if encryptHS && g.EpochSecrets() != nil {
+		oldSenderDataSecret = g.EpochSecrets().SenderDataSecret
 	}
-	oldSecretTreeVal := g.SecretTree
+	oldSecretTreeVal := g.SecretTree()
 
 	// Advance committer's own epoch; CreateWelcome requires StateOperational.
 	if err := g.MergeCommit(staged); err != nil {
@@ -874,7 +868,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 
 	// Collect key packages of newly added members from the commit's proposals.
 	var newMemberKPs []*keypackages.KeyPackage
-	for _, prop := range staged.Proposals {
+	for _, prop := range staged.Proposals() {
 		if prop.Type == group.ProposalTypeAdd && prop.Add != nil {
 			newMemberKPs = append(newMemberKPs, prop.Add.KeyPackage)
 		}
@@ -885,9 +879,9 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	if encryptHS && oldSenderDataSecret != nil {
 		// Encrypt commit as PrivateMessage using old-epoch secrets.
 		privMsg, encErr := framing.Encrypt(framing.EncryptParams{
-			AuthContent:      staged.AuthenticatedContent,
-			SenderLeafIndex:  uint32(g.OwnLeafIndex),
-			CipherSuite:      g.CipherSuite,
+			AuthContent:      staged.AuthenticatedContent(),
+			SenderLeafIndex:  uint32(g.OwnLeafIndex()),
+			CipherSuite:      g.CipherSuite(),
 			PaddingSize:      0,
 			SenderDataSecret: oldSenderDataSecret,
 			SecretTree:       oldSecretTreeVal,
@@ -898,9 +892,9 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 		commitData = framing.NewMLSMessagePrivate(privMsg).Marshal()
 	} else {
 		pm := &framing.PublicMessage{
-			Content:       staged.AuthenticatedContent.Content,
-			Auth:          staged.AuthenticatedContent.Auth,
-			MembershipTag: staged.MembershipTag,
+			Content:       staged.AuthenticatedContent().Content,
+			Auth:          staged.AuthenticatedContent().Auth,
+			MembershipTag: staged.MembershipTag(),
 		}
 		commitData = framing.NewMLSMessagePublic(pm).Marshal()
 	}
@@ -923,10 +917,10 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 
 	var ratchetTree []byte
 	if req.ExternalTree {
-		ratchetTree = g.RatchetTree.MarshalTreeRFC()
+		ratchetTree = g.MarshalRatchetTreeRFC()
 	}
 
-	log.Printf("Commit: state_id=%d ownLeaf=%d pnpkLen=%d", req.StateId, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+	log.Printf("Commit: state_id=%d ownLeaf=%d pnpkLen=%d", req.StateId, g.OwnLeafIndex(), 0)
 
 	return &proto.CommitResponse{
 		Commit:      commitData,
@@ -963,22 +957,22 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pubMsg.Content,
 			Auth:         pubMsg.Auth,
-			GroupContext: g.GroupContext.Marshal(),
+			GroupContext: g.GroupContext().Marshal(),
 		}
 		senderLeafIdx = treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
 	} else if privMsg, isPriv := msg.AsPrivate(); isPriv {
 		// PrivateMessage commit: decrypt using current epoch secrets.
-		if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
+		if g.EpochSecrets() == nil || g.EpochSecrets().SenderDataSecret == nil {
 			return nil, status.Errorf(codes.Internal, "sender_data_secret not available for PrivateMessage commit")
 		}
-		if g.SecretTree == nil {
+		if g.SecretTree() == nil {
 			return nil, status.Errorf(codes.Internal, "secret tree not available for PrivateMessage commit")
 		}
 		decrypted, decErr := framing.Decrypt(privMsg, framing.DecryptParams{
-			CipherSuite:      g.CipherSuite,
-			SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-			SecretTree:       g.SecretTree,
-			GroupContext:     g.GroupContext.Marshal(),
+			CipherSuite:      g.CipherSuite(),
+			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
+			SecretTree:       g.SecretTree(),
+			GroupContext:     g.GroupContext().Marshal(),
 		})
 		if decErr != nil {
 			return nil, status.Errorf(codes.Internal, "decrypting PrivateMessage commit: %v", decErr)
@@ -1005,8 +999,8 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 		}
 	}
 
-	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex, g.Epoch, g.InterimTranscriptHash, g.PendingUpdatePrivKey != nil)
-	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey); err != nil {
+	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex(), g.Epoch, g.InterimTranscriptHash, false)
+	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return nil, status.Errorf(codes.Internal, "processing commit: %v", err)
 	}
 
@@ -1018,7 +1012,7 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 	s.propagateEncryptHandshake(req.StateId, newStateID)
 	s.freeState(req.StateId)
 
-	log.Printf("HandleCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+	log.Printf("HandleCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex(), 0)
 
 	return &proto.HandleCommitResponse{
 		StateId:            newStateID,
@@ -1040,8 +1034,8 @@ func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendi
 
 	// If for any reason the commit was not yet merged (e.g. state is StatePendingCommit),
 	// apply it now. Otherwise this is a no-op (Commit already merged above).
-	if g.PendingCommit != nil {
-		if err := g.MergeCommit(g.PendingCommit); err != nil {
+	if g.PendingCommit() != nil {
+		if err := g.MergeCommit(g.PendingCommit()); err != nil {
 			return nil, status.Errorf(codes.Internal, "merging pending commit: %v", err)
 		}
 	}
@@ -1054,7 +1048,7 @@ func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendi
 	s.propagateEncryptHandshake(req.StateId, newStateID)
 	s.freeState(req.StateId)
 
-	log.Printf("HandlePendingCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex, len(g.PathNodePrivKeys))
+	log.Printf("HandlePendingCommit: in=%d out=%d ownLeaf=%d pnpkLen=%d", req.StateId, newStateID, g.OwnLeafIndex(), 0)
 
 	return &proto.HandleCommitResponse{
 		StateId:            newStateID,
@@ -1078,7 +1072,7 @@ func (s *Server) ReInitProposal(ctx context.Context, req *proto.ReInitProposalRe
 	)
 
 	// Store proposal in the group so it is picked up by the next Commit.
-	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
 
 	return s.proposalResponse(g, req.StateId, proposal)
 }
@@ -1105,14 +1099,14 @@ func (s *Server) HandlePendingReInitCommit(ctx context.Context, req *proto.Handl
 
 	// Capture proposals before MergeCommit clears them.
 	var proposals []*group.Proposal
-	if g.PendingCommit != nil {
-		proposals = g.PendingCommit.Proposals
-		if err := g.MergeCommit(g.PendingCommit); err != nil {
+	if g.PendingCommit() != nil {
+		proposals = g.PendingCommit().Proposals()
+		if err := g.MergeCommit(g.PendingCommit()); err != nil {
 			return nil, status.Errorf(codes.Internal, "merging pending commit: %v", err)
 		}
 	} else {
 		// Commit was already merged by the Commit RPC — use saved proposals.
-		proposals = g.LastCommittedProposals
+		proposals = g.LastCommittedProposals()
 	}
 
 	return s.finalizeReInitCommit(g, proposals)
@@ -1138,10 +1132,9 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 		}
 		proposals = append(proposals, p)
 		if len(ref) > 0 {
-			g.ProposalByRef[string(ref)] = p
-			g.Proposals.AddProposalWithRef(p, g.OwnLeafIndex, ref)
+			g.StoreProposalWithRef(p, g.OwnLeafIndex(), ref)
 		} else {
-			g.Proposals.AddProposal(p, g.OwnLeafIndex)
+			g.Proposals().AddProposal(p, g.OwnLeafIndex())
 		}
 	}
 
@@ -1158,21 +1151,21 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pubMsg.Content,
 			Auth:         pubMsg.Auth,
-			GroupContext: g.GroupContext.Marshal(),
+			GroupContext: g.GroupContext().Marshal(),
 		}
 		senderLeafIdx = treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
 	} else if privMsg, isPriv := msg.AsPrivate(); isPriv {
-		if g.EpochSecrets == nil || g.EpochSecrets.SenderDataSecret == nil {
+		if g.EpochSecrets() == nil || g.EpochSecrets().SenderDataSecret == nil {
 			return nil, status.Errorf(codes.Internal, "sender_data_secret not available for PrivateMessage reinit commit")
 		}
-		if g.SecretTree == nil {
+		if g.SecretTree() == nil {
 			return nil, status.Errorf(codes.Internal, "secret tree not available for PrivateMessage reinit commit")
 		}
 		decrypted, decErr := framing.Decrypt(privMsg, framing.DecryptParams{
-			CipherSuite:      g.CipherSuite,
-			SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-			SecretTree:       g.SecretTree,
-			GroupContext:     g.GroupContext.Marshal(),
+			CipherSuite:      g.CipherSuite(),
+			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
+			SecretTree:       g.SecretTree(),
+			GroupContext:     g.GroupContext().Marshal(),
 		})
 		if decErr != nil {
 			return nil, status.Errorf(codes.Internal, "decrypting PrivateMessage reinit commit: %v", decErr)
@@ -1184,7 +1177,7 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 		return nil, status.Errorf(codes.InvalidArgument, "reinit commit must be a PublicMessage or PrivateMessage")
 	}
 
-	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey); err != nil {
+	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return nil, status.Errorf(codes.Internal, "processing commit: %v", err)
 	}
 
@@ -1210,16 +1203,16 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 		return nil, status.Errorf(codes.FailedPrecondition, "no ReInit proposal found in last commit")
 	}
 
-	if g.EpochSecrets == nil || g.EpochSecrets.ResumptionSecret == nil {
+	if g.EpochSecrets() == nil || g.EpochSecrets().ResumptionSecret == nil {
 		return nil, status.Errorf(codes.Internal, "resumption secret not available after reinit commit")
 	}
-	resumptionSecret := g.EpochSecrets.ResumptionSecret.Clone()
-	oldGroupID := append([]byte(nil), g.GroupID.AsSlice()...)
+	resumptionSecret := g.EpochSecrets().ResumptionSecret.Clone()
+	oldGroupID := append([]byte(nil), g.GroupID().AsSlice()...)
 
 	// Generate a fresh identity + KP for the new group.
 	newCS := reInitProposal.CipherSuite
 	var identity []byte
-	if m, ok := g.GetMember(g.OwnLeafIndex); ok {
+	if m, ok := g.GetMember(g.OwnLeafIndex()); ok {
 		identity = append([]byte(nil), m.Credential.Identity...)
 	} else {
 		identity = []byte("reinit-member")
@@ -1294,7 +1287,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 	}
 
 	// Use staged.JoinerSecret (cloned before ComputePskSecret zeroes it — same fix as Commit handler).
-	joinerSecret := staged.JoinerSecret
+	joinerSecret := staged.JoinerSecret()
 
 	if err := newGroup.MergeCommit(staged); err != nil {
 		return nil, status.Errorf(codes.Internal, "merging reinit commit: %v", err)
@@ -1321,7 +1314,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 
 	var ratchetTree []byte
 	if req.ExternalTree {
-		ratchetTree = newGroup.RatchetTree.MarshalTreeRFC()
+		ratchetTree = newGroup.MarshalRatchetTreeRFC()
 	}
 
 	return &proto.CreateSubgroupResponse{
@@ -1378,10 +1371,13 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	}
 	sigKey := signerVal.(*ciphersuite.SignaturePrivateKey)
 
-	cs := oldGroup.CipherSuite
+	cs := oldGroup.CipherSuite()
 
 	// Derive identity from the old group's own leaf credential.
-	identity := oldGroup.Members[oldGroup.OwnLeafIndex].Credential.Identity
+	var identity []byte
+	if m, ok := oldGroup.GetMember(oldGroup.OwnLeafIndex()); ok {
+		identity = m.Credential.Identity
+	}
 
 	credWithKey, newSigKey, err := credentials.GenerateCredentialWithKeyForCS(identity, cs)
 	if err != nil {
@@ -1397,7 +1393,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	// Convert request extensions.
 	exts := make([]group.Extension, len(req.Extensions))
 	for i, e := range req.Extensions {
-		exts[i] = group.Extension{Type: uint16(e.ExtensionType), Data: e.ExtensionData}
+		exts[i] = group.Extension{Type: mlsext.ExtensionType(e.ExtensionType), Data: e.ExtensionData}
 	}
 
 	branchGID := group.NewGroupID(req.GroupId)
@@ -1405,28 +1401,28 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "creating branch group: %v", err)
 	}
-	if oldGroup.EpochSecrets == nil || oldGroup.EpochSecrets.ResumptionSecret == nil {
+	if oldGroup.EpochSecrets() == nil || oldGroup.EpochSecrets().ResumptionSecret == nil {
 		return nil, status.Errorf(codes.Internal, "resumption secret not available for branch")
 	}
 	branchNonce := make([]byte, cs.HashLength())
 	if _, err := rand.Read(branchNonce); err != nil {
 		return nil, status.Errorf(codes.Internal, "generating branch psk nonce: %v", err)
 	}
-	branchPskKey := group.ResumptionPskCacheKey(oldGroup.GroupContext.GroupID.AsSlice(), oldGroup.GroupContext.Epoch.AsUint64())
-	newGroup.LoadPsk([]byte(branchPskKey), oldGroup.EpochSecrets.ResumptionSecret.AsSlice())
-	newGroup.Proposals.AddProposal(&group.Proposal{
+	branchPskKey := group.ResumptionPskCacheKey(oldGroup.GroupContext().GroupID.AsSlice(), oldGroup.GroupContext().Epoch.AsUint64())
+	newGroup.LoadPsk([]byte(branchPskKey), oldGroup.EpochSecrets().ResumptionSecret.AsSlice())
+	newGroup.Proposals().AddProposal(&group.Proposal{
 		Type: group.ProposalTypePreSharedKey,
 		PreSharedKey: &group.PreSharedKeyProposal{
 			PskType: 2,
 			PskID: group.PskID{
 				PskType:    2,
 				Usage:      3,
-				PskGroupID: oldGroup.GroupContext.GroupID.AsSlice(),
-				PskEpoch:   oldGroup.GroupContext.Epoch.AsUint64(),
+				PskGroupID: oldGroup.GroupContext().GroupID.AsSlice(),
+				PskEpoch:   oldGroup.GroupContext().Epoch.AsUint64(),
 				Nonce:      branchNonce,
 			},
 		},
-	}, newGroup.OwnLeafIndex)
+	}, newGroup.OwnLeafIndex())
 
 	// Add each provided KeyPackage as an Add proposal.
 	for _, kpBytes := range req.KeyPackages {
@@ -1435,7 +1431,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 			return nil, status.Errorf(codes.InvalidArgument, "parsing key package: %v", err2)
 		}
 		prop := group.NewAddProposal(memberKP)
-		newGroup.Proposals.AddProposal(prop, newGroup.OwnLeafIndex)
+		newGroup.Proposals().AddProposal(prop, newGroup.OwnLeafIndex())
 	}
 
 	// Commit to produce the Welcome.
@@ -1443,7 +1439,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "committing branch: %v", err)
 	}
-	joinerSecret := staged.JoinerSecret
+	joinerSecret := staged.JoinerSecret()
 
 	if err := newGroup.MergeCommit(staged); err != nil {
 		return nil, status.Errorf(codes.Internal, "merging branch commit: %v", err)
@@ -1451,7 +1447,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 
 	// Collect new member key packages.
 	var newMemberKPs []*keypackages.KeyPackage
-	for _, prop := range staged.Proposals {
+	for _, prop := range staged.Proposals() {
 		if prop.Type == group.ProposalTypeAdd && prop.Add != nil {
 			newMemberKPs = append(newMemberKPs, prop.Add.KeyPackage)
 		}
@@ -1474,7 +1470,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 
 	var ratchetTreeData []byte
 	if req.ExternalTree {
-		ratchetTreeData = newGroup.RatchetTree.MarshalTreeRFC()
+		ratchetTreeData = newGroup.MarshalRatchetTreeRFC()
 	}
 
 	stateID := s.generateStateID()
@@ -1638,7 +1634,7 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 	// extension data = VL(total_entries_bytes) || [ExternalSender entries].
 	// Each entry = VL(sigKey) || Credential_inline (no extra VL on credential).
 	var entriesBytes []byte
-	for _, ext := range g.GroupContext.Extensions {
+	for _, ext := range g.GroupContext().Extensions {
 		if ext.Type == extTypeExternalSenders {
 			// Existing data is VL(total)||entries; unwrap to get raw entries.
 			inner, _, err := mlsReadVLBytes(ext.Data)
@@ -1653,9 +1649,9 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 	newExtData := mlsVLBytes(entriesBytes)
 
 	// Replace or append the ExternalSenders extension.
-	newExts := make([]group.Extension, 0, len(g.GroupContext.Extensions)+1)
+	newExts := make([]group.Extension, 0, len(g.GroupContext().Extensions)+1)
 	found := false
-	for _, ext := range g.GroupContext.Extensions {
+	for _, ext := range g.GroupContext().Extensions {
 		if ext.Type == extTypeExternalSenders {
 			newExts = append(newExts, group.Extension{Type: extTypeExternalSenders, Data: newExtData})
 			found = true
@@ -1668,7 +1664,7 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 	}
 
 	proposal := group.NewGroupContextExtensionsProposal(newExts)
-	g.Proposals.AddProposal(proposal, g.OwnLeafIndex)
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
@@ -1764,7 +1760,7 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 	case "groupContextExtensions":
 		exts := make([]group.Extension, len(req.Description.Extensions))
 		for i, e := range req.Description.Extensions {
-			exts[i] = group.Extension{Type: uint16(e.ExtensionType), Data: e.ExtensionData}
+			exts[i] = group.Extension{Type: mlsext.ExtensionType(e.ExtensionType), Data: e.ExtensionData}
 		}
 		proposal = group.NewGroupContextExtensionsProposal(exts)
 
@@ -1782,7 +1778,7 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 		}
 		exts := make([]group.Extension, len(req.Description.Extensions))
 		for i, e := range req.Description.Extensions {
-			exts[i] = group.Extension{Type: uint16(e.ExtensionType), Data: e.ExtensionData}
+			exts[i] = group.Extension{Type: mlsext.ExtensionType(e.ExtensionType), Data: e.ExtensionData}
 		}
 		proposal = group.NewReInitProposal(groupID, 1 /* MLS 1.0 */, reinitCS, exts)
 
@@ -1833,20 +1829,20 @@ func extractByReferenceProposal(propBytes []byte, g *group.Group) ([]byte, *grou
 						Content:    msg.PublicMessage.Content,
 						Auth:       msg.PublicMessage.Auth,
 					}
-					ref := group.ComputeProposalRef(ac.Marshal(), g.CipherSuite)
+					ref := group.ComputeProposalRef(ac.Marshal(), g.CipherSuite())
 					return body.Data, p, ref, nil
 				}
 			}
 		}
 		// PrivateMessage path (encrypt_handshake=true).
 		if msg.PrivateMessage != nil && g != nil &&
-			g.EpochSecrets != nil && g.EpochSecrets.SenderDataSecret != nil &&
-			g.SecretTree != nil {
+			g.EpochSecrets() != nil && g.EpochSecrets().SenderDataSecret != nil &&
+			g.SecretTree() != nil {
 			ac, err := framing.Decrypt(msg.PrivateMessage, framing.DecryptParams{
-				CipherSuite:      g.CipherSuite,
-				SenderDataSecret: g.EpochSecrets.SenderDataSecret,
-				SecretTree:       g.SecretTree,
-				GroupContext:     g.GroupContext.Marshal(),
+				CipherSuite:      g.CipherSuite(),
+				SenderDataSecret: g.EpochSecrets().SenderDataSecret,
+				SecretTree:       g.SecretTree(),
+				GroupContext:     g.GroupContext().Marshal(),
 			})
 			if err == nil {
 				if body, ok := ac.Content.Body.(framing.ProposalBody); ok {
@@ -1856,7 +1852,7 @@ func extractByReferenceProposal(propBytes []byte, g *group.Group) ([]byte, *grou
 							Content:    ac.Content,
 							Auth:       ac.Auth,
 						}
-						ref := group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite)
+						ref := group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite())
 						return body.Data, p, ref, nil
 					}
 				}

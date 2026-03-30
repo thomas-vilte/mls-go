@@ -44,11 +44,11 @@ func tamperApplicationMessageSignature(t *testing.T, senderGroup *Group, pm *fra
 	return tampered
 }
 
-// TestSendMessage_EmptyPayload verifies that SendMessage funciona con payload vacío
+// TestSendMessage_EmptyPayload verifies that SendMessage works with an empty payload.
 func TestSendMessage_EmptyPayload(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Enviar mensaje vacío (MLS lo permite)
+	// Send an empty message. MLS allows this.
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 
 	pm, err := aliceGroup.SendMessage([]byte{}, aliceSigPriv)
@@ -61,14 +61,14 @@ func TestSendMessage_EmptyPayload(t *testing.T) {
 	}
 
 	// Nota: no probamos el ReceiveMessage aquí porque requiere sincronización
-	// completa de secrets entre Alice y Bob, lo cual se prueba en integration_test.go
+	// Full secret synchronization between Alice and Bob is covered in integration_test.go.
 }
 
 // TestSendMessage_NilSignKey verifies that SendMessage fails con sigKey nil
 func TestSendMessage_NilSignKey(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
-	// Intentar enviar con signature key nil
+	// Attempt to send with a nil signature key.
 	_, err := aliceGroup.SendMessage([]byte("hola"), nil)
 	if err == nil {
 		t.Error("SendMessage should fail with nil signature key")
@@ -79,7 +79,7 @@ func TestSendMessage_NilSignKey(t *testing.T) {
 func TestReceiveMessage_WrongSender(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Alice envía un mensaje
+	// Alice sends a message.
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 
 	pm, err := aliceGroup.SendMessage([]byte("hola bob"), aliceSigPriv)
@@ -96,7 +96,7 @@ func TestReceiveMessage_WrongSender(t *testing.T) {
 
 // TestSendMessage_WrongState verifies that SendMessage fails si el grupo no está operational
 func TestSendMessage_WrongState(t *testing.T) {
-	// Create grupo pero forzar estado no operational (solo para test)
+	// Create a group and force a non-operational state for the test.
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("User"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey: %v", err)
@@ -117,10 +117,10 @@ func TestSendMessage_WrongState(t *testing.T) {
 		t.Fatalf("NewGroup: %v", err)
 	}
 
-	// Force estado no operational (hack para test)
+	// Force a non-operational state for the test.
 	group.state = StateInactive
 
-	// Intentar enviar mensaje
+	// Attempt to send a message.
 	sigPriv := ciphersuite.NewSignaturePrivateKey(priv.SignatureKey)
 	_, err = group.SendMessage([]byte("hola"), sigPriv)
 	if err == nil {
@@ -128,11 +128,11 @@ func TestSendMessage_WrongState(t *testing.T) {
 	}
 }
 
-// TestReceiveMessage_NilMessage verifies that ReceiveMessage fails con mensaje nil
+// TestReceiveMessage_NilMessage verifies that ReceiveMessage fails with a nil message.
 func TestReceiveMessage_NilMessage(t *testing.T) {
 	_, bobGroup, _, _ := setupTwoMemberGroup(t)
 
-	// Intentar recibir mensaje nil
+	// Attempt to receive a nil message.
 	_, err := bobGroup.ReceiveMessage(nil, 0)
 	if err == nil {
 		t.Error("ReceiveMessage should fail with nil message")
@@ -143,7 +143,7 @@ func TestReceiveMessage_NilMessage(t *testing.T) {
 func TestSendMessage_NoSecretTree(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
-	// Corromper el grupo removiendo el SecretTree (solo para test)
+	// Corrupt the group by removing the SecretTree for the test.
 	originalTree := aliceGroup.secretTree
 	aliceGroup.secretTree = nil
 
@@ -161,7 +161,7 @@ func TestSendMessage_NoSecretTree(t *testing.T) {
 func TestReceiveMessage_NoSecretTree(t *testing.T) {
 	_, bobGroup, _, _ := setupTwoMemberGroup(t)
 
-	// Corromper el grupo removiendo el SecretTree (solo para test)
+	// Corrupt the group by removing the SecretTree for the test.
 	originalTree := bobGroup.secretTree
 	bobGroup.secretTree = nil
 

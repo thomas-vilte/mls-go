@@ -33,9 +33,9 @@ func TestNewRatchetTree(t *testing.T) {
 		{"zero_leaves", 0, 1},
 		{"one_leaf", 1, 1},
 		{"two_leaves", 2, 3},
-		{"three_leaves", 3, 5}, // No expande a 4, usa 5 nodos
+		{"three_leaves", 3, 5}, // Does not expand to 4 leaves; uses 5 nodes.
 		{"four_leaves", 4, 7},
-		{"five_leaves", 5, 9}, // No expande a 8, usa 9 nodos
+		{"five_leaves", 5, 9}, // Does not expand to 8 leaves; uses 9 nodes.
 	}
 
 	for _, tt := range tests {
