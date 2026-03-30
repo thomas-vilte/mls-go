@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -77,7 +78,7 @@ func TestStoreSignatureKeyRoundTrip(t *testing.T) {
 	}
 	gotPub := loadedKey.PublicKey().AsSlice()
 	wantPub := sigKey.PublicKey().AsSlice()
-	if string(gotPub) != string(wantPub) {
+	if !bytes.Equal(gotPub, wantPub) {
 		t.Fatalf("unexpected public key: got %x want %x", gotPub, wantPub)
 	}
 }
@@ -98,7 +99,7 @@ func TestStoreLeafEncryptionKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading leaf encryption key: %v", err)
 	}
-	if string(loadedKey) != string(leafKeyBytes) {
+	if !bytes.Equal(loadedKey, leafKeyBytes) {
 		t.Fatalf("unexpected leaf key: got %x want %x", loadedKey, leafKeyBytes)
 	}
 }

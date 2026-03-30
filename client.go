@@ -16,14 +16,23 @@ import (
 )
 
 var (
-	ErrEmptyIdentity         = errors.New("mls: identity is empty")
-	ErrEmptyGroupID          = errors.New("mls: group ID is empty")
-	ErrEmptyKeyPackage       = errors.New("mls: key package is empty")
-	ErrEmptyWelcome          = errors.New("mls: welcome is empty")
-	ErrEmptyCommit           = errors.New("mls: commit is empty")
-	ErrEmptyCiphertext       = errors.New("mls: ciphertext is empty")
-	ErrGroupNotFound         = errors.New("mls: group not found")
-	ErrNoPendingKeyPackage   = errors.New("mls: no pending key package available")
+	// ErrEmptyIdentity is returned when NewClient receives an empty identity slice.
+	ErrEmptyIdentity = errors.New("mls: identity is empty")
+	// ErrEmptyGroupID is returned when a group operation receives an empty group ID.
+	ErrEmptyGroupID = errors.New("mls: group ID is empty")
+	// ErrEmptyKeyPackage is returned when InviteMember receives empty key package bytes.
+	ErrEmptyKeyPackage = errors.New("mls: key package is empty")
+	// ErrEmptyWelcome is returned when JoinGroup receives empty welcome bytes.
+	ErrEmptyWelcome = errors.New("mls: welcome is empty")
+	// ErrEmptyCommit is returned when ProcessCommit receives empty commit bytes.
+	ErrEmptyCommit = errors.New("mls: commit is empty")
+	// ErrEmptyCiphertext is returned when ReceiveMessage receives empty ciphertext bytes.
+	ErrEmptyCiphertext = errors.New("mls: ciphertext is empty")
+	// ErrGroupNotFound is returned when an operation references a group that has not been joined or created.
+	ErrGroupNotFound = errors.New("mls: group not found")
+	// ErrNoPendingKeyPackage is returned when JoinGroup is called before FreshKeyPackageBytes.
+	ErrNoPendingKeyPackage = errors.New("mls: no pending key package available")
+	// ErrUnexpectedMessageType is returned when a parsed MLSMessage does not match the expected wire format.
 	ErrUnexpectedMessageType = errors.New("mls: unexpected MLS message type")
 )
 
@@ -101,7 +110,7 @@ func (c *Client) CreateGroup() ([]byte, error) {
 }
 
 // InviteMember adds a member and returns the commit bytes to broadcast plus the welcome bytes for the joiner.
-func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) ([]byte, []byte, error) {
+func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) (commit, welcome []byte, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -141,7 +150,7 @@ func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) ([]byte, []
 		return nil, nil, fmt.Errorf("merging own commit: %w", err)
 	}
 
-	welcome, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
+	welcomeObj, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
 		JoinerSecret:  joinerSecret,
 		SignerPrivKey: c.sigKey,
 		PskIDs:        staged.PskIDs(),
@@ -162,7 +171,7 @@ func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) ([]byte, []
 		MembershipTag: staged.MembershipTag(),
 	})
 
-	welcomeMsg := framing.MLSMessage{Welcome: welcome.Marshal()}
+	welcomeMsg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
 
 	return commitMsg.Marshal(), welcomeMsg.Marshal(), nil
 }

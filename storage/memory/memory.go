@@ -12,11 +12,16 @@ import (
 )
 
 var (
-	ErrNilGroupID           = errors.New("memory: group ID is nil")
-	ErrNilSignatureKey      = errors.New("memory: signature key is nil")
-	ErrGroupStateNotFound   = errors.New("memory: group state not found")
+	// ErrNilGroupID is returned when a nil group ID is passed to any Store method.
+	ErrNilGroupID = errors.New("memory: group ID is nil")
+	// ErrNilSignatureKey is returned when a nil signature key is passed to StoreSignatureKey.
+	ErrNilSignatureKey = errors.New("memory: signature key is nil")
+	// ErrGroupStateNotFound is returned when LoadGroupState finds no entry for the given group.
+	ErrGroupStateNotFound = errors.New("memory: group state not found")
+	// ErrSignatureKeyNotFound is returned when LoadSignatureKey finds no entry for the given group.
 	ErrSignatureKeyNotFound = errors.New("memory: signature key not found")
-	ErrLeafKeyNotFound      = errors.New("memory: leaf encryption key not found")
+	// ErrLeafKeyNotFound is returned when LoadLeafEncryptionKey finds no entry for the given group and leaf.
+	ErrLeafKeyNotFound = errors.New("memory: leaf encryption key not found")
 )
 
 // Store implements group.GroupStorage and group.KeyStore.
@@ -36,6 +41,7 @@ var (
 	_ group.KeyStore     = (*Store)(nil)
 )
 
+// NewStore returns an empty, ready-to-use in-memory Store.
 func NewStore() *Store {
 	return &Store{
 		groups:   make(map[string][]byte),
@@ -44,6 +50,7 @@ func NewStore() *Store {
 	}
 }
 
+// SaveGroupState persists serialized group state for the given group ID.
 func (s *Store) SaveGroupState(ctx context.Context, groupID *group.GroupID, state []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -57,6 +64,8 @@ func (s *Store) SaveGroupState(ctx context.Context, groupID *group.GroupID, stat
 	s.groups[key] = append([]byte(nil), state...)
 	return nil
 }
+
+// LoadGroupState retrieves serialized group state for the given group ID.
 func (s *Store) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -73,6 +82,8 @@ func (s *Store) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]b
 	}
 	return append([]byte(nil), state...), nil
 }
+
+// DeleteGroupState removes the persisted group state for the given group ID.
 func (s *Store) DeleteGroupState(ctx context.Context, groupID *group.GroupID) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -86,6 +97,8 @@ func (s *Store) DeleteGroupState(ctx context.Context, groupID *group.GroupID) er
 	delete(s.groups, key)
 	return nil
 }
+
+// StoreSignatureKey persists the signature private key for the given group.
 func (s *Store) StoreSignatureKey(ctx context.Context, groupID *group.GroupID, key *ciphersuite.SignaturePrivateKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -102,6 +115,8 @@ func (s *Store) StoreSignatureKey(ctx context.Context, groupID *group.GroupID, k
 	s.sigKeys[groupKeyValue] = key
 	return nil
 }
+
+// LoadSignatureKey retrieves the signature private key for the given group.
 func (s *Store) LoadSignatureKey(ctx context.Context, groupID *group.GroupID) (*ciphersuite.SignaturePrivateKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -118,6 +133,8 @@ func (s *Store) LoadSignatureKey(ctx context.Context, groupID *group.GroupID) (*
 	}
 	return key, nil
 }
+
+// StoreLeafEncryptionKey persists the leaf HPKE encryption private key for the given group and leaf index.
 func (s *Store) StoreLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -131,6 +148,8 @@ func (s *Store) StoreLeafEncryptionKey(ctx context.Context, groupID *group.Group
 	s.leafKeys[leafKeyValue] = append([]byte(nil), key...)
 	return nil
 }
+
+// LoadLeafEncryptionKey retrieves the leaf HPKE encryption private key for the given group and leaf index.
 func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

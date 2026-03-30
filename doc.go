@@ -12,47 +12,57 @@
 //   - secrettree: per-sender secret tree ratchets
 //   - treesync: ratchet tree and TreeKEM helpers
 //
-// The main entry point for applications is usually the group package.
+// The recommended entry point for most applications is Client, which provides a
+// higher-level "bytes in, bytes out" API over the lower-level group package.
 //
-// A minimal flow looks like this:
+// A minimal high-level flow looks like this:
 //
-//	groupID, err := group.NewGroupIDRandom()
+//	alice, err := mls.NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	aliceCred, aliceSigPriv, err := credentials.GenerateCredentialWithKeyForCS([]byte("alice"), ciphersuite.MLS128DHKEMP256)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	aliceKP, alicePriv, err := keypackages.Generate(aliceCred, ciphersuite.MLS128DHKEMP256)
+//	bob, err := mls.NewClient([]byte("bob"), ciphersuite.MLS128DHKEMP256)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	aliceGroup, err := group.NewGroup(groupID, ciphersuite.MLS128DHKEMP256, aliceKP, alicePriv)
+//	bobKeyPackage, err := bob.FreshKeyPackageBytes()
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	bobCred, _, err := credentials.GenerateCredentialWithKeyForCS([]byte("bob"), ciphersuite.MLS128DHKEMP256)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	bobKP, bobPriv, err := keypackages.Generate(bobCred, ciphersuite.MLS128DHKEMP256)
+//	groupID, err := alice.CreateGroup()
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	if _, err := aliceGroup.AddMember(bobKP); err != nil {
+//	_, welcome, err := alice.InviteMember(groupID, bobKeyPackage)
+//	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	if _, err := aliceGroup.Commit(aliceSigPriv, aliceSigPriv.PublicKey(), nil); err != nil {
+//	if _, err := bob.JoinGroup(welcome); err != nil {
 //		log.Fatal(err)
 //	}
 //
-// The integration tests under group/ are the best source of up-to-date usage examples.
+//	msg, err := alice.SendMessage(groupID, []byte("hello bob"))
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	plaintext, err := bob.ReceiveMessage(groupID, msg)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	_ = plaintext
+//
+// For a full low-level example, see ./examples/basic_chat.
+// For the high-level Client flow, see ./examples/basic_chat_v2.
+//
+// Applications that need direct protocol control can still use the group,
+// keypackages, framing, and related subpackages directly.
 //
 // References:
 //
