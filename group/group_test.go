@@ -1,6 +1,7 @@
 package group
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -39,16 +40,16 @@ func TestGroupCreation(t *testing.T) {
 	}
 
 	// Verify group state
-	if group.GroupID == nil {
+	if group.groupID == nil {
 		t.Error("GroupID should not be nil")
 	}
-	if group.Epoch.AsUint64() != 0 {
-		t.Errorf("Epoch should be 0, got %d", group.Epoch.AsUint64())
+	if group.epoch.AsUint64() != 0 {
+		t.Errorf("Epoch should be 0, got %d", group.epoch.AsUint64())
 	}
-	if group.RatchetTree == nil {
+	if group.ratchetTree == nil {
 		t.Error("RatchetTree should not be nil")
 	}
-	if group.EpochSecrets == nil {
+	if group.epochSecrets == nil {
 		t.Error("EpochSecrets should not be nil")
 	}
 	if group.MemberCount() != 1 {
@@ -101,8 +102,63 @@ func TestGroupAddMember(t *testing.T) {
 	}
 
 	// Verify proposal was stored
-	if len(group.Proposals.Proposals) != 1 {
-		t.Errorf("Should have 1 proposal, got %d", len(group.Proposals.Proposals))
+	if len(group.proposals.Proposals) != 1 {
+		t.Errorf("Should have 1 proposal, got %d", len(group.proposals.Proposals))
+	}
+}
+
+func TestGroupAccessors_ReturnCopies(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("AccessorUser"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, err := NewGroupIDRandom()
+	if err != nil {
+		t.Fatalf("NewGroupIDRandom failed: %v", err)
+	}
+
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	g.SetPaddingSize(32)
+	if g.PaddingSize() != 32 {
+		t.Fatalf("PaddingSize() = %d, want 32", g.PaddingSize())
+	}
+
+	groupIDCopy := g.GroupID()
+	if groupIDCopy == nil || !bytes.Equal(groupIDCopy.AsSlice(), g.groupID.AsSlice()) {
+		t.Fatal("GroupID() returned wrong value")
+	}
+	groupIDCopy.Value[0] ^= 0xFF
+	if bytes.Equal(groupIDCopy.AsSlice(), g.groupID.AsSlice()) {
+		t.Fatal("GroupID() should return a copy")
+	}
+
+	contextCopy := g.GroupContext()
+	if contextCopy == nil || !bytes.Equal(contextCopy.GroupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
+		t.Fatal("GroupContext() returned wrong value")
+	}
+	contextCopy.GroupID.Value[0] ^= 0xFF
+	if bytes.Equal(contextCopy.GroupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
+		t.Fatal("GroupContext() should return a deep copy")
+	}
+
+	if g.CipherSuite() != g.cipherSuite {
+		t.Fatal("CipherSuite() returned wrong value")
+	}
+	if g.Epoch() != g.epoch {
+		t.Fatal("Epoch() returned wrong value")
+	}
+	if g.OwnLeafIndex() != g.ownLeafIndex {
+		t.Fatal("OwnLeafIndex() returned wrong value")
 	}
 }
 
@@ -187,8 +243,8 @@ func TestGroupCommit(t *testing.T) {
 	if group.State() != StateOperational {
 		t.Errorf("Group state should be StateOperational, got %d", group.State())
 	}
-	if group.Epoch.AsUint64() != 1 {
-		t.Errorf("Epoch should be 1 after commit, got %d", group.Epoch.AsUint64())
+	if group.epoch.AsUint64() != 1 {
+		t.Errorf("Epoch should be 1 after commit, got %d", group.epoch.AsUint64())
 	}
 }
 
@@ -268,11 +324,11 @@ func TestProcessPublicMessage_StoresProposal(t *testing.T) {
 		t.Fatalf("NewGroup failed: %v", err)
 	}
 
-	proposal := NewRemoveProposal(group.OwnLeafIndex)
+	proposal := NewRemoveProposal(group.ownLeafIndex)
 	pmContent := framing.FramedContent{
-		GroupID: group.GroupID.AsSlice(),
-		Epoch:   group.Epoch.AsUint64(),
-		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		GroupID: group.groupID.AsSlice(),
+		Epoch:   group.epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.ownLeafIndex)},
 		Body:    framing.ProposalBody{Data: ProposalMarshal(proposal)},
 	}
 
@@ -280,9 +336,9 @@ func TestProcessPublicMessage_StoresProposal(t *testing.T) {
 	pm, err := framing.NewPublicMessage(
 		pmContent,
 		sigPriv,
-		group.GroupContext.Marshal(),
-		group.EpochSecrets.MembershipKey,
-		group.CipherSuite,
+		group.groupContext.Marshal(),
+		group.epochSecrets.MembershipKey,
+		group.cipherSuite,
 	)
 	if err != nil {
 		t.Fatalf("NewPublicMessage failed: %v", err)
@@ -292,8 +348,8 @@ func TestProcessPublicMessage_StoresProposal(t *testing.T) {
 		t.Fatalf("ProcessPublicMessage failed: %v", err)
 	}
 
-	if len(group.Proposals.Proposals) != 1 {
-		t.Fatalf("stored proposals = %d, want 1", len(group.Proposals.Proposals))
+	if len(group.proposals.Proposals) != 1 {
+		t.Fatalf("stored proposals = %d, want 1", len(group.proposals.Proposals))
 	}
 }
 
@@ -315,9 +371,9 @@ func TestProcessPublicMessage_RejectsCommitWithPath(t *testing.T) {
 	}
 
 	pmContent := framing.FramedContent{
-		GroupID: group.GroupID.AsSlice(),
-		Epoch:   group.Epoch.AsUint64(),
-		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		GroupID: group.groupID.AsSlice(),
+		Epoch:   group.epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.ownLeafIndex)},
 		Body: framing.CommitBody{Data: (&Commit{
 			Path: &UpdatePath{LeafNode: &treesync.LeafNodeData{
 				EncryptionKey:  []byte{1},
@@ -335,9 +391,9 @@ func TestProcessPublicMessage_RejectsCommitWithPath(t *testing.T) {
 	pm, err := framing.NewPublicMessage(
 		pmContent,
 		sigPriv,
-		group.GroupContext.Marshal(),
-		group.EpochSecrets.MembershipKey,
-		group.CipherSuite,
+		group.groupContext.Marshal(),
+		group.epochSecrets.MembershipKey,
+		group.cipherSuite,
 	)
 	if err != nil {
 		t.Fatalf("NewPublicMessage failed: %v", err)
@@ -368,27 +424,27 @@ func TestProcessPrivateMessage_Proposal(t *testing.T) {
 	}
 
 	// Create Remove proposal (simpler than Add for testing)
-	removeProposal := NewRemoveProposal(group.OwnLeafIndex)
+	removeProposal := NewRemoveProposal(group.ownLeafIndex)
 
 	// Encrypt proposal as PrivateMessage
 	sigPrivKey := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
 	content := framing.FramedContent{
-		GroupID:           group.GroupID.AsSlice(),
-		Epoch:             group.Epoch.AsUint64(),
-		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		GroupID:           group.groupID.AsSlice(),
+		Epoch:             group.epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.ownLeafIndex)},
 		AuthenticatedData: []byte{},
 		Body:              framing.ProposalBody{Data: ProposalMarshal(removeProposal)},
 	}
 
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		Content:          content,
-		SenderLeafIndex:  uint32(group.OwnLeafIndex),
-		CipherSuite:      group.CipherSuite,
+		SenderLeafIndex:  uint32(group.ownLeafIndex),
+		CipherSuite:      group.cipherSuite,
 		PaddingSize:      0,
-		SenderDataSecret: group.EpochSecrets.SenderDataSecret,
-		SecretTree:       group.SecretTree,
+		SenderDataSecret: group.epochSecrets.SenderDataSecret,
+		SecretTree:       group.secretTree,
 		SigKey:           sigPrivKey,
-		GroupContext:     group.GroupContext.Marshal(),
+		GroupContext:     group.groupContext.Marshal(),
 	})
 	if err != nil {
 		t.Fatalf("Encrypt failed: %v", err)
@@ -400,7 +456,7 @@ func TestProcessPrivateMessage_Proposal(t *testing.T) {
 	}
 
 	// Verify proposal was stored
-	if len(group.Proposals.Proposals) == 0 {
+	if len(group.proposals.Proposals) == 0 {
 		t.Error("proposal was not stored")
 	}
 }
@@ -445,22 +501,22 @@ func TestProcessPrivateMessage_AddProposal(t *testing.T) {
 	// Encrypt proposal as PrivateMessage
 	sigPrivKey := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
 	content := framing.FramedContent{
-		GroupID:           group.GroupID.AsSlice(),
-		Epoch:             group.Epoch.AsUint64(),
-		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.OwnLeafIndex)},
+		GroupID:           group.groupID.AsSlice(),
+		Epoch:             group.epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(group.ownLeafIndex)},
 		AuthenticatedData: []byte{},
 		Body:              framing.ProposalBody{Data: ProposalMarshal(addProposal)},
 	}
 
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		Content:          content,
-		SenderLeafIndex:  uint32(group.OwnLeafIndex),
-		CipherSuite:      group.CipherSuite,
+		SenderLeafIndex:  uint32(group.ownLeafIndex),
+		CipherSuite:      group.cipherSuite,
 		PaddingSize:      0,
-		SenderDataSecret: group.EpochSecrets.SenderDataSecret,
-		SecretTree:       group.SecretTree,
+		SenderDataSecret: group.epochSecrets.SenderDataSecret,
+		SecretTree:       group.secretTree,
 		SigKey:           sigPrivKey,
-		GroupContext:     group.GroupContext.Marshal(),
+		GroupContext:     group.groupContext.Marshal(),
 	})
 	if err != nil {
 		t.Fatalf("Encrypt failed: %v", err)
@@ -472,57 +528,58 @@ func TestProcessPrivateMessage_AddProposal(t *testing.T) {
 	}
 
 	// Verify proposal was stored
-	if len(group.Proposals.Proposals) == 0 {
+	if len(group.proposals.Proposals) == 0 {
 		t.Error("proposal was not stored")
 	}
 }
 
 // TestProcessPrivateMessage_Commit verifies that un commit enviado como PrivateMessage
-// es procesado correctamente: el receptor descifra, verifica la firma, aplica el commit
-// y avanza al siguiente epoch.
+// TestProcessPrivateMessage_Commit verifies that a private commit message is
+// processed correctly: the receiver decrypts it, verifies the signature,
+// applies the commit, and advances to the next epoch.
 func TestProcessPrivateMessage_Commit(t *testing.T) {
 	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
 
-	// Alice agrega a charlie para que haya un UpdatePath no trivial.
+	// Alice adds Charlie so the UpdatePath is non-trivial.
 	charlie := newTestUser(t, "charlie-pm-commit")
 	if _, err := aliceGroup.AddMember(charlie.kp); err != nil {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice crea el commit en epoch 1.
+	// Alice creates the commit in epoch 1.
 	sc, err := aliceGroup.CommitWithFormat(alice.sigPriv, alice.sigPub, nil, framing.WireFormatPrivateMessage)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Cifrar el commit como PrivateMessage usando los secrets de epoch 1 de alice.
+	// Encrypt the commit as a PrivateMessage using Alice's epoch 1 secrets.
 	// Tanto alice como bob comparten los sames EpochSecrets y SecretTree (ver makeTwoMemberGroups).
 	pm, err := framing.Encrypt(framing.EncryptParams{
-		AuthContent:      sc.AuthenticatedContent,
-		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
-		CipherSuite:      aliceGroup.CipherSuite,
+		AuthContent:      sc.authenticatedContent,
+		SenderLeafIndex:  uint32(aliceGroup.ownLeafIndex),
+		CipherSuite:      aliceGroup.cipherSuite,
 		PaddingSize:      0,
-		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret,
-		SecretTree:       aliceGroup.SecretTree,
+		SenderDataSecret: aliceGroup.epochSecrets.SenderDataSecret,
+		SecretTree:       aliceGroup.secretTree,
 	})
 	if err != nil {
 		t.Fatalf("Encrypt commit as PrivateMessage: %v", err)
 	}
 
-	// Alice mergea su propio commit → epoch 2.
+	// Alice merges her own commit and moves to epoch 2.
 	if err := aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit(alice): %v", err)
 	}
-	if aliceGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("alice epoch = %d, want 2", aliceGroup.Epoch.AsUint64())
+	if aliceGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("alice epoch = %d, want 2", aliceGroup.epoch.AsUint64())
 	}
 
-	// Bob procesa el commit via PrivateMessage → también debe avanzar a epoch 2.
+	// Bob processes the PrivateMessage commit and must also move to epoch 2.
 	if err := bobGroup.ProcessPrivateMessage(pm); err != nil {
 		t.Fatalf("ProcessPrivateMessage(bob): %v", err)
 	}
-	if bobGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("bob epoch = %d, want 2", bobGroup.Epoch.AsUint64())
+	if bobGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("bob epoch = %d, want 2", bobGroup.epoch.AsUint64())
 	}
 }
 
@@ -530,23 +587,23 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
 
-	// Create un mensaje válido en epoch 1, pero luego falsificar la época en el wire.
+	// Create a valid epoch 1 message and then falsify the wire epoch.
 	content := framing.FramedContent{
-		GroupID:           aliceGroup.GroupID.AsSlice(),
-		Epoch:             aliceGroup.Epoch.AsUint64(),
-		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.OwnLeafIndex)},
+		GroupID:           aliceGroup.groupID.AsSlice(),
+		Epoch:             aliceGroup.epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.ownLeafIndex)},
 		AuthenticatedData: []byte{},
-		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.OwnLeafIndex))},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.ownLeafIndex))},
 	}
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		Content:          content,
-		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
-		CipherSuite:      aliceGroup.CipherSuite,
+		SenderLeafIndex:  uint32(aliceGroup.ownLeafIndex),
+		CipherSuite:      aliceGroup.cipherSuite,
 		PaddingSize:      0,
-		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret,
-		SecretTree:       aliceGroup.SecretTree,
+		SenderDataSecret: aliceGroup.epochSecrets.SenderDataSecret,
+		SecretTree:       aliceGroup.secretTree,
 		SigKey:           alice.sigPriv,
-		GroupContext:     aliceGroup.GroupContext.Marshal(),
+		GroupContext:     aliceGroup.groupContext.Marshal(),
 	})
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -560,34 +617,35 @@ func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_InvalidSignature verifies that mensajes con firma inválida
-// son rechazados. El contenido se cifra con una clave de firma diferente a la del sender
-// en el árbol, por lo que la verificación de FramedContentTBS fails.
+// TestProcessPrivateMessage_InvalidSignature verifies that messages with an
+// invalid signature are rejected. The content is encrypted with a signing key
+// that does not match the sender's key in the tree, so FramedContentTBS
+// verification must fail.
 func TestProcessPrivateMessage_InvalidSignature(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := makeTwoMemberGroups(t)
 
-	// Create una clave de firma impostora (no corresponde a ningún miembro del árbol).
+	// Create an impostor signing key that does not belong to any member.
 	impostor := newTestUser(t, "impostor")
 
 	// Create un proposal desde el punto de vista de alice (leaf 0), pero firmado
-	// con la clave del impostor. El árbol de bob tiene la clave pública de alice
+	// with the impostor key. Bob's tree still contains Alice's public key
 	// en leaf 0, por lo que la verificación failsrá.
 	content := framing.FramedContent{
-		GroupID:           bobGroup.GroupID.AsSlice(),
-		Epoch:             bobGroup.Epoch.AsUint64(),
-		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.OwnLeafIndex)},
+		GroupID:           bobGroup.groupID.AsSlice(),
+		Epoch:             bobGroup.epoch.AsUint64(),
+		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(aliceGroup.ownLeafIndex)},
 		AuthenticatedData: []byte{},
-		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.OwnLeafIndex))},
+		Body:              framing.ProposalBody{Data: ProposalMarshal(NewRemoveProposal(aliceGroup.ownLeafIndex))},
 	}
 	pm, err := framing.Encrypt(framing.EncryptParams{
 		Content:          content,
-		SenderLeafIndex:  uint32(aliceGroup.OwnLeafIndex),
-		CipherSuite:      bobGroup.CipherSuite,
+		SenderLeafIndex:  uint32(aliceGroup.ownLeafIndex),
+		CipherSuite:      bobGroup.cipherSuite,
 		PaddingSize:      0,
-		SenderDataSecret: bobGroup.EpochSecrets.SenderDataSecret,
-		SecretTree:       bobGroup.SecretTree,
-		SigKey:           impostor.sigPriv, // firma inválida
-		GroupContext:     bobGroup.GroupContext.Marshal(),
+		SenderDataSecret: bobGroup.epochSecrets.SenderDataSecret,
+		SecretTree:       bobGroup.secretTree,
+		SigKey:           impostor.sigPriv, // invalid signature
+		GroupContext:     bobGroup.groupContext.Marshal(),
 	})
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -640,11 +698,11 @@ func TestProcessPrivateMessage_NoSecrets(t *testing.T) {
 	}
 
 	// Clear secrets
-	group.EpochSecrets.SenderDataSecret = nil
+	group.epochSecrets.SenderDataSecret = nil
 
 	pm := &framing.PrivateMessage{
-		GroupID: group.GroupID.AsSlice(),
-		Epoch:   group.Epoch.AsUint64(),
+		GroupID: group.groupID.AsSlice(),
+		Epoch:   group.epoch.AsUint64(),
 	}
 
 	if err := group.ProcessPrivateMessage(pm); err == nil {

@@ -89,8 +89,8 @@ func TestGroup_1024Members(t *testing.T) {
 
 	// Verify tree properties
 	// A left-balanced tree with 1024 leaves should have exactly 2047 nodes
-	if len(group.RatchetTree.Nodes) != 2047 {
-		t.Errorf("Expected 2047 nodes for 1024 leaves, got %d", len(group.RatchetTree.Nodes))
+	if len(group.ratchetTree.Nodes) != 2047 {
+		t.Errorf("Expected 2047 nodes for 1024 leaves, got %d", len(group.ratchetTree.Nodes))
 	}
 
 	// Benchmark a single message send with 1024 members

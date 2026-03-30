@@ -9,8 +9,8 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// TestMergeCommit_InvalidSignature verifies that MergeCommit rechaza commits con firma inválida.
-// Fase 1.1: Verificación de firma en commits recibidos
+// TestMergeCommit_InvalidSignature verifies that MergeCommit rejects commits with an invalid signature.
+// Phase 1.1: signature verification for received commits.
 func TestMergeCommit_InvalidSignature(t *testing.T) {
 	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -40,7 +40,7 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice crea commit para agregar a Bob
+	// Alice creates a commit that adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -49,21 +49,21 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 		t.Fatalf("creating commit: %v", err)
 	}
 
-	// Corromper la firma (flip un byte)
-	if len(stagedCommit.AuthenticatedContent.Auth.Signature.AsSlice()) > 0 {
-		sigBytes := stagedCommit.AuthenticatedContent.Auth.Signature.AsSlice()
+	// Corrupt the signature by flipping one byte.
+	if len(stagedCommit.authenticatedContent.Auth.Signature.AsSlice()) > 0 {
+		sigBytes := stagedCommit.authenticatedContent.Auth.Signature.AsSlice()
 		sigBytes[0] ^= 0xFF
 	}
 
-	// Intentar mergear debe failsr por firma inválida
+	// MergeCommit must fail because the signature is invalid.
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with invalid signature")
 	}
 }
 
-// TestMergeCommit_WrongSigner verifies that MergeCommit rechaza commits firmados por otro miembro.
-// Fase 1.1: Verificación de firma en commits recibidos
+// TestMergeCommit_WrongSigner verifies that MergeCommit rejects commits signed by the wrong member.
+// Phase 1.1: signature verification for received commits.
 func TestMergeCommit_WrongSigner(t *testing.T) {
 	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -93,7 +93,7 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice agrega a Bob
+	// Alice adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -106,7 +106,7 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 		t.Fatalf("merging commit: %v", err)
 	}
 
-	// Ahora Bob es miembro. Intentar crear un commit firmado por Bob pero con sender = Alice (0)
+	// Bob is now a member. Create a commit signed by Bob but claiming sender = Alice (0).
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("charlie"))
 	if err != nil {
 		t.Fatalf("generating charlie credential: %v", err)
@@ -117,7 +117,7 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 		t.Fatalf("generating charlie key package: %v", err)
 	}
 
-	// Bob crea commit (sender será Bob)
+	// Bob creates a commit. The sender is Bob.
 	_, _ = aliceGroup.AddMember(charlieKeyPackage)
 	bobSigPriv := ciphersuite.NewSignaturePrivateKey(bobPrivKeys.SignatureKey)
 	bobSigPub := bobSigPriv.PublicKey()
@@ -127,18 +127,18 @@ func TestMergeCommit_WrongSigner(t *testing.T) {
 	}
 
 	// Cambiar el sender para que parezca de Alice (0) en vez de Bob (1)
-	// Esto should hacer failsr la verificación de firma
-	stagedCommit2.AuthenticatedContent.Content.Sender.LeafIndex = 0
+	// This must fail signature verification.
+	stagedCommit2.authenticatedContent.Content.Sender.LeafIndex = 0
 
-	// Intentar mergear debe failsr porque la firma no coincide con el sender
+	// MergeCommit must fail because the signature does not match the sender.
 	err = aliceGroup.MergeCommit(stagedCommit2)
 	if err == nil {
 		t.Error("MergeCommit should fail with wrong signer")
 	}
 }
 
-// TestMergeCommit_EpochMismatch verifies that MergeCommit rechaza commits con epoch incorrecto.
-// Fase 1.2: Validación de epoch
+// TestMergeCommit_EpochMismatch verifies that MergeCommit rejects commits with the wrong epoch.
+// Phase 1.2: epoch validation.
 func TestMergeCommit_EpochMismatch(t *testing.T) {
 	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -168,7 +168,7 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice crea commit para agregar a Bob
+	// Alice creates a commit that adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -177,32 +177,32 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("creating commit: %v", err)
 	}
 
-	// Guardar epoch actual
-	currentEpoch := aliceGroup.GroupContext.Epoch.AsUint64()
+	// Save the current epoch.
+	currentEpoch := aliceGroup.groupContext.Epoch.AsUint64()
 
-	// Caso 1: Commit con epoch futuro (current + 1)
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch + 1
+	// Case 1: commit with a future epoch (current + 1).
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch + 1
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with future epoch")
 	}
 
-	// Caso 2: Commit con epoch pasado (current - 1, simulando replay)
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch - 1
+	// Case 2: commit with a past epoch (current - 1, replay simulation).
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch - 1
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with past epoch (replay)")
 	}
 
-	// Caso 3: Commit con epoch correcto debe work
-	stagedCommit.AuthenticatedContent.Content.Epoch = currentEpoch
+	// Case 3: a commit with the correct epoch must succeed.
+	stagedCommit.authenticatedContent.Content.Epoch = currentEpoch
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err != nil {
 		t.Errorf("MergeCommit should succeed with correct epoch: %v", err)
 	}
 }
 
-// TestMergeCommit_WrongGroupID verifies that MergeCommit rechaza commits con GroupID incorrecto.
+// TestMergeCommit_WrongGroupID verifies that MergeCommit rejects commits with the wrong GroupID.
 // Fase 1.3: Validación de GroupID
 func TestMergeCommit_WrongGroupID(t *testing.T) {
 	// Create grupo con Alice
@@ -233,7 +233,7 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice crea commit para agregar a Bob
+	// Alice creates a commit that adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -243,16 +243,16 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 	}
 
 	// Cambiar GroupID
-	stagedCommit.AuthenticatedContent.Content.GroupID = []byte("wrong-group")
+	stagedCommit.authenticatedContent.Content.GroupID = []byte("wrong-group")
 
-	// Intentar mergear debe failsr por GroupID incorrecto
+	// MergeCommit must fail because the GroupID is wrong.
 	err = aliceGroup.MergeCommit(stagedCommit)
 	if err == nil {
 		t.Error("MergeCommit should fail with wrong GroupID")
 	}
 }
 
-// TestProcessReceivedCommit_WrongGroupID verifies that ProcessReceivedCommit rechaza commits con GroupID incorrecto.
+// TestProcessReceivedCommit_WrongGroupID verifies that ProcessReceivedCommit rejects commits with the wrong GroupID.
 // Fase 1.3: Validación de GroupID en ProcessReceivedCommit
 func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 	// Create grupo con Alice
@@ -283,7 +283,7 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice agrega a Bob
+	// Alice adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -332,10 +332,10 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 		t.Fatalf("creating commit in other group: %v", err)
 	}
 
-	// Intentar procesar el commit de other-group en aliceGroup debe failsr
+	// Processing the other-group commit in aliceGroup must fail.
 	err = aliceGroup.ProcessReceivedCommit(
-		stagedCommit2.AuthenticatedContent,
-		treesync.LeafIndex(aliceGroup.OwnLeafIndex),
+		stagedCommit2.authenticatedContent,
+		treesync.LeafIndex(aliceGroup.ownLeafIndex),
 		bobPrivKeys.InitKey.Bytes(),
 	)
 	if err == nil {
@@ -343,8 +343,8 @@ func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 	}
 }
 
-// TestProcessReceivedCommit_EpochMismatch verifies that ProcessReceivedCommit rechaza commits con epoch incorrecto.
-// Fase 1.2: Validación de epoch en ProcessReceivedCommit
+// TestProcessReceivedCommit_EpochMismatch verifies that ProcessReceivedCommit rejects commits with the wrong epoch.
+// Phase 1.2: epoch validation in ProcessReceivedCommit.
 func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 	// Create grupo con Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -374,7 +374,7 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("generating bob key package: %v", err)
 	}
 
-	// Alice agrega a Bob
+	// Alice adds Bob.
 	_, _ = aliceGroup.AddMember(bobKeyPackage)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(alicePrivKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -387,8 +387,8 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("merging commit: %v", err)
 	}
 
-	// Ahora Bob procesa un commit con epoch incorrecto
-	// Create commit con epoch futuro
+	// Bob now processes a commit with the wrong epoch.
+	// Create a commit with a future epoch.
 	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("charlie"))
 	if err != nil {
 		t.Fatalf("generating charlie credential: %v", err)
@@ -407,13 +407,13 @@ func TestProcessReceivedCommit_EpochMismatch(t *testing.T) {
 		t.Fatalf("creating second commit: %v", err)
 	}
 
-	// Corromper epoch
-	stagedCommit2.AuthenticatedContent.Content.Epoch = 999
+	// Corrupt the epoch.
+	stagedCommit2.authenticatedContent.Content.Epoch = 999
 
-	// Bob intenta procesar el commit - debe failsr por epoch
+	// Bob processing the commit must fail because of the epoch.
 	err = aliceGroup.ProcessReceivedCommit(
-		stagedCommit2.AuthenticatedContent,
-		treesync.LeafIndex(aliceGroup.OwnLeafIndex),
+		stagedCommit2.authenticatedContent,
+		treesync.LeafIndex(aliceGroup.ownLeafIndex),
 		bobPrivKeys.InitKey.Bytes(),
 	)
 	if err == nil {

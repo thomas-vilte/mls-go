@@ -48,7 +48,7 @@ func TestGetExternalSenderSigningKey_Found(t *testing.T) {
 	extCredBytes := credentials.NewBasicCredentialFromString("external-sender").Marshal()
 
 	extData := buildExternalSendersExtData(t, extSigKey, extCredBytes)
-	g.GroupContext.Extensions = append(g.GroupContext.Extensions, Extension{
+	g.groupContext.Extensions = append(g.groupContext.Extensions, Extension{
 		Type: 0x0005,
 		Data: extData,
 	})
@@ -105,7 +105,7 @@ func TestGetExternalSenderSigningKey_OutOfRange(t *testing.T) {
 	extSigKey := extPriv.PublicKey().AsSlice()
 	extCredBytes := credentials.NewBasicCredentialFromString("ext").Marshal()
 
-	g.GroupContext.Extensions = append(g.GroupContext.Extensions, Extension{
+	g.groupContext.Extensions = append(g.groupContext.Extensions, Extension{
 		Type: 0x0005,
 		Data: buildExternalSendersExtData(t, extSigKey, extCredBytes),
 	})
@@ -148,7 +148,7 @@ func TestGetExternalSenderSigningKey_MultipleSenders(t *testing.T) {
 	w := itls.NewWriter()
 	w.WriteVLBytes(entries.Bytes())
 
-	g.GroupContext.Extensions = append(g.GroupContext.Extensions, Extension{
+	g.groupContext.Extensions = append(g.groupContext.Extensions, Extension{
 		Type: 0x0005,
 		Data: w.Bytes(),
 	})

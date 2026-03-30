@@ -206,6 +206,7 @@ func DeriveKeyPairX25519(ikm []byte) (pubKey, privKey []byte, err error) {
 //   - kem_output: Encapsulated key (32 bytes for X25519, 65 bytes for P256)
 //   - exported_secret: Exported secret of length Nh
 //   - error: if encapsulation fails
+//
 // externalInitExportCtx is the HPKE export context for ExternalInit per RFC 9420 §12.4.3.2.
 // Both mlspp (Cisco) and OpenMLS use: SetupBaseS(external_pub, info="") + Export("MLS 1.0 external init secret", Nh).
 const externalInitExportCtx = "MLS 1.0 external init secret"

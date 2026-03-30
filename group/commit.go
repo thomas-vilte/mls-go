@@ -282,42 +282,120 @@ func unmarshalUpdatePathNodesWrapped(data []byte) ([]UpdatePathNode, error) {
 // Staging allows the committer to prepare all values before applying them,
 // enabling atomic application of the commit.
 type StagedCommit struct {
-	Commit               *Commit
-	Proposals            []*Proposal
-	ProposalSenders      []LeafNodeIndex // Per-proposal sender indices (parallel to Proposals)
-	AuthenticatedContent *framing.AuthenticatedContent
-	RootPathSecret       *ciphersuite.Secret // commit_secret; zeroed by key schedule during Commit()
+	commit               *Commit
+	proposals            []*Proposal
+	proposalSenders      []LeafNodeIndex // Per-proposal sender indices (parallel to proposals)
+	authenticatedContent *framing.AuthenticatedContent
+	rootPathSecret       *ciphersuite.Secret // commit_secret; zeroed by key schedule during Commit()
 	// Precomputed by committer in Commit() — nil for receivers
-	PrecomputedEpochSecrets *schedule.EpochSecrets
-	PrecomputedGroupContext *GroupContext
-	PrecomputedInterimHash  []byte
+	precomputedEpochSecrets *schedule.EpochSecrets
+	precomputedGroupContext *GroupContext
+	precomputedInterimHash  []byte
 	// JoinerSecret is the actual joiner_secret = ExpandWithLabel(intermediate,"joiner",GC,Nh).
 	// Cloned before ComputePskSecret zeroes it; used by the caller for CreateWelcome.
 	// Nil for receiver-side StagedCommits.
-	JoinerSecret *ciphersuite.Secret
+	joinerSecret *ciphersuite.Secret
 	// PskIDs contains the PreSharedKeyID entries for all PSK proposals in this commit.
 	// Used by CreateWelcome to populate GroupSecrets.psks for joiners.
-	PskIDs []PskID
+	pskIDs []PskID
 	// RawPskSecret is the psk_secret computed from all PSKs (0^Nh if none).
 	// Used by CreateWelcome to derive welcome_secret with the correct PSK secret.
-	RawPskSecret *ciphersuite.Secret
+	rawPskSecret *ciphersuite.Secret
 	// PathSecrets holds all N+1 path secrets from createUpdatePath (indexed 0..N).
 	// pathSecrets[0] = leaf secret, pathSecrets[N] = commit_secret.
 	// Used by CreateWelcome to compute per-joiner path_secret values.
-	PathSecrets []*ciphersuite.Secret
+	pathSecrets []*ciphersuite.Secret
 	// CommitterFilteredLevels and CommitterDirectPath are used by CreateWelcome
 	// to locate each new joiner's position in the committer's copath.
-	CommitterFilteredLevels []int
-	CommitterDirectPath     []treesync.NodeIndex
-	CommitterCopath         []treesync.NodeIndex
+	committerFilteredLevels []int
+	committerDirectPath     []treesync.NodeIndex
+	committerCopath         []treesync.NodeIndex
 	// TreeAfterProposals is the ratchet tree with all proposals applied (including
 	// Add proposals that add new joiners), before MergeCommit updates the group state.
 	// Used by CreateWelcome to find per-joiner path_secret for newly added members
 	// whose LCA with the committer is below the filtered direct path.
-	TreeAfterProposals *treesync.RatchetTree
+	treeAfterProposals *treesync.RatchetTree
 	// MembershipTag is the MAC(membership_key, AuthenticatedContentTBM) for PublicMessage
 	// commits (RFC §6.2). Nil for PrivateMessage commits or when membership_key is unavailable.
-	MembershipTag []byte
+	membershipTag []byte
+}
+
+// Commit returns the staged commit payload.
+func (sc *StagedCommit) Commit() *Commit {
+	if sc == nil {
+		return nil
+	}
+	return sc.commit
+}
+
+// Proposals returns the staged proposals.
+func (sc *StagedCommit) Proposals() []*Proposal {
+	if sc == nil {
+		return nil
+	}
+	out := make([]*Proposal, len(sc.proposals))
+	copy(out, sc.proposals)
+	return out
+}
+
+// ProposalSenders returns the sender index for each staged proposal.
+func (sc *StagedCommit) ProposalSenders() []LeafNodeIndex {
+	if sc == nil {
+		return nil
+	}
+	out := make([]LeafNodeIndex, len(sc.proposalSenders))
+	copy(out, sc.proposalSenders)
+	return out
+}
+
+// AuthenticatedContent returns the authenticated commit content.
+func (sc *StagedCommit) AuthenticatedContent() *framing.AuthenticatedContent {
+	if sc == nil {
+		return nil
+	}
+	return sc.authenticatedContent
+}
+
+// JoinerSecret returns a copy of the joiner secret.
+func (sc *StagedCommit) JoinerSecret() *ciphersuite.Secret {
+	if sc == nil || sc.joinerSecret == nil {
+		return nil
+	}
+	return sc.joinerSecret.Clone()
+}
+
+// RootPathSecret returns a copy of the commit secret.
+func (sc *StagedCommit) RootPathSecret() *ciphersuite.Secret {
+	if sc == nil || sc.rootPathSecret == nil {
+		return nil
+	}
+	return sc.rootPathSecret.Clone()
+}
+
+// PskIDs returns the PSK identifiers used by the staged commit.
+func (sc *StagedCommit) PskIDs() []PskID {
+	if sc == nil {
+		return nil
+	}
+	out := make([]PskID, len(sc.pskIDs))
+	copy(out, sc.pskIDs)
+	return out
+}
+
+// RawPskSecret returns a copy of the computed psk_secret.
+func (sc *StagedCommit) RawPskSecret() *ciphersuite.Secret {
+	if sc == nil || sc.rawPskSecret == nil {
+		return nil
+	}
+	return sc.rawPskSecret.Clone()
+}
+
+// MembershipTag returns a copy of the public message membership tag.
+func (sc *StagedCommit) MembershipTag() []byte {
+	if sc == nil {
+		return nil
+	}
+	return append([]byte(nil), sc.membershipTag...)
 }
 
 // ConfirmationTag represents the confirmation tag in a commit per RFC 9420 §8.2.

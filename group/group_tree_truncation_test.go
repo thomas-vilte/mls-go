@@ -13,7 +13,7 @@ import (
 func TestTreeTruncation_DirectApply(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
-	before := aliceGroup.RatchetTree.NumLeaves
+	before := aliceGroup.ratchetTree.NumLeaves
 	if before != 2 {
 		t.Fatalf("expected 2 leaves before remove, got %d", before)
 	}
@@ -23,7 +23,7 @@ func TestTreeTruncation_DirectApply(t *testing.T) {
 		t.Fatalf("applyRemoveProposal: %v", err)
 	}
 
-	after := aliceGroup.RatchetTree.NumLeaves
+	after := aliceGroup.ratchetTree.NumLeaves
 	if after != 1 {
 		t.Errorf("NumLeaves after removing last member = %d, want 1", after)
 	}
@@ -57,8 +57,8 @@ func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
 	}
 
 	// Tree expands to next power-of-2: 2→4 slots when adding the 3rd leaf.
-	if aliceGroup.RatchetTree.NumLeaves != 4 {
-		t.Fatalf("expected 4 leaves (tree expanded to power-of-2), got %d", aliceGroup.RatchetTree.NumLeaves)
+	if aliceGroup.ratchetTree.NumLeaves != 4 {
+		t.Fatalf("expected 4 leaves (tree expanded to power-of-2), got %d", aliceGroup.ratchetTree.NumLeaves)
 	}
 
 	// Remover Bob (leaf 1, no es el último).
@@ -68,8 +68,8 @@ func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
 	}
 
 	// Trailing blank at leaf 3 is truncated; Charlie at leaf 2 is still present → 3 leaves remain.
-	if aliceGroup.RatchetTree.NumLeaves != 3 {
-		t.Errorf("NumLeaves after removing non-trailing leaf = %d, want 3", aliceGroup.RatchetTree.NumLeaves)
+	if aliceGroup.ratchetTree.NumLeaves != 3 {
+		t.Errorf("NumLeaves after removing non-trailing leaf = %d, want 3", aliceGroup.ratchetTree.NumLeaves)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestTreeTruncation_CommitWithRemove(t *testing.T) {
 		t.Fatalf("MergeCommit: %v", err)
 	}
 
-	if aliceGroup.RatchetTree.NumLeaves != 1 {
-		t.Errorf("NumLeaves after commit with remove = %d, want 1", aliceGroup.RatchetTree.NumLeaves)
+	if aliceGroup.ratchetTree.NumLeaves != 1 {
+		t.Errorf("NumLeaves after commit with remove = %d, want 1", aliceGroup.ratchetTree.NumLeaves)
 	}
 	if aliceGroup.MemberCount() != 1 {
 		t.Errorf("MemberCount after remove = %d, want 1", aliceGroup.MemberCount())

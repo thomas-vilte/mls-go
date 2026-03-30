@@ -1,59 +1,61 @@
-// Package mls implements the Messaging Layer Security (MLS) protocol.
+// Package mls is the module root for github.com/thomas-vilte/mls-go.
 //
-// MLS is an end-to-end encryption protocol for group messaging, specified in RFC 9420.
-// This is a pure Go implementation of the protocol.
+// The implementation is organized into subpackages:
 //
-// # Getting Started
+//   - ciphersuite: HPKE, HKDF, AEAD, signatures, and hash references
+//   - credentials: MLS credentials
+//   - extensions: MLS extension types and helpers
+//   - framing: MLSMessage, PublicMessage, and PrivateMessage framing
+//   - group: group lifecycle, proposals, commits, and Welcome handling
+//   - keypackages: KeyPackage generation and validation
+//   - schedule: MLS key schedule and exporter support
+//   - secrettree: per-sender secret tree ratchets
+//   - treesync: ratchet tree and TreeKEM helpers
 //
-// To create a new MLS group:
+// The main entry point for applications is usually the group package.
 //
-//	cs := ciphersuite.MLS128DHKEMP256
-//	cred := credentials.NewBasicCredential("Alice")
-//	kp, privKeys, err := keypackages.Generate(cred, cs)
+// A minimal flow looks like this:
+//
+//	groupID, err := group.NewGroupIDRandom()
 //	if err != nil {
-//	    log.Fatal(err)
+//		log.Fatal(err)
 //	}
 //
-//	group, err := group.New(cs, kp, privKeys)
+//	aliceCred, aliceSigPriv, err := credentials.GenerateCredentialWithKeyForCS([]byte("alice"), ciphersuite.MLS128DHKEMP256)
 //	if err != nil {
-//	    log.Fatal(err)
+//		log.Fatal(err)
+//	}
+//	aliceKP, alicePriv, err := keypackages.Generate(aliceCred, ciphersuite.MLS128DHKEMP256)
+//	if err != nil {
+//		log.Fatal(err)
 //	}
 //
-// # Adding Members
-//
-// To add a member to the group:
-//
-//	welcome, err := group.AddMember("Bob")
+//	aliceGroup, err := group.NewGroup(groupID, ciphersuite.MLS128DHKEMP256, aliceKP, alicePriv)
 //	if err != nil {
-//	    log.Fatal(err)
+//		log.Fatal(err)
 //	}
 //
-// # Processing Welcome
-//
-// To join a group from a Welcome message:
-//
-//	joinerGroup, err := group.ProcessWelcome(welcome, kp, privKeys)
+//	bobCred, _, err := credentials.GenerateCredentialWithKeyForCS([]byte("bob"), ciphersuite.MLS128DHKEMP256)
 //	if err != nil {
-//	    log.Fatal(err)
+//		log.Fatal(err)
+//	}
+//	bobKP, bobPriv, err := keypackages.Generate(bobCred, ciphersuite.MLS128DHKEMP256)
+//	if err != nil {
+//		log.Fatal(err)
 //	}
 //
-// # Encryption and Decryption
-//
-// To encrypt a message:
-//
-//	ciphertext, err := group.Encrypt([]byte("Hello, MLS!"))
-//	if err != nil {
-//	    log.Fatal(err)
+//	if _, err := aliceGroup.AddMember(bobKP); err != nil {
+//		log.Fatal(err)
 //	}
 //
-// # To decrypt:
-//
-//	plaintext, err := group.Decrypt(ciphertext)
-//	if err != nil {
-//	    log.Fatal(err)
+//	if _, err := aliceGroup.Commit(aliceSigPriv, aliceSigPriv.PublicKey(), nil); err != nil {
+//		log.Fatal(err)
 //	}
 //
-// # References
+// The integration tests under group/ are the best source of up-to-date usage examples.
 //
-//   - RFC 9420: https://datatracker.ietf.org/doc/html/rfc9420
+// References:
+//
+//   - RFC 9420: https://www.rfc-editor.org/rfc/rfc9420
+//   - RFC 9180: https://www.rfc-editor.org/rfc/rfc9180
 package mls

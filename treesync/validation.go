@@ -26,26 +26,31 @@ func ValidateLeafNodeSignature(
 
 	tbs := leafData.MarshalTBSWithContext(nil, 0)
 	pubKeyBytes := leafData.SigKeyBytes()
-	pk := ciphersuite.NewOpenMlsSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
+	pk := ciphersuite.NewMLSSignaturePublicKey(pubKeyBytes, cs.SignatureScheme())
 	return ciphersuite.VerifyWithLabel(pk, "LeafNodeTBS", tbs, ciphersuite.NewSignature(signature))
 }
 
 // ValidateLeafNodeLifetime validates the lifetime of a LeafNode.
 func ValidateLeafNodeLifetime(lifetime *LeafNodeLifetime) error {
+	return ValidateLeafNodeLifetimeAt(lifetime, time.Now())
+}
+
+// ValidateLeafNodeLifetimeAt validates the lifetime of a LeafNode against a supplied time.
+func ValidateLeafNodeLifetimeAt(lifetime *LeafNodeLifetime, now time.Time) error {
 	if lifetime == nil {
 		return nil
 	}
 
-	now := uint64(time.Now().Unix())
+	nowUnix := uint64(now.Unix())
 
-	if now < lifetime.NotBefore {
+	if nowUnix < lifetime.NotBefore {
 		return fmt.Errorf("leaf node not yet valid (not_before: %d, now: %d)",
-			lifetime.NotBefore, now)
+			lifetime.NotBefore, nowUnix)
 	}
 
-	if now > lifetime.NotAfter {
+	if nowUnix > lifetime.NotAfter {
 		return fmt.Errorf("leaf node expired (not_after: %d, now: %d)",
-			lifetime.NotAfter, now)
+			lifetime.NotAfter, nowUnix)
 	}
 
 	return nil

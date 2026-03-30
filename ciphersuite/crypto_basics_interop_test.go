@@ -173,7 +173,7 @@ func testSignWithLabel(t *testing.T, v cryptoBasicsVector) {
 
 	// Use the correct signature scheme for the cipher suite
 	sigScheme := cs.SignatureScheme()
-	pubKey := NewOpenMlsSignaturePublicKey(pubBytes, sigScheme)
+	pubKey := NewMLSSignaturePublicKey(pubBytes, sigScheme)
 	if err := pubKey.Verify(tbs, NewSignature(sigBytes)); err != nil {
 		t.Errorf("Verify(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
 	}

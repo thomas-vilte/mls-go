@@ -94,7 +94,7 @@ func FuzzSecret(f *testing.F) {
 	f.Add([]byte("long secret value for testing"))
 
 	f.Fuzz(func(t *testing.T, value []byte) {
-		// Crear secret
+		// Create secret.
 		secret := NewSecret(value)
 
 		// Verificar AsSlice
@@ -126,7 +126,7 @@ func FuzzSecret(f *testing.F) {
 	})
 }
 
-// TestAEAD_Roundtrip prueba el cifrado/descifrado AEAD.
+// TestAEAD_Roundtrip verifies AEAD encryption/decryption.
 func TestAEAD_Roundtrip(t *testing.T) {
 	key := []byte("0123456789abcdef") // 16 bytes = AES-128
 	nonce := []byte("0123456789ab")   // 12 bytes
@@ -139,7 +139,7 @@ func TestAEAD_Roundtrip(t *testing.T) {
 		t.Fatalf("AESEncrypt() error = %v", err)
 	}
 
-	// El ciphertext debe ser más largo que el plaintext (incluye auth tag de 16 bytes)
+	// Ciphertext must be longer than plaintext because it includes the auth tag.
 	if len(ciphertext) <= len(plaintext) {
 		t.Errorf("Ciphertext should be longer than plaintext")
 	}
@@ -156,7 +156,7 @@ func TestAEAD_Roundtrip(t *testing.T) {
 	}
 }
 
-// TestAEAD_WrongKey prueba que falla con clave incorrecta.
+// TestAEAD_WrongKey verifies that decryption fails with the wrong key.
 func TestAEAD_WrongKey(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	wrongKey := []byte("wrong key value!")
@@ -169,14 +169,14 @@ func TestAEAD_WrongKey(t *testing.T) {
 		t.Fatalf("AESEncrypt() error = %v", err)
 	}
 
-	// Decrypt con clave incorrecta debe fallar
+	// Decryption with the wrong key must fail.
 	_, err = AESDecrypt(wrongKey, nonce, ciphertext, nil)
 	if err == nil {
 		t.Error("AESDecrypt() should fail with wrong key")
 	}
 }
 
-// TestAEAD_WrongNonce prueba que falla con nonce incorrecto.
+// TestAEAD_WrongNonce verifies that decryption fails with the wrong nonce.
 func TestAEAD_WrongNonce(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	nonce := []byte("0123456789ab")
@@ -189,14 +189,14 @@ func TestAEAD_WrongNonce(t *testing.T) {
 		t.Fatalf("AESEncrypt() error = %v", err)
 	}
 
-	// Decrypt con nonce incorrecto debe fallar
+	// Decryption with the wrong nonce must fail.
 	_, err = AESDecrypt(key, wrongNonce, ciphertext, nil)
 	if err == nil {
 		t.Error("AESDecrypt() should fail with wrong nonce")
 	}
 }
 
-// TestAEAD_TamperedData prueba que detecta datos modificados.
+// TestAEAD_TamperedData verifies tamper detection.
 func TestAEAD_TamperedData(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	nonce := []byte("0123456789ab")
@@ -213,7 +213,7 @@ func TestAEAD_TamperedData(t *testing.T) {
 	copy(tampered, ciphertext)
 	tampered[0] ^= 0xFF // Modificar primer byte
 
-	// Decrypt con datos modificados debe fallar
+	// Decryption of tampered data must fail.
 	_, err = AESDecrypt(key, nonce, tampered, nil)
 	if err == nil {
 		t.Error("AESDecrypt() should fail with tampered data")

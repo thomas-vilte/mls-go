@@ -81,26 +81,26 @@ func (g *Group) MarshalState() ([]byte, error) {
 	}
 
 	state := &GroupStateData{
-		GroupID:               g.GroupID.AsSlice(),
-		Epoch:                 g.Epoch.AsUint64(),
-		CipherSuite:           uint16(g.CipherSuite),
-		OwnLeafIndex:          uint32(g.OwnLeafIndex),
-		GroupContext:          g.GroupContext.Marshal(),
-		InterimTranscriptHash: g.InterimTranscriptHash,
-		ConfirmationTag:       g.ConfirmationTag,
+		GroupID:               g.groupID.AsSlice(),
+		Epoch:                 g.epoch.AsUint64(),
+		CipherSuite:           uint16(g.cipherSuite),
+		OwnLeafIndex:          uint32(g.ownLeafIndex),
+		GroupContext:          g.groupContext.Marshal(),
+		InterimTranscriptHash: g.interimTranscriptHash,
+		ConfirmationTag:       g.confirmationTag,
 		Members:               make(map[uint32]*MemberStateData),
-		CachedPsks:            g.CachedPsks,
-		MyLeafEncryptionKey:   g.MyLeafEncryptionKey,
+		CachedPsks:            g.cachedPsks,
+		MyLeafEncryptionKey:   g.myLeafEncryptionKey,
 	}
 
 	// Serialize tree
-	state.RatchetTree = g.RatchetTree.MarshalTree()
+	state.RatchetTree = g.ratchetTree.MarshalTree()
 
 	// Serialize EpochSecrets (assumes schedule will export this soon)
-	state.EpochSecrets = g.EpochSecrets.MarshalData()
+	state.EpochSecrets = g.epochSecrets.MarshalData()
 
 	// Serialize members
-	for idx, member := range g.Members {
+	for idx, member := range g.members {
 		if member != nil && member.KeyPackage != nil {
 			state.Members[uint32(idx)] = &MemberStateData{
 				LeafIndex:  uint32(member.LeafIndex),
@@ -180,22 +180,22 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 
 	// Restore Group
 	g := &Group{
-		GroupID:               NewGroupID(state.GroupID),
-		Epoch:                 NewGroupEpoch(state.Epoch),
-		CipherSuite:           cs,
-		OwnLeafIndex:          LeafNodeIndex(state.OwnLeafIndex),
-		RatchetTree:           tree,
-		GroupContext:          gc,
-		InterimTranscriptHash: state.InterimTranscriptHash,
-		ConfirmationTag:       state.ConfirmationTag,
-		EpochSecrets:          epochSecrets,
-		KeySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
-		SecretTree:            st,
-		Members:               make(map[LeafNodeIndex]*Member),
-		CachedPsks:            state.CachedPsks,
-		MyLeafEncryptionKey:   state.MyLeafEncryptionKey,
-		Proposals:             NewProposalStore(),
-		ProposalByRef:         make(map[string]*Proposal),
+		groupID:               NewGroupID(state.GroupID),
+		epoch:                 NewGroupEpoch(state.Epoch),
+		cipherSuite:           cs,
+		ownLeafIndex:          LeafNodeIndex(state.OwnLeafIndex),
+		ratchetTree:           tree,
+		groupContext:          gc,
+		interimTranscriptHash: state.InterimTranscriptHash,
+		confirmationTag:       state.ConfirmationTag,
+		epochSecrets:          epochSecrets,
+		keySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
+		secretTree:            st,
+		members:               make(map[LeafNodeIndex]*Member),
+		cachedPsks:            state.CachedPsks,
+		myLeafEncryptionKey:   state.MyLeafEncryptionKey,
+		proposals:             NewProposalStore(),
+		proposalByRef:         make(map[string]*Proposal),
 		state:                 StateOperational,
 	}
 
@@ -205,7 +205,7 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshaling member %d key package: %w", idx, err)
 		}
-		g.Members[LeafNodeIndex(idx)] = &Member{
+		g.members[LeafNodeIndex(idx)] = &Member{
 			LeafIndex:  LeafNodeIndex(mData.LeafIndex),
 			KeyPackage: kp,
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
@@ -47,13 +48,8 @@ func NewLeafNodeIndex(index uint32) LeafNodeIndex {
 	return LeafNodeIndex(index)
 }
 
-// Extension represents an MLS extension per RFC 9420 §13.
-//
-// Extensions carry optional information in MLS objects.
-type Extension struct {
-	Type uint16
-	Data []byte
-}
+// Extension re-exports the canonical MLS extension type.
+type Extension = mlsext.Extension
 
 // ProposalOrRef represents either a full proposal or a reference to one (RFC §12.4).
 //
@@ -127,7 +123,7 @@ func ProposalMarshal(p *Proposal) []byte {
 			w.WriteUint16(uint16(p.ReInit.CipherSuite))
 			extBuf := tls.NewWriter()
 			for _, ext := range p.ReInit.Extensions {
-				extBuf.WriteUint16(ext.Type)
+				extBuf.WriteUint16(uint16(ext.Type))
 				extBuf.WriteVLBytes(ext.Data)
 			}
 			w.WriteVLBytes(extBuf.Bytes())
@@ -140,7 +136,7 @@ func ProposalMarshal(p *Proposal) []byte {
 		if p.GroupContextExtensions != nil {
 			extBuf := tls.NewWriter()
 			for _, ext := range p.GroupContextExtensions.Extensions {
-				extBuf.WriteUint16(ext.Type)
+				extBuf.WriteUint16(uint16(ext.Type))
 				extBuf.WriteVLBytes(ext.Data)
 			}
 			w.WriteVLBytes(extBuf.Bytes())

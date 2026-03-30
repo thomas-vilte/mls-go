@@ -1,4 +1,4 @@
 package mls
 
-// Version of the library
-const Version = "0.2.0"
+// Version is the current library version.
+const Version = "0.3.0"

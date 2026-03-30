@@ -40,16 +40,16 @@ func TestUnmarshalGroupInfo_RoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalGroupInfo: %v", err)
 	}
 
-	if !bytes.Equal(got.GroupContext.GroupID.AsSlice(), g.GroupContext.GroupID.AsSlice()) {
+	if !bytes.Equal(got.GroupContext.GroupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
 		t.Error("GroupID match after unmarshal")
 	}
-	if got.GroupContext.Epoch.AsUint64() != g.GroupContext.Epoch.AsUint64() {
-		t.Errorf("Epoch = %d, want %d", got.GroupContext.Epoch.AsUint64(), g.GroupContext.Epoch.AsUint64())
+	if got.GroupContext.Epoch.AsUint64() != g.groupContext.Epoch.AsUint64() {
+		t.Errorf("Epoch = %d, want %d", got.GroupContext.Epoch.AsUint64(), g.groupContext.Epoch.AsUint64())
 	}
-	if got.GroupContext.CipherSuite != g.GroupContext.CipherSuite {
-		t.Errorf("CipherSuite = %d, want %d", got.GroupContext.CipherSuite, g.GroupContext.CipherSuite)
+	if got.GroupContext.CipherSuite != g.groupContext.CipherSuite {
+		t.Errorf("CipherSuite = %d, want %d", got.GroupContext.CipherSuite, g.groupContext.CipherSuite)
 	}
-	if !bytes.Equal(got.GroupContext.TreeHash, g.GroupContext.TreeHash) {
+	if !bytes.Equal(got.GroupContext.TreeHash, g.groupContext.TreeHash) {
 		t.Error("TreeHash match after unmarshal")
 	}
 }

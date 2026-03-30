@@ -9,6 +9,8 @@ import (
 	"hash"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
+	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
@@ -200,43 +202,11 @@ type GroupInfo struct {
 	Signature       []byte
 }
 
-// GroupContext represents the MLS GroupContext as defined in RFC 9420 §5.2.
-//
-// The GroupContext summarizes the shared, public state of the group and is
-// used to ensure all members have a consistent view of the group state.
-//
-// RFC 9420 §5.2:
-//
-//	struct {
-//	    opaque group_id<V>;
-//	    uint64 epoch;
-//	    opaque tree_hash<V>;
-//	    opaque confirmed_transcript_hash<V>;
-//	    Extension extensions<V>;
-//	} GroupContext;
-type GroupContext struct {
-	ProtocolVersion         uint16
-	CipherSuite             uint16
-	GroupID                 []byte
-	Epoch                   uint64
-	TreeHash                []byte
-	ConfirmedTranscriptHash []byte
-	Extensions              []Extension
-}
+// GroupContext re-exports the canonical MLS group context type.
+type GroupContext = group.GroupContext
 
-// Extension represents a generic MLS extension as defined in RFC 9420 §13.4.
-//
-// Extensions are used to add optional functionality to MLS messages.
-// Unknown extensions MUST be ignored by receivers (RFC 9420 §13).
-//
-//	struct {
-//	    ExtensionType extension_type;
-//	    opaque extension_data<V>;
-//	} Extension;
-type Extension struct {
-	Type uint16
-	Data []byte
-}
+// Extension re-exports the canonical MLS extension type.
+type Extension = mlsext.Extension
 
 // Marshal serializes the GroupInfo to TLS presentation language format.
 //
@@ -273,44 +243,13 @@ func (gi *GroupInfo) marshalTBS() []byte {
 
 	extBuf := tls.NewWriter()
 	for _, ext := range gi.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
 
 	buf.WriteVLBytes(gi.ConfirmationTag)
 	buf.WriteUint32(gi.Signer)
-
-	return buf.Bytes()
-}
-
-// Marshal serializes the GroupContext to TLS presentation language format
-// as specified in RFC 9420 §5.2.
-//
-// The encoded format is:
-//   - protocol_version: uint16 (MLS version)
-//   - cipher_suite: uint16 (cryptographic algorithms)
-//   - group_id: variable-length identifier
-//   - epoch: uint64 (current epoch number)
-//   - tree_hash: hash of the ratchet tree
-//   - confirmed_transcript_hash: hash of prior handshake messages
-//   - extensions: optional extensions
-func (gc *GroupContext) Marshal() []byte {
-	buf := tls.NewWriter()
-
-	buf.WriteUint16(gc.ProtocolVersion)
-	buf.WriteUint16(gc.CipherSuite)
-	buf.WriteVLBytes(gc.GroupID)
-	buf.WriteUint64(gc.Epoch)
-	buf.WriteVLBytes(gc.TreeHash)
-	buf.WriteVLBytes(gc.ConfirmedTranscriptHash)
-
-	extBuf := tls.NewWriter()
-	for _, ext := range gc.Extensions {
-		extBuf.WriteUint16(ext.Type)
-		extBuf.WriteVLBytes(ext.Data)
-	}
-	buf.WriteVLBytes(extBuf.Bytes())
 
 	return buf.Bytes()
 }
@@ -380,57 +319,7 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 //
 // Returns an error if the data is malformed or incomplete.
 func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
-	buf := tls.NewReader(data)
-
-	protocolVersion, err := buf.ReadUint16()
-	if err != nil {
-		return nil, err
-	}
-
-	cipherSuite, err := buf.ReadUint16()
-	if err != nil {
-		return nil, err
-	}
-
-	groupID, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	epoch, err := buf.ReadUint64()
-	if err != nil {
-		return nil, err
-	}
-
-	treeHash, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	confirmedTranscriptHash, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	extBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	extensions, err := unmarshalExtensions(extBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	return &GroupContext{
-		ProtocolVersion:         protocolVersion,
-		CipherSuite:             cipherSuite,
-		GroupID:                 groupID,
-		Epoch:                   epoch,
-		TreeHash:                treeHash,
-		ConfirmedTranscriptHash: confirmedTranscriptHash,
-		Extensions:              extensions,
-	}, nil
+	return group.UnmarshalGroupContext(data)
 }
 
 // unmarshalExtensions parses a vector of extensions from TLS presentation
@@ -458,7 +347,7 @@ func unmarshalExtensions(data []byte) ([]Extension, error) {
 		}
 
 		extensions = append(extensions, Extension{
-			Type: extType,
+			Type: mlsext.ExtensionType(extType),
 			Data: extData,
 		})
 	}

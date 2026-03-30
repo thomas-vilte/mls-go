@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/group"
+	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/messages"
 )
 
@@ -80,10 +82,10 @@ func TestWelcomeFindSecret(t *testing.T) {
 
 func TestGroupInfoMarshalUnmarshal(t *testing.T) {
 	gc := &messages.GroupContext{
-		ProtocolVersion:         1,
-		CipherSuite:             0x0002,
-		GroupID:                 []byte{0x00, 0x01, 0x02, 0x03},
-		Epoch:                   5,
+		Version:                 keypackages.MLS10,
+		CipherSuite:             ciphersuite.CipherSuite(0x0002),
+		GroupID:                 group.NewGroupID([]byte{0x00, 0x01, 0x02, 0x03}),
+		Epoch:                   group.NewGroupEpoch(5),
 		TreeHash:                bytes.Repeat([]byte{0xAA}, 32),
 		ConfirmedTranscriptHash: bytes.Repeat([]byte{0xBB}, 32),
 		Extensions:              []messages.Extension{},
@@ -125,10 +127,10 @@ func TestGroupInfoMarshalUnmarshal(t *testing.T) {
 
 func TestGroupContextMarshalUnmarshal(t *testing.T) {
 	gc := &messages.GroupContext{
-		ProtocolVersion:         1,
-		CipherSuite:             0x0002,
-		GroupID:                 []byte{0xDE, 0xAD, 0xBE, 0xEF},
-		Epoch:                   42,
+		Version:                 keypackages.MLS10,
+		CipherSuite:             ciphersuite.CipherSuite(0x0002),
+		GroupID:                 group.NewGroupID([]byte{0xDE, 0xAD, 0xBE, 0xEF}),
+		Epoch:                   group.NewGroupEpoch(42),
 		TreeHash:                bytes.Repeat([]byte{0x11}, 32),
 		ConfirmedTranscriptHash: bytes.Repeat([]byte{0x22}, 32),
 		Extensions:              []messages.Extension{{Type: 0x0002, Data: []byte{0x33, 0x44}}},
@@ -141,7 +143,7 @@ func TestGroupContextMarshalUnmarshal(t *testing.T) {
 	if got.Epoch != gc.Epoch {
 		t.Errorf("Epoch = %d, want %d", got.Epoch, gc.Epoch)
 	}
-	if !bytes.Equal(got.GroupID, gc.GroupID) {
+	if !bytes.Equal(got.GroupID.AsSlice(), gc.GroupID.AsSlice()) {
 		t.Error("GroupID mismatch")
 	}
 	if len(got.Extensions) != 1 {
@@ -157,10 +159,10 @@ func TestGroupContextMarshalUnmarshal(t *testing.T) {
 // welcome_key/nonce pair and decrypted back to the original.
 func TestEncryptDecryptGroupInfo(t *testing.T) {
 	gc := &messages.GroupContext{
-		ProtocolVersion:         1,
-		CipherSuite:             0x0002,
-		GroupID:                 []byte{0x01, 0x02, 0x03, 0x04},
-		Epoch:                   0,
+		Version:                 keypackages.MLS10,
+		CipherSuite:             ciphersuite.CipherSuite(0x0002),
+		GroupID:                 group.NewGroupID([]byte{0x01, 0x02, 0x03, 0x04}),
+		Epoch:                   group.NewGroupEpoch(0),
 		TreeHash:                bytes.Repeat([]byte{0xAB}, 32),
 		ConfirmedTranscriptHash: bytes.Repeat([]byte{0xCD}, 32),
 		Extensions:              []messages.Extension{},
@@ -199,10 +201,10 @@ func TestEncryptDecryptGroupInfo(t *testing.T) {
 
 func TestDecryptGroupInfo_WrongKey(t *testing.T) {
 	gc := &messages.GroupContext{
-		ProtocolVersion: 1,
-		CipherSuite:     0x0002,
-		GroupID:         []byte{0x01},
-		Extensions:      []messages.Extension{},
+		Version:     keypackages.MLS10,
+		CipherSuite: ciphersuite.CipherSuite(0x0002),
+		GroupID:     group.NewGroupID([]byte{0x01}),
+		Extensions:  []messages.Extension{},
 	}
 	gi := &messages.GroupInfo{
 		GroupContext:    gc,

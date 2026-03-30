@@ -33,7 +33,7 @@ func TestStateSerialization_RoundTrip(t *testing.T) {
 	}
 
 	// We save some additional state to test that it is exported
-	aliceGroup.CachedPsks["test-psk"] = []byte{1, 2, 3, 4}
+	aliceGroup.cachedPsks["test-psk"] = []byte{1, 2, 3, 4}
 
 	// 2. Serialize state
 	data, err := aliceGroup.MarshalState()
@@ -48,36 +48,36 @@ func TestStateSerialization_RoundTrip(t *testing.T) {
 	}
 
 	// 4. Verify everything matches
-	if restoredGroup.Epoch.AsUint64() != aliceGroup.Epoch.AsUint64() {
-		t.Errorf("Epoch mismatch: got %d, want %d", restoredGroup.Epoch.AsUint64(), aliceGroup.Epoch.AsUint64())
+	if restoredGroup.epoch.AsUint64() != aliceGroup.epoch.AsUint64() {
+		t.Errorf("Epoch mismatch: got %d, want %d", restoredGroup.epoch.AsUint64(), aliceGroup.epoch.AsUint64())
 	}
 
-	if !bytes.Equal(restoredGroup.GroupID.AsSlice(), aliceGroup.GroupID.AsSlice()) {
+	if !bytes.Equal(restoredGroup.groupID.AsSlice(), aliceGroup.groupID.AsSlice()) {
 		t.Errorf("GroupID mismatch")
 	}
 
-	if restoredGroup.CipherSuite != aliceGroup.CipherSuite {
+	if restoredGroup.cipherSuite != aliceGroup.cipherSuite {
 		t.Errorf("CipherSuite mismatch")
 	}
 
-	if restoredGroup.OwnLeafIndex != aliceGroup.OwnLeafIndex {
+	if restoredGroup.ownLeafIndex != aliceGroup.ownLeafIndex {
 		t.Errorf("OwnLeafIndex mismatch")
 	}
 
-	if !bytes.Equal(restoredGroup.InterimTranscriptHash, aliceGroup.InterimTranscriptHash) {
+	if !bytes.Equal(restoredGroup.interimTranscriptHash, aliceGroup.interimTranscriptHash) {
 		t.Errorf("InterimTranscriptHash mismatch")
 	}
 
-	if !bytes.Equal(restoredGroup.EpochSecrets.InitSecret.AsSlice(), aliceGroup.EpochSecrets.InitSecret.AsSlice()) {
+	if !bytes.Equal(restoredGroup.epochSecrets.InitSecret.AsSlice(), aliceGroup.epochSecrets.InitSecret.AsSlice()) {
 		t.Errorf("InitSecret mismatch")
 	}
 
-	if !bytes.Equal(restoredGroup.CachedPsks["test-psk"], []byte{1, 2, 3, 4}) {
+	if !bytes.Equal(restoredGroup.cachedPsks["test-psk"], []byte{1, 2, 3, 4}) {
 		t.Errorf("CachedPsks mismatch")
 	}
 
-	if restoredGroup.RatchetTree.NumLeaves != aliceGroup.RatchetTree.NumLeaves {
-		t.Errorf("RatchetTree.NumLeaves mismatch: got %d, want %d", restoredGroup.RatchetTree.NumLeaves, aliceGroup.RatchetTree.NumLeaves)
+	if restoredGroup.ratchetTree.NumLeaves != aliceGroup.ratchetTree.NumLeaves {
+		t.Errorf("RatchetTree.NumLeaves mismatch: got %d, want %d", restoredGroup.ratchetTree.NumLeaves, aliceGroup.ratchetTree.NumLeaves)
 	}
 
 	if restoredGroup.state != StateOperational {

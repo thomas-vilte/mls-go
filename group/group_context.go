@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
@@ -34,6 +35,31 @@ type GroupContext struct {
 	TreeHash                []byte
 	ConfirmedTranscriptHash []byte
 	Extensions              []Extension
+}
+
+// Clone returns a deep copy of the GroupContext.
+func (gc *GroupContext) Clone() *GroupContext {
+	if gc == nil {
+		return nil
+	}
+
+	clonedExtensions := make([]Extension, len(gc.Extensions))
+	for i, ext := range gc.Extensions {
+		clonedExtensions[i] = Extension{
+			Type: ext.Type,
+			Data: append([]byte(nil), ext.Data...),
+		}
+	}
+
+	return &GroupContext{
+		Version:                 gc.Version,
+		CipherSuite:             gc.CipherSuite,
+		GroupID:                 NewGroupID(append([]byte(nil), gc.GroupID.AsSlice()...)),
+		Epoch:                   gc.Epoch,
+		TreeHash:                append([]byte(nil), gc.TreeHash...),
+		ConfirmedTranscriptHash: append([]byte(nil), gc.ConfirmedTranscriptHash...),
+		Extensions:              clonedExtensions,
+	}
 }
 
 // IncrementEpoch increments the epoch counter.
@@ -77,7 +103,7 @@ func (gc *GroupContext) Marshal() []byte {
 	// Extensions
 	extBuf := tls.NewWriter()
 	for _, ext := range gc.Extensions {
-		extBuf.WriteUint16(ext.Type)
+		extBuf.WriteUint16(uint16(ext.Type))
 		extBuf.WriteVLBytes(ext.Data)
 	}
 	w.WriteVLBytes(extBuf.Bytes())
@@ -157,7 +183,7 @@ func parseExtensions(data []byte) ([]Extension, error) {
 		}
 
 		extensions = append(extensions, Extension{
-			Type: extType,
+			Type: mlsext.ExtensionType(extType),
 			Data: extData,
 		})
 	}

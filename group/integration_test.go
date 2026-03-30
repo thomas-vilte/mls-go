@@ -54,14 +54,14 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 		t.Fatalf("AddMember(bob): %v", err)
 	}
 	// Capture key schedule material before merge.
-	initSecret := aliceGroup.EpochSecrets.InitSecret.Clone()
+	initSecret := aliceGroup.epochSecrets.InitSecret.Clone()
 	sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 	pathSecret := []byte(nil)
-	if sc.RootPathSecret != nil {
-		pathSecret = append([]byte(nil), sc.RootPathSecret.AsSlice()...)
+	if sc.rootPathSecret != nil {
+		pathSecret = append([]byte(nil), sc.rootPathSecret.AsSlice()...)
 	}
 	joinerSecret, err := initSecret.HKDFExtract(ciphersuite.NewSecret(pathSecret))
 	if err != nil {
@@ -70,14 +70,11 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 	if err = aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit: %v", err)
 	}
-	welcome, err := aliceGroup.CreateWelcome(
-		[]*keypackages.KeyPackage{bob.kp},
-		joinerSecret,
-		pathSecret,
-		alice.sigPriv,
-		nil,
-		nil,
-	)
+	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bob.kp}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		PathSecret:    pathSecret,
+		SignerPrivKey: alice.sigPriv,
+	})
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
@@ -87,18 +84,18 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 	}
 
 	// Keep both group instances aligned on epoch secrets for message roundtrip checks.
-	bobGroup.EpochSecrets = &schedule.EpochSecrets{
-		InitSecret:       aliceGroup.EpochSecrets.InitSecret.Clone(),
-		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret.Clone(),
-		EncryptionSecret: aliceGroup.EpochSecrets.EncryptionSecret.Clone(),
-		ExporterSecret:   aliceGroup.EpochSecrets.ExporterSecret.Clone(),
-		ExternalSecret:   aliceGroup.EpochSecrets.ExternalSecret.Clone(),
-		ConfirmationKey:  aliceGroup.EpochSecrets.ConfirmationKey.Clone(),
-		MembershipKey:    aliceGroup.EpochSecrets.MembershipKey.Clone(),
-		ResumptionSecret: aliceGroup.EpochSecrets.ResumptionSecret.Clone(),
+	bobGroup.epochSecrets = &schedule.EpochSecrets{
+		InitSecret:       aliceGroup.epochSecrets.InitSecret.Clone(),
+		SenderDataSecret: aliceGroup.epochSecrets.SenderDataSecret.Clone(),
+		EncryptionSecret: aliceGroup.epochSecrets.EncryptionSecret.Clone(),
+		ExporterSecret:   aliceGroup.epochSecrets.ExporterSecret.Clone(),
+		ExternalSecret:   aliceGroup.epochSecrets.ExternalSecret.Clone(),
+		ConfirmationKey:  aliceGroup.epochSecrets.ConfirmationKey.Clone(),
+		MembershipKey:    aliceGroup.epochSecrets.MembershipKey.Clone(),
+		ResumptionSecret: aliceGroup.epochSecrets.ResumptionSecret.Clone(),
 	}
-	bobGroup.KeySchedule = schedule.NewKeySchedule(bobGroup.CipherSuite, bobGroup.EpochSecrets.InitSecret)
-	bobGroup.SecretTree, err = secrettree.NewTree(bobGroup.EpochSecrets.EncryptionSecret, bobGroup.RatchetTree.NumLeaves, bobGroup.CipherSuite)
+	bobGroup.keySchedule = schedule.NewKeySchedule(bobGroup.cipherSuite, bobGroup.epochSecrets.InitSecret)
+	bobGroup.secretTree, err = secrettree.NewTree(bobGroup.epochSecrets.EncryptionSecret, bobGroup.ratchetTree.NumLeaves, bobGroup.cipherSuite)
 	if err != nil {
 		t.Fatalf("secrettree.NewTree(bob): %v", err)
 	}
@@ -106,8 +103,8 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 }
 func TestWelcomeRoundTrip(t *testing.T) {
 	aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
-	if bobGroup.Epoch.AsUint64() != 1 {
-		t.Fatalf("bob epoch = %d, want 1", bobGroup.Epoch.AsUint64())
+	if bobGroup.epoch.AsUint64() != 1 {
+		t.Fatalf("bob epoch = %d, want 1", bobGroup.epoch.AsUint64())
 	}
 	if aliceGroup.MemberCount() < 2 || bobGroup.MemberCount() < 2 {
 		t.Fatalf("expected at least 2 members (alice=%d bob=%d)", aliceGroup.MemberCount(), bobGroup.MemberCount())
@@ -117,7 +114,7 @@ func TestWelcomeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessage(alice): %v", err)
 	}
-	got, err := bobGroup.ReceiveMessage(pm, aliceGroup.OwnLeafIndex)
+	got, err := bobGroup.ReceiveMessage(pm, aliceGroup.ownLeafIndex)
 	if err != nil {
 		t.Fatalf("ReceiveMessage(bob): %v", err)
 	}
@@ -132,7 +129,7 @@ func TestPrivateMessageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessage(alice): %v", err)
 	}
-	gotAB, err := bobGroup.ReceiveMessage(pmAB, aliceGroup.OwnLeafIndex)
+	gotAB, err := bobGroup.ReceiveMessage(pmAB, aliceGroup.ownLeafIndex)
 	if err != nil {
 		t.Fatalf("ReceiveMessage(bob): %v", err)
 	}
@@ -144,7 +141,7 @@ func TestPrivateMessageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessage(bob): %v", err)
 	}
-	gotBA, err := aliceGroup.ReceiveMessage(pmBA, bobGroup.OwnLeafIndex)
+	gotBA, err := aliceGroup.ReceiveMessage(pmBA, bobGroup.ownLeafIndex)
 	if err != nil {
 		t.Fatalf("ReceiveMessage(alice): %v", err)
 	}
@@ -161,34 +158,34 @@ func TestExternalCommitRoundTrip(t *testing.T) {
 	}
 	charlieGroup, sc, err := ExternalCommit(
 		groupInfo,
-		aliceGroup.CipherSuite,
+		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
 		t.Fatalf("ExternalCommit: %v", err)
 	}
-	if sc == nil || sc.AuthenticatedContent == nil {
+	if sc == nil || sc.authenticatedContent == nil {
 		t.Fatalf("external staged commit is nil")
 	}
 	err = aliceGroup.MergeCommit(sc)
 	if err != nil {
 		t.Fatalf("MergeCommit(external): %v", err)
 	}
-	if aliceGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("alice epoch = %d, want 2", aliceGroup.Epoch.AsUint64())
+	if aliceGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("alice epoch = %d, want 2", aliceGroup.epoch.AsUint64())
 	}
-	if charlieGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.Epoch.AsUint64())
+	if charlieGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.epoch.AsUint64())
 	}
 }
 
 func TestConfirmationTagPersistence(t *testing.T) {
 	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
 
-	if len(aliceGroup.ConfirmationTag) == 0 {
+	if len(aliceGroup.confirmationTag) == 0 {
 		t.Fatalf("alice confirmation tag should not be empty after merge")
 	}
 
@@ -197,17 +194,17 @@ func TestConfirmationTagPersistence(t *testing.T) {
 		t.Fatalf("GetGroupInfo: %v", err)
 	}
 
-	if !bytes.Equal(groupInfo.ConfirmationTag, aliceGroup.ConfirmationTag) {
+	if !bytes.Equal(groupInfo.ConfirmationTag, aliceGroup.confirmationTag) {
 		t.Fatalf("group info confirmation tag sametch")
 	}
 
 	charlie := newTestUser(t, "charlie-confirmation")
 	charlieGroup, sc, err := ExternalCommit(
 		groupInfo,
-		aliceGroup.CipherSuite,
+		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
@@ -218,13 +215,13 @@ func TestConfirmationTagPersistence(t *testing.T) {
 		t.Fatalf("MergeCommit(external): %v", err)
 	}
 
-	if aliceGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("alice epoch = %d, want 2", aliceGroup.Epoch.AsUint64())
+	if aliceGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("alice epoch = %d, want 2", aliceGroup.epoch.AsUint64())
 	}
-	if charlieGroup.Epoch.AsUint64() != 2 {
-		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.Epoch.AsUint64())
+	if charlieGroup.epoch.AsUint64() != 2 {
+		t.Fatalf("charlie epoch = %d, want 2", charlieGroup.epoch.AsUint64())
 	}
-	if len(aliceGroup.ConfirmationTag) == 0 {
+	if len(aliceGroup.confirmationTag) == 0 {
 		t.Fatalf("alice confirmation tag should not be empty in epoch 2")
 	}
 }
@@ -250,10 +247,10 @@ func TestExternalCommitReceiver(t *testing.T) {
 
 	_, staged, err := ExternalCommit(
 		groupInfo,
-		aliceGroup.CipherSuite,
+		aliceGroup.cipherSuite,
 		charlie.sigPriv,
 		charlie.sigPub,
-		-1,
+		nil,
 		charlie.kp.LeafNode.Credential,
 	)
 	if err != nil {
@@ -261,7 +258,7 @@ func TestExternalCommitReceiver(t *testing.T) {
 	}
 
 	err = aliceGroup.ProcessReceivedCommit(
-		staged.AuthenticatedContent,
+		staged.authenticatedContent,
 		treesync.LeafIndex(0),
 		alice.priv.EncryptionKey.Bytes(), // RFC §10.1: TreeKEM uses LeafNode.EncryptionKey, not InitKey
 	)
@@ -269,8 +266,8 @@ func TestExternalCommitReceiver(t *testing.T) {
 		t.Fatalf("ProcessReceivedCommit(external): %v", err)
 	}
 
-	if aliceGroup.Epoch.AsUint64() != 1 {
-		t.Fatalf("alice epoch = %d, want 1", aliceGroup.Epoch.AsUint64())
+	if aliceGroup.epoch.AsUint64() != 1 {
+		t.Fatalf("alice epoch = %d, want 1", aliceGroup.epoch.AsUint64())
 	}
 }
 
@@ -290,19 +287,19 @@ func TestNewGroupFromReInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}
-	if group.Epoch.AsUint64() != 0 {
-		t.Fatalf("epoch = %d, want 0", group.Epoch.AsUint64())
+	if group.epoch.AsUint64() != 0 {
+		t.Fatalf("epoch = %d, want 0", group.epoch.AsUint64())
 	}
-	if group.GroupContext == nil {
+	if group.groupContext == nil {
 		t.Fatal("group context is nil")
 	}
-	if !bytes.Equal(group.GroupContext.GroupID.AsSlice(), reinit.GroupID) {
+	if !bytes.Equal(group.groupContext.GroupID.AsSlice(), reinit.GroupID) {
 		t.Fatal("group id sametch")
 	}
-	if group.KeySchedule == nil {
+	if group.keySchedule == nil {
 		t.Fatal("key schedule is nil")
 	}
-	if _, ok := group.CachedPsks[string(reinit.GroupID)]; !ok {
+	if _, ok := group.cachedPsks[string(reinit.GroupID)]; !ok {
 		t.Fatal("resumption PSK not cached")
 	}
 }

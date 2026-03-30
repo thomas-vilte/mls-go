@@ -418,13 +418,13 @@ func TestBuildPrivateContentAAD_Deterministic(t *testing.T) {
 // Helper
 // ============================================================================
 
-// makeSigKeyPair returns a SignaturePrivateKey + matching OpenMlsSignaturePublicKey.
-func makeSigKeyPair(t *testing.T, cs ciphersuite.CipherSuite) (*ciphersuite.SignaturePrivateKey, *ciphersuite.OpenMlsSignaturePublicKey) {
+// makeSigKeyPair returns a SignaturePrivateKey + matching MLSSignaturePublicKey.
+func makeSigKeyPair(t *testing.T, cs ciphersuite.CipherSuite) (*ciphersuite.SignaturePrivateKey, *ciphersuite.MLSSignaturePublicKey) {
 	t.Helper()
 	privKey, err := ciphersuite.GenerateSignaturePrivateKey()
 	if err != nil {
 		t.Fatalf("GenerateSignaturePrivateKey: %v", err)
 	}
 	pubKey := privKey.PublicKey()
-	return privKey, ciphersuite.NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), cs.SignatureScheme())
+	return privKey, ciphersuite.NewMLSSignaturePublicKey(pubKey.AsSlice(), cs.SignatureScheme())
 }

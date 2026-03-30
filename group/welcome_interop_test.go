@@ -84,7 +84,7 @@ func TestWelcomeVectors(t *testing.T) {
 			}
 
 			signerPubBytes := mustDecodeHexBytes(t, v.SignerPub)
-			signerPub := ciphersuite.NewOpenMlsSignaturePublicKey(signerPubBytes, cs.SignatureScheme())
+			signerPub := ciphersuite.NewMLSSignaturePublicKey(signerPubBytes, cs.SignatureScheme())
 			sig := ciphersuite.NewSignature(welcome.GroupInfo.Signature)
 			if err := ciphersuite.VerifyWithLabel(signerPub, "GroupInfoTBS", welcome.GroupInfo.MarshalTBS(), sig); err != nil {
 				t.Fatalf("group info signature sametch with signer_pub: %v", err)

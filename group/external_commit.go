@@ -21,7 +21,7 @@ import (
 // and an UpdatePath, and creates an external commit that adds them to the group.
 // Returns the resulting group state and the PublicMessage to broadcast to other members.
 //
-// If removePriorLeaf >= 0, a Remove proposal for that leaf index is included before
+// If removePriorLeaf is non-nil, a Remove proposal for that leaf index is included before
 // the ExternalInit proposal (RFC §12.4.3.2: external commit may contain Remove proposals
 // to remove prior appearance of this member).
 func ExternalCommit(
@@ -29,7 +29,7 @@ func ExternalCommit(
 	cs ciphersuite.CipherSuite,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
-	removePriorLeaf int, // -1 means no removal; >= 0 is the leaf index to remove
+	removePriorLeaf *LeafNodeIndex,
 	credential *credentials.Credential, // identity credential for the new leaf node
 ) (*Group, *StagedCommit, error) {
 	if groupInfo == nil || groupInfo.GroupContext == nil {
@@ -43,7 +43,7 @@ func ExternalCommit(
 	// HPKEPublicKey is VLBytes in TLS encoding; unwrap VL prefix to get raw key bytes.
 	var externalPubBytes []byte
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == uint16(mlsext.ExtensionTypeExternalPub) {
+		if ext.Type == mlsext.ExtensionTypeExternalPub {
 			r := tls.NewReader(ext.Data)
 			raw, err := r.ReadVLBytes()
 			if err == nil && len(raw) > 0 {
@@ -64,15 +64,16 @@ func ExternalCommit(
 	// parsed tree_hash doesn't match GroupInfo's tree_hash.
 	tree := groupInfo.RatchetTree
 	for _, ext := range groupInfo.Extensions {
-		if ext.Type == uint16(mlsext.ExtensionTypeRatchetTree) {
-			parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
-			if err != nil {
-				return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
-			}
-			parsed = parsed.ExpandToPowerOf2()
-			tree = parsed
-			break
+		if ext.Type != mlsext.ExtensionTypeRatchetTree {
+			continue
 		}
+		parsed, err := treesync.UnmarshalTreeFromExtension(ext.Data, groupInfo.GroupContext.CipherSuite)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unmarshaling ratchet tree: %w", err)
+		}
+		parsed = parsed.ExpandToPowerOf2()
+		tree = parsed
+		break
 	}
 	if tree == nil {
 		return nil, nil, fmt.Errorf("ratchet tree not present in GroupInfo")
@@ -98,8 +99,8 @@ func ExternalCommit(
 	// Clone tree. If removing a prior leaf, blank it first (RFC §12.4.3.2).
 	treeDiff := tree.Clone()
 	var removeProposal *Proposal
-	if removePriorLeaf >= 0 {
-		priorLeaf := treesync.LeafIndex(removePriorLeaf)
+	if removePriorLeaf != nil {
+		priorLeaf := treesync.LeafIndex(*removePriorLeaf)
 		removeProposal = &Proposal{
 			Type:   ProposalTypeRemove,
 			Remove: &RemoveProposal{Removed: LeafNodeIndex(priorLeaf)},
@@ -399,25 +400,25 @@ func ExternalCommit(
 
 	// Build local group state for the new member.
 	group := &Group{
-		GroupID:               groupContext.GroupID,
-		Epoch:                 NewGroupEpoch(groupContext.Epoch.AsUint64() + 1),
-		CipherSuite:           cs,
-		GroupContext:          newGC,
-		RatchetTree:           treeDiff,
-		OwnLeafIndex:          ownLeafIndex,
-		EpochSecrets:          epochSecrets,
-		Proposals:             NewProposalStore(),
-		ProposalByRef:         make(map[string]*Proposal),
-		KeySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
-		InterimTranscriptHash: newInterimHash,
-		Members:               make(map[LeafNodeIndex]*Member),
+		groupID:               groupContext.GroupID,
+		epoch:                 NewGroupEpoch(groupContext.Epoch.AsUint64() + 1),
+		cipherSuite:           cs,
+		groupContext:          newGC,
+		ratchetTree:           treeDiff,
+		ownLeafIndex:          ownLeafIndex,
+		epochSecrets:          epochSecrets,
+		proposals:             NewProposalStore(),
+		proposalByRef:         make(map[string]*Proposal),
+		keySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
+		interimTranscriptHash: newInterimHash,
+		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
-		CachedPsks:            make(map[string][]byte),
-		MyLeafEncryptionKey:   leafPrivKey.Bytes(),
-		PathNodePrivKeys:      pathNodePrivKeys,
+		cachedPsks:            make(map[string][]byte),
+		myLeafEncryptionKey:   leafPrivKey.Bytes(),
+		pathNodePrivKeys:      pathNodePrivKeys,
 	}
 
-	group.SecretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)
+	group.secretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, treeDiff.NumLeaves, cs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
@@ -426,7 +427,7 @@ func ExternalCommit(
 		leaf := treeDiff.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
 			leafIdx := LeafNodeIndex(i)
-			group.Members[leafIdx] = &Member{
+			group.members[leafIdx] = &Member{
 				LeafIndex:  leafIdx,
 				Credential: leaf.LeafData.Credential,
 				Active:     true,
@@ -435,13 +436,13 @@ func ExternalCommit(
 	}
 
 	stagedCommit := &StagedCommit{
-		Commit:                  commit,
-		Proposals:               []*Proposal{externalInitProposal},
-		AuthenticatedContent:    ac,
-		RootPathSecret:          commitSecret,
-		PrecomputedEpochSecrets: epochSecrets,
-		PrecomputedGroupContext: newGC,
-		PrecomputedInterimHash:  newInterimHash,
+		commit:                  commit,
+		proposals:               []*Proposal{externalInitProposal},
+		authenticatedContent:    ac,
+		rootPathSecret:          commitSecret,
+		precomputedEpochSecrets: epochSecrets,
+		precomputedGroupContext: newGC,
+		precomputedInterimHash:  newInterimHash,
 	}
 
 	return group, stagedCommit, nil

@@ -69,8 +69,8 @@ func TestNewGroupFromReInit_GroupIDPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}
-	if !bytes.Equal(g.GroupContext.GroupID.AsSlice(), groupID) {
-		t.Errorf("GroupID = %x, want %x", g.GroupContext.GroupID.AsSlice(), groupID)
+	if !bytes.Equal(g.groupContext.GroupID.AsSlice(), groupID) {
+		t.Errorf("GroupID = %x, want %x", g.groupContext.GroupID.AsSlice(), groupID)
 	}
 }
 
@@ -85,8 +85,8 @@ func TestNewGroupFromReInit_EpochZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}
-	if g.GroupContext.Epoch.AsUint64() != 0 {
-		t.Errorf("Epoch = %d, want 0", g.GroupContext.Epoch.AsUint64())
+	if g.groupContext.Epoch.AsUint64() != 0 {
+		t.Errorf("Epoch = %d, want 0", g.groupContext.Epoch.AsUint64())
 	}
 }
 
@@ -117,16 +117,16 @@ func TestNewGroupFromReInit_SecretsNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}
-	if g.EpochSecrets == nil {
+	if g.epochSecrets == nil {
 		t.Fatal("EpochSecrets is nil")
 	}
-	if g.EpochSecrets.EncryptionSecret == nil {
+	if g.epochSecrets.EncryptionSecret == nil {
 		t.Error("EncryptionSecret is nil")
 	}
-	if g.EpochSecrets.ExporterSecret == nil {
+	if g.epochSecrets.ExporterSecret == nil {
 		t.Error("ExporterSecret is nil")
 	}
-	if g.SecretTree == nil {
+	if g.secretTree == nil {
 		t.Error("SecretTree is nil")
 	}
 }
@@ -147,8 +147,8 @@ func TestNewGroupFromReInit_DifferentSecretsProduceDifferentEpochs(t *testing.T)
 	}
 
 	if bytes.Equal(
-		g1.EpochSecrets.EncryptionSecret.AsSlice(),
-		g2.EpochSecrets.EncryptionSecret.AsSlice(),
+		g1.epochSecrets.EncryptionSecret.AsSlice(),
+		g2.epochSecrets.EncryptionSecret.AsSlice(),
 	) {
 		t.Error("different resumption secrets should produce different encryption secrets")
 	}

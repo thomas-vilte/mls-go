@@ -701,7 +701,7 @@ func TestSignable_Sign_Verify(t *testing.T) {
 
 	// Verify
 	pubKey := privKey.PublicKey()
-	openMlsPubKey := NewOpenMlsSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
+	openMlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 	if err := VerifyWithLabel(openMlsPubKey, "test_label", data, sig); err != nil {
 		t.Errorf("VerifyWithLabel should succeed: %v", err)
 	}

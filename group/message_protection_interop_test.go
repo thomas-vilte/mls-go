@@ -96,18 +96,18 @@ func buildMessageProtectionGroupContextBytes(t *testing.T, v messageProtectionVe
 	return gc.Marshal()
 }
 
-func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*ciphersuite.OpenMlsSignaturePublicKey, error) {
+func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*ciphersuite.MLSSignaturePublicKey, error) {
 	if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
 		// Ed25519 keys are just 32 bytes
 		if len(data) == 32 {
-			return ciphersuite.NewOpenMlsSignaturePublicKey(data, ciphersuite.ED25519), nil
+			return ciphersuite.NewMLSSignaturePublicKey(data, ciphersuite.ED25519), nil
 		}
 		return nil, fmt.Errorf("unexpected ed25519 public key length: %d", len(data))
 	}
 
 	// ECDSA P-256
 	if len(data) == 65 && data[0] == 0x04 {
-		return ciphersuite.NewOpenMlsSignaturePublicKey(data, ciphersuite.ECDSA_SECP256R1_SHA256), nil
+		return ciphersuite.NewMLSSignaturePublicKey(data, ciphersuite.ECDSA_SECP256R1_SHA256), nil
 	}
 
 	pubAny, err := x509.ParsePKIXPublicKey(data)
@@ -130,7 +130,7 @@ func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*c
 		return nil, fmt.Errorf("unexpected encoded public key length: %d", len(keyBytes))
 	}
 
-	return ciphersuite.NewOpenMlsSignaturePublicKey(keyBytes, ciphersuite.ECDSA_SECP256R1_SHA256), nil
+	return ciphersuite.NewMLSSignaturePublicKey(keyBytes, ciphersuite.ECDSA_SECP256R1_SHA256), nil
 }
 
 func peekSenderData(pm *framing.PrivateMessage, senderDataSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite) (*framing.MLSSenderData, error) {
@@ -181,7 +181,7 @@ func testDecryptPrivateMessage(
 	wantBodyHex string,
 	encryptionSecret []byte,
 	senderDataSecret *ciphersuite.Secret,
-	sigPub *ciphersuite.OpenMlsSignaturePublicKey,
+	sigPub *ciphersuite.MLSSignaturePublicKey,
 	gcBytes []byte,
 	wantType framing.ContentType,
 ) error {
@@ -376,7 +376,7 @@ func testVerifyPublicMessage(
 	cs ciphersuite.CipherSuite,
 	msgHex string,
 	wantBodyHex string,
-	sigPub *ciphersuite.OpenMlsSignaturePublicKey,
+	sigPub *ciphersuite.MLSSignaturePublicKey,
 	membershipKey *ciphersuite.Secret,
 	gcBytes []byte,
 	wantType framing.ContentType,

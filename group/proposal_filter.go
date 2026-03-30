@@ -417,17 +417,17 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 func (g *Group) FilterProposalsForCommit(
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
-	filtered := make([]FilteredProposal, 0, len(g.Proposals.Proposals))
-	for _, sp := range g.Proposals.Proposals {
+	filtered := make([]FilteredProposal, 0, len(g.proposals.Proposals))
+	for _, sp := range g.proposals.Proposals {
 		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender, Ref: sp.Ref})
 	}
 
 	pf := NewProposalFilter(
-		g.GroupContext,
-		g.OwnLeafIndex,
-		g.Members,
-		g.CipherSuite,
-		g.RatchetTree,
+		g.groupContext,
+		g.ownLeafIndex,
+		g.members,
+		g.cipherSuite,
+		g.ratchetTree,
 	)
 
 	return pf.FilterAndValidateProposals(filtered, capabilities)
@@ -523,7 +523,7 @@ func validateCapabilitiesCompatible(
 // in the GroupContext and parses it. Returns nil if not present or unparseable.
 func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapabilitiesExtension {
 	for _, ext := range pf.groupContext.Extensions {
-		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
+		if ext.Type == extensions.ExtensionTypeRequiredCapabilities {
 			caps, err := extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {
 				return nil
@@ -539,7 +539,7 @@ func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapa
 func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) error {
 	var reqCaps *extensions.RequiredCapabilitiesExtension
 	for _, ext := range newExts {
-		if ext.Type == uint16(extensions.ExtensionTypeRequiredCapabilities) {
+		if ext.Type == extensions.ExtensionTypeRequiredCapabilities {
 			var err error
 			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {

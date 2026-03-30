@@ -63,7 +63,7 @@ go test ./group/... -run TestPassiveClientCommitVectors -v
 
 ## Architecture
 
-Before diving into a big change, read `CLAUDE.md` — it documents the key invariants, the key schedule ordering, the TLS encoding quirks, and other things that are easy to get wrong.
+Before diving into a big change, read `AGENTS.md` and the package-level documentation in the repository. They document the main invariants, testing expectations, and protocol details that are easy to get wrong.
 
 ## Questions
 

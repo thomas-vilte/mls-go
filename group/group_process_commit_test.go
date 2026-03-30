@@ -53,7 +53,7 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice hace commit
+	// Alice commits the add proposal.
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
 	aliceSigPub := aliceSigPriv.PublicKey()
 
@@ -67,10 +67,10 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 	}
 
 	// Create Welcome for Bob
-	initSecret := aliceGroup.EpochSecrets.InitSecret.Clone()
+	initSecret := aliceGroup.epochSecrets.InitSecret.Clone()
 	var pathSecret []byte
-	if stagedCommit.RootPathSecret != nil {
-		pathSecret = stagedCommit.RootPathSecret.AsSlice()
+	if stagedCommit.rootPathSecret != nil {
+		pathSecret = stagedCommit.rootPathSecret.AsSlice()
 	}
 
 	joinerSecret, err := initSecret.HKDFExtract(ciphersuite.NewSecret(pathSecret))
@@ -78,7 +78,11 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("HKDFExtract joiner secret: %v", err)
 	}
 
-	welcome, err := aliceGroup.CreateWelcome([]*keypackages.KeyPackage{bobKP}, joinerSecret, pathSecret, aliceSigPriv, nil, nil)
+	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		PathSecret:    pathSecret,
+		SignerPrivKey: aliceSigPriv,
+	})
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
@@ -89,18 +93,56 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 	}
 
 	// Synchronize Bob's epoch secrets with Alice
-	bobGroup.EpochSecrets = &schedule.EpochSecrets{
-		InitSecret:       aliceGroup.EpochSecrets.InitSecret.Clone(),
-		SenderDataSecret: aliceGroup.EpochSecrets.SenderDataSecret.Clone(),
-		EncryptionSecret: aliceGroup.EpochSecrets.EncryptionSecret.Clone(),
-		ExporterSecret:   aliceGroup.EpochSecrets.ExporterSecret.Clone(),
-		ExternalSecret:   aliceGroup.EpochSecrets.ExternalSecret.Clone(),
-		ConfirmationKey:  aliceGroup.EpochSecrets.ConfirmationKey.Clone(),
-		MembershipKey:    aliceGroup.EpochSecrets.MembershipKey.Clone(),
-		ResumptionSecret: aliceGroup.EpochSecrets.ResumptionSecret.Clone(),
+	bobGroup.epochSecrets = &schedule.EpochSecrets{
+		InitSecret:       aliceGroup.epochSecrets.InitSecret.Clone(),
+		SenderDataSecret: aliceGroup.epochSecrets.SenderDataSecret.Clone(),
+		EncryptionSecret: aliceGroup.epochSecrets.EncryptionSecret.Clone(),
+		ExporterSecret:   aliceGroup.epochSecrets.ExporterSecret.Clone(),
+		ExternalSecret:   aliceGroup.epochSecrets.ExternalSecret.Clone(),
+		ConfirmationKey:  aliceGroup.epochSecrets.ConfirmationKey.Clone(),
+		MembershipKey:    aliceGroup.epochSecrets.MembershipKey.Clone(),
+		ResumptionSecret: aliceGroup.epochSecrets.ResumptionSecret.Clone(),
 	}
 
 	return aliceGroup, bobGroup, alicePriv, bobPriv
+}
+
+func TestCreateWelcomeWithOptions(t *testing.T) {
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("Bob2"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Bob2): %v", err)
+	}
+	bobKP, bobPriv, err := keypackages.Generate(bobCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Bob2): %v", err)
+	}
+
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	joinerSecret, err := ciphersuite.NewSecretRandomCS(aliceGroup.cipherSuite)
+	if err != nil {
+		t.Fatalf("NewSecretRandomCS: %v", err)
+	}
+
+	welcomeFromOptions, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		SignerPrivKey: aliceSigPriv,
+	})
+	if err != nil {
+		t.Fatalf("CreateWelcomeWithOptions: %v", err)
+	}
+
+	if len(welcomeFromOptions.Marshal()) == 0 {
+		t.Fatal("CreateWelcomeWithOptions() returned an empty Welcome")
+	}
+
+	joinedGroup, err := JoinFromWelcome(welcomeFromOptions, bobKP, bobPriv, nil)
+	if err != nil {
+		t.Fatalf("JoinFromWelcome(CreateWelcomeWithOptions): %v", err)
+	}
+	if joinedGroup == nil {
+		t.Fatal("JoinFromWelcome(CreateWelcomeWithOptions) returned nil group")
+	}
 }
 
 // TestProcessCommit_Valid verifies that a valid commit is processed correctly
@@ -108,8 +150,8 @@ func TestProcessCommit_Valid(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
 	// Save Bob's previous state
-	oldEpoch := bobGroup.Epoch.AsUint64()
-	oldTreeHash := bobGroup.RatchetTree.TreeHash()
+	oldEpoch := bobGroup.epoch.AsUint64()
+	oldTreeHash := bobGroup.ratchetTree.TreeHash()
 
 	// Alice generates a new commit (Add proposal of a third member)
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
@@ -132,7 +174,7 @@ func TestProcessCommit_Valid(t *testing.T) {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	// Alice hace commit
+	// Alice commits the add proposal.
 	stagedCommit, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -145,20 +187,20 @@ func TestProcessCommit_Valid(t *testing.T) {
 	}
 
 	// Verify that the epoch increased
-	if bobGroup.Epoch.AsUint64() != oldEpoch+1 {
-		t.Errorf("Epoch should increment from %d to %d, got %d", oldEpoch, oldEpoch+1, bobGroup.Epoch.AsUint64())
+	if bobGroup.epoch.AsUint64() != oldEpoch+1 {
+		t.Errorf("Epoch should increment from %d to %d, got %d", oldEpoch, oldEpoch+1, bobGroup.epoch.AsUint64())
 	}
 
 	// Verify that the TreeHash changed
-	if bytes.Equal(bobGroup.RatchetTree.TreeHash(), oldTreeHash) {
+	if bytes.Equal(bobGroup.ratchetTree.TreeHash(), oldTreeHash) {
 		t.Error("TreeHash should change after commit")
 	}
 
 	// Verify that the epoch secrets are not nil
-	if bobGroup.EpochSecrets == nil {
+	if bobGroup.epochSecrets == nil {
 		t.Error("EpochSecrets should not be nil after commit")
 	}
-	if bobGroup.EpochSecrets.EncryptionSecret == nil {
+	if bobGroup.epochSecrets.EncryptionSecret == nil {
 		t.Error("EncryptionSecret should not be nil after commit")
 	}
 
@@ -169,8 +211,8 @@ func TestProcessCommit_Valid(t *testing.T) {
 }
 
 // TestProcessCommit_WrongEpoch verifies that a commit with incorrect epoch fails.
-// ProcessCommit no valida el epoch (solo llama a MergeCommit).
-// La validación de epoch existe únicamente en ReceiveMessage. RFC §12.4.1 gap.
+// ProcessCommit does not validate the epoch because it delegates to MergeCommit.
+// Epoch validation currently exists only in ReceiveMessage. RFC §12.4.1 gap.
 func TestProcessCommit_WrongEpoch(t *testing.T) {
 	t.Skip("epoch validation not implemented in ProcessCommit - RFC §12.4.1 gap")
 }
@@ -204,13 +246,13 @@ func TestProcessCommit_CorruptedUpdatePath(t *testing.T) {
 	}
 
 	// Corrupt the UpdatePath if it exists
-	if stagedCommit.Commit.Path != nil && len(stagedCommit.Commit.Path.Nodes) > 0 {
+	if stagedCommit.commit.Path != nil && len(stagedCommit.commit.Path.Nodes) > 0 {
 		// Save original
-		original := make([]byte, len(stagedCommit.Commit.Path.Nodes[0].EncryptionKey))
-		copy(original, stagedCommit.Commit.Path.Nodes[0].EncryptionKey)
+		original := make([]byte, len(stagedCommit.commit.Path.Nodes[0].EncryptionKey))
+		copy(original, stagedCommit.commit.Path.Nodes[0].EncryptionKey)
 
 		// Corrupt a byte
-		stagedCommit.Commit.Path.Nodes[0].EncryptionKey[0] ^= 0xFF
+		stagedCommit.commit.Path.Nodes[0].EncryptionKey[0] ^= 0xFF
 
 		// Bob tries to process
 		err = bobGroup.ProcessCommit(stagedCommit)
@@ -221,7 +263,7 @@ func TestProcessCommit_CorruptedUpdatePath(t *testing.T) {
 		}
 
 		// Restore for cleanup
-		copy(stagedCommit.Commit.Path.Nodes[0].EncryptionKey, original)
+		copy(stagedCommit.commit.Path.Nodes[0].EncryptionKey, original)
 	} else {
 		t.Skip("Commit has no UpdatePath nodes to corrupt")
 	}
@@ -232,7 +274,7 @@ func TestUpdateMember_Valid(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 
 	// Save the original encryption key
-	oldLeaf := aliceGroup.RatchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.OwnLeafIndex))
+	oldLeaf := aliceGroup.ratchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.ownLeafIndex))
 	if oldLeaf == nil || oldLeaf.LeafData == nil {
 		t.Fatal("Own leaf not found")
 	}
@@ -278,7 +320,7 @@ func TestUpdateMember_Valid(t *testing.T) {
 	}
 
 	// Verify that the proposal was stored
-	if aliceGroup.Proposals == nil || len(aliceGroup.Proposals.Proposals) == 0 {
+	if aliceGroup.proposals == nil || len(aliceGroup.proposals.Proposals) == 0 {
 		t.Error("Update proposal should be stored in proposal store")
 	}
 }
@@ -294,7 +336,7 @@ func TestUpdateMember_NilCredential(t *testing.T) {
 	}
 
 	// Create valid LeafNode but with nil private keys
-	leaf := aliceGroup.RatchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.OwnLeafIndex))
+	leaf := aliceGroup.ratchetTree.GetLeaf(treesync.LeafIndex(aliceGroup.ownLeafIndex))
 	if leaf == nil || leaf.LeafData == nil {
 		t.Fatal("Own leaf not found")
 	}
@@ -318,7 +360,7 @@ func TestGetMember_Valid(t *testing.T) {
 	aliceGroup, bobGroup, _, _ := setupTwoMemberGroup(t)
 
 	// Get Alice
-	aliceMember, ok := aliceGroup.GetMember(aliceGroup.OwnLeafIndex)
+	aliceMember, ok := aliceGroup.GetMember(aliceGroup.ownLeafIndex)
 	if !ok {
 		t.Fatal("GetMember should return true for own leaf")
 	}
@@ -332,8 +374,8 @@ func TestGetMember_Valid(t *testing.T) {
 	// Get Bob from Alice's perspective
 	// Bob should be at index 1 (after the Add + Commit)
 	var bobIdx LeafNodeIndex
-	for idx := range aliceGroup.Members {
-		if idx != aliceGroup.OwnLeafIndex {
+	for idx := range aliceGroup.members {
+		if idx != aliceGroup.ownLeafIndex {
 			bobIdx = idx
 			break
 		}
@@ -351,7 +393,7 @@ func TestGetMember_Valid(t *testing.T) {
 	}
 
 	// Verify from Bob too
-	bobMemberFromBob, ok := bobGroup.GetMember(bobGroup.OwnLeafIndex)
+	bobMemberFromBob, ok := bobGroup.GetMember(bobGroup.ownLeafIndex)
 	if !ok {
 		t.Error("GetMember should return true for own leaf (Bob)")
 	}
@@ -432,7 +474,7 @@ func TestGroupContext_MarshalUnmarshal(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
 	// Marshal
-	data := aliceGroup.GroupContext.Marshal()
+	data := aliceGroup.groupContext.Marshal()
 	if len(data) == 0 {
 		t.Fatal("Marshal should return non-empty data")
 	}
@@ -444,16 +486,16 @@ func TestGroupContext_MarshalUnmarshal(t *testing.T) {
 	}
 
 	// Verify fields
-	if !bytes.Equal(gc2.GroupID.AsSlice(), aliceGroup.GroupContext.GroupID.AsSlice()) {
+	if !bytes.Equal(gc2.GroupID.AsSlice(), aliceGroup.groupContext.GroupID.AsSlice()) {
 		t.Error("GroupID should match after roundtrip")
 	}
 
-	if gc2.Epoch != aliceGroup.GroupContext.Epoch {
-		t.Errorf("Epoch should match: got %d, want %d", gc2.Epoch, aliceGroup.GroupContext.Epoch)
+	if gc2.Epoch != aliceGroup.groupContext.Epoch {
+		t.Errorf("Epoch should match: got %d, want %d", gc2.Epoch, aliceGroup.groupContext.Epoch)
 	}
 
 	// Verify that the TreeHash is the same
-	if !bytes.Equal(gc2.TreeHash, aliceGroup.GroupContext.TreeHash) {
+	if !bytes.Equal(gc2.TreeHash, aliceGroup.groupContext.TreeHash) {
 		t.Error("TreeHash should match after roundtrip")
 	}
 }
