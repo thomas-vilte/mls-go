@@ -133,11 +133,11 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 
 	// Generate two separate HPKE key pairs per RFC §10.1:
 	// init_key is used once for Welcome decryption; encryption_key is for TreeKEM.
-	initPrivKey, initPubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
+	initPrivKey, initPubKey, err := generateHPKEKeyPairForCS(cipherSuite)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating init HPKE keys: %w", err)
 	}
-	encPrivKey, encPubKey, err := generateHPKEKeyPairForCS(ciphersuite.CipherSuite(cipherSuite))
+	encPrivKey, encPubKey, err := generateHPKEKeyPairForCS(cipherSuite)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating encryption HPKE keys: %w", err)
 	}
@@ -696,7 +696,7 @@ func (kp *KeyPackage) Validate() error {
 		return fmt.Errorf("unsupported protocol version: %d", kp.ProtocolVersion)
 	}
 
-	if !ciphersuite.CipherSuite(kp.CipherSuite).IsSupported() {
+	if !kp.CipherSuite.IsSupported() {
 		return fmt.Errorf("unsupported cipher suite: %d", kp.CipherSuite)
 	}
 

@@ -71,6 +71,9 @@ func (e *GroupEpoch) Increment() {
 }
 
 // Group represents an MLS group.
+//
+// Group is not safe for concurrent use. Callers that access the same Group from
+// multiple goroutines must provide external synchronization.
 type Group struct {
 	groupID               *GroupID
 	epoch                 GroupEpoch
