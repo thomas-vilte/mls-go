@@ -2,6 +2,8 @@ package mls
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -47,8 +49,13 @@ type Client struct {
 	sigKey      *ciphersuite.SignaturePrivateKey
 	store       *memorystore.Store
 
-	pendingKeyPackage *keypackages.KeyPackage
-	pendingPrivate    *keypackages.KeyPackagePrivateKeys
+	pendingKPs map[string]*pendingEntry
+}
+
+type pendingEntry struct {
+	kp      *keypackages.KeyPackage
+	kpPriv  *keypackages.KeyPackagePrivateKeys
+	kpBytes []byte
 }
 
 // NewClient creates a new high-level MLS client for a single identity.
@@ -68,29 +75,42 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite) (*Client, error) {
 		credWithKey: credWithKey,
 		sigKey:      sigKey,
 		store:       memorystore.NewStore(),
+		pendingKPs:  make(map[string]*pendingEntry),
 	}, nil
 }
 
 // FreshKeyPackageBytes generates a fresh single-use KeyPackage for invitations.
-func (c *Client) FreshKeyPackageBytes() ([]byte, error) {
+func (c *Client) FreshKeyPackageBytes(ctx context.Context) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	kp, kpPriv, err := keypackages.Generate(c.credWithKey, c.cs)
 	if err != nil {
 		return nil, fmt.Errorf("generating key package: %w", err)
 	}
 
-	c.pendingKeyPackage = kp
-	c.pendingPrivate = kpPriv
+	kpBytes := kp.Marshal()
+	c.pendingKPs[keyPackageFingerprint(kpBytes)] = &pendingEntry{
+		kp:      kp,
+		kpPriv:  kpPriv,
+		kpBytes: cloneBytes(kpBytes),
+	}
 
-	return kp.Marshal(), nil
+	return kpBytes, nil
 }
 
 // CreateGroup creates a fresh one-member MLS group and returns its group ID.
-func (c *Client) CreateGroup() ([]byte, error) {
+func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	groupID, err := group.NewGroupIDRandom()
 	if err != nil {
 		return nil, fmt.Errorf("generating group ID: %w", err)
@@ -103,22 +123,26 @@ func (c *Client) CreateGroup() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating group: %w", err)
 	}
-	if err := c.persistGroupLocked(g); err != nil {
+	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, err
 	}
 	return cloneBytes(groupID.AsSlice()), nil
 }
 
 // InviteMember adds a member and returns the commit bytes to broadcast plus the welcome bytes for the joiner.
-func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) (commit, welcome []byte, err error) {
+func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageBytes []byte) (commit, welcome []byte, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	if len(memberKeyPackageBytes) == 0 {
 		return nil, nil, ErrEmptyKeyPackage
 	}
 
-	g, err := c.loadGroupLocked(groupID)
+	g, err := c.loadGroupLocked(ctx, groupID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,7 +185,7 @@ func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) (commit, we
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
 	}
 
-	if err := c.persistGroupLocked(g); err != nil {
+	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, nil, err
 	}
 
@@ -177,39 +201,57 @@ func (c *Client) InviteMember(groupID, memberKeyPackageBytes []byte) (commit, we
 }
 
 // JoinGroup joins a group using the most recently generated pending KeyPackage.
-func (c *Client) JoinGroup(welcomeBytes []byte) ([]byte, error) {
+func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(welcomeBytes) == 0 {
 		return nil, ErrEmptyWelcome
 	}
-	if c.pendingKeyPackage == nil || c.pendingPrivate == nil {
+	if len(c.pendingKPs) == 0 {
 		return nil, ErrNoPendingKeyPackage
 	}
 	welcome, err := parseWelcomeBytes(welcomeBytes)
 	if err != nil {
 		return nil, err
 	}
-	g, err := group.JoinFromWelcome(welcome, c.pendingKeyPackage, c.pendingPrivate, nil)
-	if err != nil {
-		return nil, fmt.Errorf("joining from welcome: %w", err)
+
+	var joinedGroup *group.Group
+	var matchKey string
+	for key, entry := range c.pendingKPs {
+		g, joinErr := group.JoinFromWelcome(welcome, entry.kp, entry.kpPriv, nil)
+		if joinErr != nil {
+			continue
+		}
+		joinedGroup = g
+		matchKey = key
+		break
 	}
-	if err := c.persistGroupLocked(g); err != nil {
+	if joinedGroup == nil {
+		return nil, ErrNoPendingKeyPackage
+	}
+	if err := c.persistGroupLocked(ctx, joinedGroup); err != nil {
 		return nil, err
 	}
-	c.pendingKeyPackage = nil
-	c.pendingPrivate = nil
-	return cloneBytes(g.GroupID().AsSlice()), nil
+	delete(c.pendingKPs, matchKey)
+	return cloneBytes(joinedGroup.GroupID().AsSlice()), nil
 }
 
 // ProcessCommit applies a commit from another existing group member.
-func (c *Client) ProcessCommit(groupID, commitBytes []byte) error {
+func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(commitBytes) == 0 {
 		return ErrEmptyCommit
 	}
-	g, err := c.loadGroupLocked(groupID)
+	g, err := c.loadGroupLocked(ctx, groupID)
 	if err != nil {
 		return err
 	}
@@ -261,14 +303,18 @@ func (c *Client) ProcessCommit(groupID, commitBytes []byte) error {
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return fmt.Errorf("processing received commit: %w", err)
 	}
-	return c.persistGroupLocked(g)
+	return c.persistGroupLocked(ctx, g)
 }
 
 // SendMessage encrypts an application message for the given group.
-func (c *Client) SendMessage(groupID, plaintext []byte) ([]byte, error) {
+func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	g, err := c.loadGroupLocked(groupID)
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	g, err := c.loadGroupLocked(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -276,20 +322,24 @@ func (c *Client) SendMessage(groupID, plaintext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sending message: %w", err)
 	}
-	if err := c.persistGroupLocked(g); err != nil {
+	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, err
 	}
 	return framing.NewMLSMessagePrivate(pm).Marshal(), nil
 }
 
 // ReceiveMessage decrypts an application message for the given group.
-func (c *Client) ReceiveMessage(groupID, ciphertextBytes []byte) ([]byte, error) {
+func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(ciphertextBytes) == 0 {
 		return nil, ErrEmptyCiphertext
 	}
-	g, err := c.loadGroupLocked(groupID)
+	g, err := c.loadGroupLocked(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -305,18 +355,19 @@ func (c *Client) ReceiveMessage(groupID, ciphertextBytes []byte) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("receiving message: %w", err)
 	}
-	if err := c.persistGroupLocked(g); err != nil {
+	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, err
 	}
 	return cloneBytes(plaintext), nil
 }
 
-func (c *Client) loadGroupLocked(groupIDBytes []byte) (*group.Group, error) {
+func (c *Client) loadGroupLocked(ctx context.Context, groupIDBytes []byte) (*group.Group, error) {
+	ctx = normalizeContext(ctx)
 	if len(groupIDBytes) == 0 {
 		return nil, ErrEmptyGroupID
 	}
 	groupID := group.NewGroupID(cloneBytes(groupIDBytes))
-	state, err := c.store.LoadGroupState(context.Background(), groupID)
+	state, err := c.store.LoadGroupState(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, memorystore.ErrGroupStateNotFound) {
 			return nil, ErrGroupNotFound
@@ -330,21 +381,22 @@ func (c *Client) loadGroupLocked(groupIDBytes []byte) (*group.Group, error) {
 	return g, nil
 }
 
-func (c *Client) persistGroupLocked(g *group.Group) error {
+func (c *Client) persistGroupLocked(ctx context.Context, g *group.Group) error {
+	ctx = normalizeContext(ctx)
 	state, err := g.MarshalState()
 	if err != nil {
 		return fmt.Errorf("marshaling group state: %w", err)
 	}
 	groupID := g.GroupID()
-	if err := c.store.SaveGroupState(context.Background(), groupID, state); err != nil {
+	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
 		return fmt.Errorf("saving group state: %w", err)
 	}
-	if err := c.store.StoreSignatureKey(context.Background(), groupID, c.sigKey); err != nil {
+	if err := c.store.StoreSignatureKey(ctx, groupID, c.sigKey); err != nil {
 		return fmt.Errorf("saving signature key: %w", err)
 	}
 	leafKey := g.MyLeafEncryptionKey()
 	if len(leafKey) > 0 {
-		if err := c.store.StoreLeafEncryptionKey(context.Background(), groupID, g.OwnLeafIndex(), leafKey); err != nil {
+		if err := c.store.StoreLeafEncryptionKey(ctx, groupID, g.OwnLeafIndex(), leafKey); err != nil {
 			return fmt.Errorf("saving leaf encryption key: %w", err)
 		}
 	}
@@ -379,4 +431,16 @@ func cloneBytes(in []byte) []byte {
 	out := make([]byte, len(in))
 	copy(out, in)
 	return out
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func keyPackageFingerprint(kpBytes []byte) string {
+	sum := sha256.Sum256(kpBytes)
+	return hex.EncodeToString(sum[:])
 }
