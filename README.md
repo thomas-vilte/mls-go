@@ -49,22 +49,53 @@ The project is not `v1.0.0` yet. Known gaps and caveats are tracked in `SECURITY
 
 ## Quick Start
 
-The most accurate usage examples today are the integration tests in `group/`.
+The recommended entry point is the root `mls.Client` API.
 
-A typical flow is:
+```go
+ctx := context.Background()
+cs := ciphersuite.MLS128DHKEMP256
 
-1. create credentials and key packages
-2. create a group with `group.NewGroup`
-3. add members with `AddMember`
-4. commit with `Commit`
-5. build or consume Welcome messages with `CreateWelcomeWithOptions` and `JoinFromWelcome`
-6. protect application messages with `SendMessage` and `ReceiveMessage`
+alice, err := mls.NewClient([]byte("alice"), cs)
+if err != nil {
+	log.Fatal(err)
+}
+bob, err := mls.NewClient([]byte("bob"), cs)
+if err != nil {
+	log.Fatal(err)
+}
+
+bobKP, err := bob.FreshKeyPackageBytes(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+groupID, err := alice.CreateGroup(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := bob.JoinGroup(ctx, welcome); err != nil {
+	log.Fatal(err)
+}
+```
 
 Useful starting points:
 
+- `examples/basic_chat_v2/main.go`
+- `examples/basic_chat/main.go`
+- `client_test.go`
 - `group/integration_test.go`
-- `group/group_process_commit_test.go`
-- `group/messaging_test.go`
+
+Higher-level `Client` flows now include:
+
+- invite + join by Welcome
+- batched proposal-before-commit flows
+- sender identity on received messages
+- AAD support
+- external join via `ExternalJoin`
+- pluggable storage via `WithStorage`
 
 ## Build And Test
 
@@ -116,6 +147,11 @@ Before `v1.0.0`, the remaining work is mainly:
 - documentation polish and maintained examples
 - broader test, fuzz, and benchmark coverage
 - closing the remaining documented protocol and security gaps
+
+See also:
+
+- `SECURITY.md` for deployment caveats and storage guidance
+- `INTEGRATION.md` for application integration patterns
 
 ## Contributing
 

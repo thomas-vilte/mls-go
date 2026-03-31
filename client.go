@@ -80,6 +80,8 @@ var (
 	ErrEmptyKeyPackage = errors.New("mls: key package is empty")
 	// ErrEmptyWelcome is returned when JoinGroup receives empty welcome bytes.
 	ErrEmptyWelcome = errors.New("mls: welcome is empty")
+	// ErrEmptyGroupInfo is returned when ExternalJoin receives empty GroupInfo bytes.
+	ErrEmptyGroupInfo = errors.New("mls: group info is empty")
 	// ErrEmptyCommit is returned when ProcessCommit receives empty commit bytes.
 	ErrEmptyCommit = errors.New("mls: commit is empty")
 	// ErrEmptyCiphertext is returned when ReceiveMessage receives empty ciphertext bytes.
@@ -746,6 +748,49 @@ func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) 
 		return nil, fmt.Errorf("building group info: %w", err)
 	}
 	return gi.Marshal(), nil
+}
+
+// ExternalJoin performs an External Commit to join a group without a Welcome.
+func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (groupID, commit []byte, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
+		return nil, nil, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(groupInfoBytes) == 0 {
+		return nil, nil, ErrEmptyGroupInfo
+	}
+	groupInfo, err := group.UnmarshalGroupInfo(groupInfoBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unmarshaling group info: %w", err)
+	}
+	g, staged, err := group.ExternalCommit(
+		groupInfo,
+		groupInfo.GroupContext.CipherSuite,
+		c.sigKey,
+		c.sigKey.PublicKey(),
+		nil,
+		c.credWithKey.Credential,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating external commit: %w", err)
+	}
+	if err := c.validateGroupMembersLocked(ctx, g); err != nil {
+		return nil, nil, err
+	}
+	g.SetPaddingSize(c.paddingSize)
+	if err := c.persistGroupLocked(ctx, g); err != nil {
+		return nil, nil, err
+	}
+	pm := &framing.PublicMessage{
+		Content: staged.AuthenticatedContent().Content,
+		Auth:    staged.AuthenticatedContent().Auth,
+	}
+	return cloneBytes(g.GroupID().AsSlice()), framing.NewMLSMessagePublic(pm).Marshal(), nil
 }
 
 // Close releases all resources held by the Client.
