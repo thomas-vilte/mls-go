@@ -1,19 +1,24 @@
 # Examples
 
-This repository does not currently ship maintained runnable examples under `examples/`.
+This repository ships maintained runnable examples under `examples/`.
 
-The public API is still stabilizing in the `v0.3.x` beta line, and several old example snippets drifted away from the real code. Until dedicated examples are added back, use these sources instead:
+Current entry points:
 
-- `group/integration_test.go` for end-to-end group flows
-- `group/group_process_commit_test.go` for add/commit/welcome flows
+- `examples/basic_chat` shows the low-level `group` package flow
+- `examples/basic_chat_v2` shows the recommended `mls.Client` flow
+
+Useful supporting sources:
+
+- `client_test.go` for end-to-end high-level usage
+- `group/integration_test.go` for low-level multi-party flows
 - `group/messaging_test.go` for application message protection
 - `interop/testvectors.go` for multi-party and interop-oriented scenarios
 
 Useful commands:
 
 ```bash
-go test ./group/... -run TestWelcomeRoundTrip -v
-go test ./group/... -run TestGroupCreation -v
+go run ./examples/basic_chat
+go run ./examples/basic_chat_v2
 go test ./group/... -run TestReceiveApplicationMessage_VerifiesSignature -v
 ```
 

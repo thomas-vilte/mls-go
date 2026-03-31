@@ -852,3 +852,56 @@ func TestClientCommitPendingProposalsRemove(t *testing.T) {
 		}
 	}
 }
+
+func TestClientExternalJoin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	charlie, err := NewClient([]byte("charlie"), cs)
+	if err != nil {
+		t.Fatalf("creating charlie client: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	groupInfo, err := alice.GroupInfo(ctx, groupID)
+	if err != nil {
+		t.Fatalf("getting group info: %v", err)
+	}
+	charlieGroupID, commit, err := charlie.ExternalJoin(ctx, groupInfo)
+	if err != nil {
+		t.Fatalf("external join: %v", err)
+	}
+	if !bytes.Equal(groupID, charlieGroupID) {
+		t.Fatalf("group IDs differ: alice=%x charlie=%x", groupID, charlieGroupID)
+	}
+	if err := alice.ProcessCommit(ctx, groupID, commit); err != nil {
+		t.Fatalf("alice processing external commit: %v", err)
+	}
+	msg, err := alice.SendMessage(ctx, groupID, []byte("hello external"))
+	if err != nil {
+		t.Fatalf("alice sending message: %v", err)
+	}
+	received, err := charlie.ReceiveMessage(ctx, charlieGroupID, msg)
+	if err != nil {
+		t.Fatalf("charlie receiving external-join message: %v", err)
+	}
+	if string(received.Plaintext) != "hello external" {
+		t.Fatalf("unexpected plaintext: %q", received.Plaintext)
+	}
+	if string(received.SenderIdentity) != "alice" {
+		t.Fatalf("unexpected sender identity: %q", received.SenderIdentity)
+	}
+	members, err := alice.ListMembers(ctx, groupID)
+	if err != nil {
+		t.Fatalf("listing members after external join: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("member count = %d, want 2", len(members))
+	}
+}

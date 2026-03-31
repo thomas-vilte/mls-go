@@ -24,6 +24,7 @@ These are known gaps, not vulnerabilities. They are documented here because the 
 - `NewGroupFromReInit` still needs a tighter review of its `joiner_secret` derivation path
 - `new_member_proposal` PublicMessages do not yet verify the outer message signature independently
 - Application message padding defaults to zero unless `Group.PaddingSize` is configured explicitly
+- `LeaveGroup` in the high-level `Client` currently performs a local leave only; it does not broadcast a self-remove commit
 
 Recent fixes:
 
@@ -49,6 +50,31 @@ No custom crypto implementations. All primitives come from audited libraries.
 - Always use the latest version
 - Validate `KeyPackage`s before trusting them — don't skip `Validate()`
 - Protect private keys with secure storage; clear them from memory after use
+- Do not persist raw `MarshalState()` output in plaintext; wrap your `GroupStorage` with `storage.NewEncryptedStore(...)` or encrypt state externally
+- Prefer `storage/file` or your own durable `GroupStorage` implementation over the default in-memory store for any non-test deployment
+- Call `SelfUpdate` periodically if your application expects long-lived memberships and wants fresh leaf encryption keys
+- Keep the full local group state durable; if you lose it, you cannot safely continue decrypting future epochs for that device
+- Treat each persisted group state as highly sensitive secret material: it includes epoch secrets, tree state, and enough data to continue as that member
 - This is beta software — not recommended for production handling sensitive data until v1.0.0
 
 For production use today, consider evaluating a mature MLS implementation that has already completed an external security review.
+
+## State handling
+
+`MarshalState()` is intentionally a serialization helper, not a secure storage format.
+
+- It contains epoch secrets and private state in plaintext bytes
+- It is suitable for tests, debugging, or as an input to an encrypted storage layer
+- It must not be written to disk, object storage, or databases without encryption at rest
+
+Recommended patterns:
+
+1. Use `storage/file.NewStore(...)` for a durable on-disk backend.
+2. Wrap that store with `storage.NewEncryptedStore(...)` before persisting group state.
+3. Keep signature private keys and leaf private keys in an application-controlled secret store if your deployment requires stronger isolation.
+
+## Operational notes
+
+- `Client` is safe for concurrent use, but group state is still logically sequential per group epoch. If your application processes multiple network events for the same group, serialize them in delivery order when possible.
+- `group.Group` itself is not safe for concurrent use without external synchronization.
+- Messages may arrive out of order across epochs; the low-level receiver supports epoch history for that case, but applications still need durable state to benefit from it.
