@@ -2346,6 +2346,18 @@ func (g *Group) GetMembers() []*Member {
 	return members
 }
 
+// MemberSigningKey returns the current signature public key for the given leaf.
+func (g *Group) MemberSigningKey(leafIndex LeafNodeIndex) []byte {
+	if g == nil || g.ratchetTree == nil {
+		return nil
+	}
+	leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIndex))
+	if leaf == nil || leaf.State != treesync.NodeStatePresent || leaf.LeafData == nil {
+		return nil
+	}
+	return append([]byte(nil), leaf.LeafData.SigKeyBytes()...)
+}
+
 // MemberCount returns the number of active members.
 func (g *Group) MemberCount() int {
 	count := 0
