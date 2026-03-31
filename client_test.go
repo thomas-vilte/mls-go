@@ -3,14 +3,21 @@ package mls
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/group"
+	filestore "github.com/thomas-vilte/mls-go/storage/file"
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
 
@@ -23,13 +30,43 @@ type countingStore struct {
 	loadCalls int
 }
 
+type closableCountingStore struct {
+	*countingStore
+	closed bool
+}
+
 func newCountingStore() *countingStore {
 	return &countingStore{Store: memorystore.NewStore()}
+}
+
+func (s *closableCountingStore) Close() error {
+	s.closed = true
+	return nil
 }
 
 func (s *countingStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
 	s.loadCalls++
 	return s.Store.LoadGroupState(ctx, groupID)
+}
+
+func generateTestCertificate(t *testing.T) ([]byte, *ecdsa.PrivateKey) {
+	t.Helper()
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "mls-go-client-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		t.Fatalf("x509.CreateCertificate: %v", err)
+	}
+	return certDER, privKey
 }
 
 func (v rejectingValidator) ValidateCredential(_ context.Context, cred *credentials.Credential) error {
@@ -555,12 +592,8 @@ func TestClientLeaveGroup(t *testing.T) {
 		t.Fatalf("bob joining group: %v", err)
 	}
 
-	leaveCommit, err := bob.LeaveGroup(ctx, bobGroupID)
-	if err != nil {
+	if err := bob.LeaveGroup(ctx, bobGroupID); err != nil {
 		t.Fatalf("bob leaving group: %v", err)
-	}
-	if leaveCommit != nil {
-		t.Fatalf("leave commit = %x, want nil for local leave", leaveCommit)
 	}
 	if _, err := bob.SendMessage(ctx, bobGroupID, []byte("still here?")); !errors.Is(err, ErrGroupNotFound) {
 		t.Fatalf("expected ErrGroupNotFound after leave, got %v", err)
@@ -585,6 +618,21 @@ func TestClientClose(t *testing.T) {
 	}
 	if _, err := client.CreateGroup(ctx); !errors.Is(err, ErrClientClosed) {
 		t.Fatalf("expected ErrClientClosed from CreateGroup, got %v", err)
+	}
+}
+
+func TestClientCloseClosesInjectedStore(t *testing.T) {
+	t.Parallel()
+	store := &closableCountingStore{countingStore: newCountingStore()}
+	client, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store))
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("closing client: %v", err)
+	}
+	if !store.closed {
+		t.Fatal("expected injected closable store to be closed")
 	}
 }
 
@@ -638,6 +686,22 @@ func TestClientWithStorageOption(t *testing.T) {
 	}
 	if len(state) == 0 {
 		t.Fatal("expected injected store to persist non-empty group state")
+	}
+}
+
+func TestClientGroupNotFoundWithFileStore(t *testing.T) {
+	t.Parallel()
+	store, err := filestore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("creating file store: %v", err)
+	}
+	client, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store))
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	_, err = client.ListMembers(context.Background(), []byte("missing-group"))
+	if !errors.Is(err, ErrGroupNotFound) {
+		t.Fatalf("expected ErrGroupNotFound, got %v", err)
 	}
 }
 
@@ -728,11 +792,11 @@ func TestClientWithPaddingSizeOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bob joining group: %v", err)
 	}
-	aliceGroup, err := alice.loadGroupLocked(ctx, groupID)
+	aliceGroup, err := alice.loadGroup(ctx, groupID)
 	if err != nil {
 		t.Fatalf("loading alice group: %v", err)
 	}
-	bobGroup, err := bob.loadGroupLocked(ctx, bobGroupID)
+	bobGroup, err := bob.loadGroup(ctx, bobGroupID)
 	if err != nil {
 		t.Fatalf("loading bob group: %v", err)
 	}
@@ -741,6 +805,63 @@ func TestClientWithPaddingSizeOption(t *testing.T) {
 	}
 	if bobGroup.PaddingSize() != 64 {
 		t.Fatalf("bob padding size = %d, want 64", bobGroup.PaddingSize())
+	}
+}
+
+func TestClientWithX509Credential(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	aliceCert, alicePriv := generateTestCertificate(t)
+	bobCert, bobPriv := generateTestCertificate(t)
+	alice, err := NewClient([]byte(""), cs, WithX509Credential(aliceCert, alicePriv))
+	if err != nil {
+		t.Fatalf("creating alice x509 client: %v", err)
+	}
+	bob, err := NewClient([]byte(""), cs, WithX509Credential(bobCert, bobPriv))
+	if err != nil {
+		t.Fatalf("creating bob x509 client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, welcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+	if !bytes.Equal(groupID, bobGroupID) {
+		t.Fatalf("group IDs differ: alice=%x bob=%x", groupID, bobGroupID)
+	}
+	msg, err := alice.SendMessage(ctx, groupID, []byte("hello x509"))
+	if err != nil {
+		t.Fatalf("alice sending message: %v", err)
+	}
+	received, err := bob.ReceiveMessage(ctx, bobGroupID, msg)
+	if err != nil {
+		t.Fatalf("bob receiving message: %v", err)
+	}
+	if string(received.Plaintext) != "hello x509" {
+		t.Fatalf("unexpected plaintext: %q", received.Plaintext)
+	}
+	if !bytes.Equal(received.SenderIdentity, aliceCert) {
+		t.Fatal("sender identity should carry the sender certificate bytes")
+	}
+}
+
+func TestClientWithX509CredentialRejectsEd25519Suite(t *testing.T) {
+	t.Parallel()
+	certDER, privKey := generateTestCertificate(t)
+	if _, err := NewClient([]byte(""), ciphersuite.MLS128DHKEMX25519, WithX509Credential(certDER, privKey)); err == nil {
+		t.Fatal("expected X.509 client creation to fail for Ed25519 suite")
 	}
 }
 

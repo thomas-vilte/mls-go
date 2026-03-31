@@ -685,17 +685,45 @@ func (s *Server) GroupContextExtensionsProposal(ctx context.Context, req *proto.
 
 // proposalResponse wraps a Proposal in a signed PublicMessage MLSMessage for cross-interop,
 // falling back to raw bytes if the sig key is unavailable.
+//
+// After signing, it computes the ProposalRef (RFC 9420 §12.4) and registers it via
+// g.RegisterProposalRef so that commits from other actors that reference the proposal
+// byReference can be resolved by ProcessReceivedCommit.
 func (s *Server) proposalResponse(g *group.Group, stateID uint32, proposal *group.Proposal) (*proto.ProposalResponse, error) {
 	signerVal, ok := s.signers.Load(stateID)
 	if ok {
 		sigKey := signerVal.(*ciphersuite.SignaturePrivateKey)
 		msgBytes, err := g.SignProposalAsPublicMessage(proposal, sigKey)
 		if err == nil {
+			// Compute ProposalRef from the AuthenticatedContent of the signed message
+			// (RFC 9420 §12.4: RefHash("MLS 1.0 Proposal Reference", Marshal(AC))).
+			if ref := proposalRefFromMLSMessage(msgBytes, g.CipherSuite()); len(ref) > 0 {
+				g.RegisterProposalRef(proposal, ref)
+			}
 			return &proto.ProposalResponse{Proposal: msgBytes}, nil
 		}
 		log.Printf("proposalResponse: sign failed, falling back to raw: %v", err)
 	}
 	return &proto.ProposalResponse{Proposal: group.ProposalMarshal(proposal)}, nil
+}
+
+// proposalRefFromMLSMessage extracts the AuthenticatedContent from a signed PublicMessage
+// MLSMessage and computes the ProposalRef per RFC 9420 §12.4.
+func proposalRefFromMLSMessage(msgBytes []byte, cs ciphersuite.CipherSuite) []byte {
+	msg, err := framing.UnmarshalMLSMessage(msgBytes)
+	if err != nil {
+		return nil
+	}
+	pm, ok := msg.AsPublic()
+	if !ok {
+		return nil
+	}
+	ac := &framing.AuthenticatedContent{
+		WireFormat: framing.WireFormatPublicMessage,
+		Content:    pm.Content,
+		Auth:       pm.Auth,
+	}
+	return group.ComputeProposalRef(ac.Marshal(), cs)
 }
 
 // proposalFromDescription creates a *group.Proposal from an interop ProposalDescription
@@ -999,7 +1027,7 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 		}
 	}
 
-	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x PendingUpdatePrivKey_set=%v", req.StateId, g.OwnLeafIndex(), g.Epoch, g.InterimTranscriptHash, false)
+	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x", req.StateId, g.OwnLeafIndex(), g.Epoch, g.InterimTranscriptHash)
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return nil, status.Errorf(codes.Internal, "processing commit: %v", err)
 	}
