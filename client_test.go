@@ -4,10 +4,28 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/group"
+	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
+
+type rejectingValidator struct {
+	rejectIdentity string
+}
+
+func (v rejectingValidator) ValidateCredential(_ context.Context, cred *credentials.Credential) error {
+	if cred == nil {
+		return nil
+	}
+	if string(cred.Identity) == v.rejectIdentity {
+		return fmt.Errorf("identity %q rejected", v.rejectIdentity)
+	}
+	return nil
+}
 
 func TestClientBasicFlow(t *testing.T) {
 	t.Parallel()
@@ -494,5 +512,182 @@ func TestClientLeaveGroup(t *testing.T) {
 	}
 	if _, err := bob.SendMessage(ctx, bobGroupID, []byte("still here?")); !errors.Is(err, ErrGroupNotFound) {
 		t.Fatalf("expected ErrGroupNotFound after leave, got %v", err)
+	}
+}
+
+func TestClientClose(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("closing client: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("closing client twice: %v", err)
+	}
+	if _, err := client.FreshKeyPackageBytes(ctx); !errors.Is(err, ErrClientClosed) {
+		t.Fatalf("expected ErrClientClosed, got %v", err)
+	}
+	if _, err := client.CreateGroup(ctx); !errors.Is(err, ErrClientClosed) {
+		t.Fatalf("expected ErrClientClosed from CreateGroup, got %v", err)
+	}
+}
+
+func TestClientErrorHelpers(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("wrapping: %w", &group.ErrEpochMismatch{Got: 2, Want: 1})
+	if !IsEpochMismatch(err) {
+		t.Fatalf("expected IsEpochMismatch=true, got err=%v", err)
+	}
+	var epochErr *ErrEpochMismatch
+	if !errors.As(err, &epochErr) {
+		t.Fatalf("expected errors.As(..., *ErrEpochMismatch), got %v", err)
+	}
+
+	err = fmt.Errorf("wrapping: %w", &group.ErrGroupIDMismatch{Got: []byte{1}, Want: []byte{2}})
+	if !IsGroupIDMismatch(err) {
+		t.Fatalf("expected IsGroupIDMismatch=true, got err=%v", err)
+	}
+
+	err = fmt.Errorf("wrapping: %w", &group.ErrInvalidSignature{Context: "commit"})
+	if !IsInvalidSignature(err) {
+		t.Fatalf("expected IsInvalidSignature=true, got err=%v", err)
+	}
+
+	err = fmt.Errorf("wrapping: %w", &group.ErrUnknownMember{LeafIndex: 7})
+	if !IsUnknownMember(err) {
+		t.Fatalf("expected IsUnknownMember=true, got err=%v", err)
+	}
+
+	err = fmt.Errorf("wrapping: %w", &group.ErrDecryptionFailed{Reason: "message"})
+	if !IsDecryptionFailed(err) {
+		t.Fatalf("expected IsDecryptionFailed=true, got err=%v", err)
+	}
+}
+
+func TestClientWithStorageOption(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := memorystore.NewStore()
+	client, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store))
+	if err != nil {
+		t.Fatalf("creating client with custom storage: %v", err)
+	}
+	groupID, err := client.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	state, err := store.LoadGroupState(ctx, group.NewGroupID(groupID))
+	if err != nil {
+		t.Fatalf("loading group state from injected store: %v", err)
+	}
+	if len(state) == 0 {
+		t.Fatal("expected injected store to persist non-empty group state")
+	}
+}
+
+func TestClientWithCredentialValidatorRejectsInvite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	alice, err := NewClient(
+		[]byte("alice"),
+		ciphersuite.MLS128DHKEMP256,
+		WithCredentialValidator(rejectingValidator{rejectIdentity: "bob"}),
+	)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	if _, _, err := alice.InviteMember(ctx, groupID, bobKP); err == nil {
+		t.Fatal("expected InviteMember to fail credential validation")
+	}
+}
+
+func TestClientWithCredentialValidatorRejectsJoin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	alice, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient(
+		[]byte("bob"),
+		ciphersuite.MLS128DHKEMP256,
+		WithCredentialValidator(rejectingValidator{rejectIdentity: "alice"}),
+	)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	if _, err := bob.JoinGroup(ctx, welcome); err == nil {
+		t.Fatal("expected JoinGroup to fail credential validation")
+	}
+}
+
+func TestClientWithPaddingSizeOption(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	alice, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256, WithPaddingSize(64))
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), ciphersuite.MLS128DHKEMP256, WithPaddingSize(64))
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, welcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+	aliceGroup, err := alice.loadGroupLocked(ctx, groupID)
+	if err != nil {
+		t.Fatalf("loading alice group: %v", err)
+	}
+	bobGroup, err := bob.loadGroupLocked(ctx, bobGroupID)
+	if err != nil {
+		t.Fatalf("loading bob group: %v", err)
+	}
+	if aliceGroup.PaddingSize() != 64 {
+		t.Fatalf("alice padding size = %d, want 64", aliceGroup.PaddingSize())
+	}
+	if bobGroup.PaddingSize() != 64 {
+		t.Fatalf("bob padding size = %d, want 64", bobGroup.PaddingSize())
 	}
 }
