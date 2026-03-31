@@ -32,6 +32,7 @@ type combinedStore struct {
 type clientConfig struct {
 	storage             clientStore
 	credentialValidator group.CredentialValidator
+	eventHandler        EventHandler
 	paddingSize         int
 }
 
@@ -68,6 +69,34 @@ func WithPaddingSize(n int) ClientOption {
 			n = 0
 		}
 		cfg.paddingSize = n
+	}
+}
+
+type EventType int
+
+const (
+	EventMemberJoined EventType = iota
+	EventMemberRemoved
+	EventEpochAdvanced
+	EventMessageReceived
+	EventSelfUpdated
+)
+
+type GroupEvent struct {
+	Type           EventType
+	GroupID        []byte
+	Epoch          uint64
+	MemberIdentity []byte
+}
+
+type EventHandler func(event GroupEvent)
+
+func WithEventHandler(h EventHandler) ClientOption {
+	return func(cfg *clientConfig) {
+		if cfg == nil {
+			return
+		}
+		cfg.eventHandler = h
 	}
 }
 
@@ -153,6 +182,7 @@ type Client struct {
 	sigKey      *ciphersuite.SignaturePrivateKey
 	store       clientStore
 	validator   group.CredentialValidator
+	events      EventHandler
 	paddingSize int
 	closed      bool
 
@@ -192,6 +222,7 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 		sigKey:      sigKey,
 		store:       cfg.storage,
 		validator:   cfg.credentialValidator,
+		events:      cfg.eventHandler,
 		paddingSize: cfg.paddingSize,
 		pendingKPs:  make(map[string]*pendingEntry),
 	}, nil
@@ -587,12 +618,19 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, err
 	}
-	return &ReceivedMessage{
+	received := &ReceivedMessage{
 		Plaintext:         cloneBytes(plaintext),
 		AuthenticatedData: cloneBytes(authenticatedData),
 		SenderIdentity:    credentialIdentityBytes(member.Credential),
 		SenderLeafIdx:     uint32(senderLeafIdx),
-	}, nil
+	}
+	c.emitEvent(GroupEvent{
+		Type:           EventMessageReceived,
+		GroupID:        g.GroupID().AsSlice(),
+		Epoch:          g.Epoch().AsUint64(),
+		MemberIdentity: received.SenderIdentity,
+	})
+	return received, nil
 }
 
 // RemoveMember removes a member by credential identity and returns the commit bytes to broadcast.
@@ -617,7 +655,13 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	if _, err := g.RemoveMember(leafIndex); err != nil {
 		return nil, fmt.Errorf("creating remove proposal: %w", err)
 	}
-	return c.commitCurrentStateLocked(ctx, g, "creating remove commit")
+	commit, err := c.commitCurrentStateLocked(ctx, g, "creating remove commit")
+	if err != nil {
+		return nil, err
+	}
+	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: memberIdentity})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	return commit, nil
 }
 
 // SelfUpdate rotates the local member's leaf encryption key and returns the commit bytes to broadcast.
@@ -638,7 +682,13 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 	if _, err := g.SelfUpdate(c.sigKey); err != nil {
 		return nil, fmt.Errorf("creating self-update proposal: %w", err)
 	}
-	return c.commitCurrentStateLocked(ctx, g, "creating self-update commit")
+	commit, err := c.commitCurrentStateLocked(ctx, g, "creating self-update commit")
+	if err != nil {
+		return nil, err
+	}
+	c.emitEvent(GroupEvent{Type: EventSelfUpdated, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	return commit, nil
 }
 
 // LeaveGroup deletes the local persisted state for the group.
@@ -786,6 +836,7 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, nil, err
 	}
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	pm := &framing.PublicMessage{
 		Content: staged.AuthenticatedContent().Content,
 		Auth:    staged.AuthenticatedContent().Auth,
@@ -812,6 +863,7 @@ func (c *Client) Close() error {
 		}
 	}
 	c.store = nil
+	c.events = nil
 	return nil
 }
 
@@ -900,6 +952,20 @@ func keyPackageFingerprint(kpBytes []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func (c *Client) emitEvent(event GroupEvent) {
+	if c == nil || c.events == nil {
+		return
+	}
+	handler := c.events
+	cloned := GroupEvent{
+		Type:           event.Type,
+		GroupID:        cloneBytes(event.GroupID),
+		Epoch:          event.Epoch,
+		MemberIdentity: cloneBytes(event.MemberIdentity),
+	}
+	go handler(cloned)
+}
+
 func credentialIdentityBytes(cred *credentials.Credential) []byte {
 	if cred == nil {
 		return nil
@@ -954,6 +1020,26 @@ func (c *Client) commitCurrentStateLocked(ctx context.Context, g *group.Group, e
 }
 
 func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Group) (commit, welcome []byte, err error) {
+	joinIdentities := make([][]byte, 0)
+	removeIdentities := make([][]byte, 0)
+	for _, stored := range g.StoredProposals() {
+		if stored.Proposal == nil {
+			continue
+		}
+		switch stored.Proposal.Type {
+		case group.ProposalTypeAdd:
+			if stored.Proposal.Add != nil && stored.Proposal.Add.KeyPackage != nil && stored.Proposal.Add.KeyPackage.LeafNode != nil {
+				joinIdentities = append(joinIdentities, credentialIdentityBytes(stored.Proposal.Add.KeyPackage.LeafNode.Credential))
+			}
+		case group.ProposalTypeRemove:
+			if stored.Proposal.Remove != nil {
+				if member, ok := g.GetMember(stored.Proposal.Remove.Removed); ok && member != nil {
+					removeIdentities = append(removeIdentities, credentialIdentityBytes(member.Credential))
+				}
+			}
+		}
+	}
+
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating commit: %w", err)
@@ -982,6 +1068,10 @@ func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Grou
 		if err := c.persistGroupLocked(ctx, g); err != nil {
 			return nil, nil, err
 		}
+		for _, identity := range removeIdentities {
+			c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+		}
+		c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 		return commitBytes, nil, nil
 	}
 
@@ -998,6 +1088,13 @@ func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Grou
 	if err := c.persistGroupLocked(ctx, g); err != nil {
 		return nil, nil, err
 	}
+	for _, identity := range joinIdentities {
+		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+	}
+	for _, identity := range removeIdentities {
+		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+	}
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	welcomeMsg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
 	return commitBytes, welcomeMsg.Marshal(), nil
 }
