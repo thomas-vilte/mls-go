@@ -27,36 +27,38 @@
 //		log.Fatal(err)
 //	}
 //
-//	bobKeyPackage, err := bob.FreshKeyPackageBytes()
+//	ctx := context.Background()
+//
+//	bobKeyPackage, err := bob.FreshKeyPackageBytes(ctx)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	groupID, err := alice.CreateGroup()
+//	groupID, err := alice.CreateGroup(ctx)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	_, welcome, err := alice.InviteMember(groupID, bobKeyPackage)
+//	_, welcome, err := alice.InviteMember(ctx, groupID, bobKeyPackage)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	if _, err := bob.JoinGroup(welcome); err != nil {
+//	if _, err := bob.JoinGroup(ctx, welcome); err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	msg, err := alice.SendMessage(groupID, []byte("hello bob"))
+//	msg, err := alice.SendMessage(ctx, groupID, []byte("hello bob"))
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	plaintext, err := bob.ReceiveMessage(groupID, msg)
+//	received, err := bob.ReceiveMessage(ctx, groupID, msg)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	_ = plaintext
+//	_ = received.Plaintext
 //
 // For a full low-level example, see ./examples/basic_chat.
 // For the high-level Client flow, see ./examples/basic_chat_v2.

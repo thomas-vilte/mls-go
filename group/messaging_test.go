@@ -8,6 +8,7 @@ import (
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
 func tamperApplicationMessageSignature(t *testing.T, senderGroup *Group, pm *framing.PrivateMessage) *framing.PrivateMessage {
@@ -185,7 +186,7 @@ func TestReceiveApplicationMessage_VerifiesSignature(t *testing.T) {
 		t.Fatalf("SendApplicationMessage: %v", err)
 	}
 
-	got, gotAAD, err := bobGroup.ReceiveApplicationMessage(pm)
+	got, gotAAD, senderLeafIdx, err := bobGroup.ReceiveApplicationMessage(pm)
 	if err != nil {
 		t.Fatalf("ReceiveApplicationMessage(valid): %v", err)
 	}
@@ -195,9 +196,12 @@ func TestReceiveApplicationMessage_VerifiesSignature(t *testing.T) {
 	if !bytes.Equal(gotAAD, aad) {
 		t.Fatalf("authenticated data = %x, want %x", gotAAD, aad)
 	}
+	if senderLeafIdx != treesync.LeafIndex(aliceGroup.ownLeafIndex) {
+		t.Fatalf("sender leaf index = %d, want %d", senderLeafIdx, aliceGroup.ownLeafIndex)
+	}
 
 	tampered := tamperApplicationMessageSignature(t, aliceGroup, pm)
-	if _, _, err := bobGroup.ReceiveApplicationMessage(tampered); err == nil {
+	if _, _, _, err := bobGroup.ReceiveApplicationMessage(tampered); err == nil {
 		t.Fatal("ReceiveApplicationMessage should fail with tampered signature")
 	}
 }
@@ -243,7 +247,7 @@ func TestReceiveApplicationMessage_OldEpochUsesHistoricalContext(t *testing.T) {
 		t.Fatal("historical GroupContext is nil")
 	}
 
-	got, gotAAD, err := bobGroup.ReceiveApplicationMessage(pm)
+	got, gotAAD, senderLeafIdx, err := bobGroup.ReceiveApplicationMessage(pm)
 	if err != nil {
 		t.Fatalf("ReceiveApplicationMessage(old epoch): %v", err)
 	}
@@ -252,6 +256,9 @@ func TestReceiveApplicationMessage_OldEpochUsesHistoricalContext(t *testing.T) {
 	}
 	if !bytes.Equal(gotAAD, aad) {
 		t.Fatalf("authenticated data = %x, want %x", gotAAD, aad)
+	}
+	if senderLeafIdx != treesync.LeafIndex(aliceGroup.ownLeafIndex) {
+		t.Fatalf("sender leaf index = %d, want %d", senderLeafIdx, aliceGroup.ownLeafIndex)
 	}
 }
 

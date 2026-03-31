@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/secrettree"
@@ -56,6 +57,9 @@ type GroupStateData struct {
 type MemberStateData struct {
 	LeafIndex  uint32 `json:"leaf_index"`
 	KeyPackage []byte `json:"key_package"`
+	Credential []byte `json:"credential,omitempty"`
+	SigningKey []byte `json:"signing_key,omitempty"`
+	Active     bool   `json:"active"`
 }
 
 // MarshalState serializes the complete group state to JSON.
@@ -102,12 +106,24 @@ func (g *Group) MarshalState() ([]byte, error) {
 
 	// Serialize members
 	for idx, member := range g.members {
-		if member != nil && member.KeyPackage != nil {
-			state.Members[uint32(idx)] = &MemberStateData{
-				LeafIndex:  uint32(member.LeafIndex),
-				KeyPackage: member.KeyPackage.Marshal(),
-			}
+		if member == nil {
+			continue
 		}
+		mState := &MemberStateData{
+			LeafIndex: uint32(member.LeafIndex),
+			Active:    member.Active,
+		}
+		if member.KeyPackage != nil {
+			mState.KeyPackage = member.KeyPackage.Marshal()
+		}
+		if member.Credential != nil {
+			mState.Credential = member.Credential.Marshal()
+		}
+		leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(idx))
+		if leaf != nil && leaf.LeafData != nil {
+			mState.SigningKey = append([]byte(nil), leaf.LeafData.SigKeyBytes()...)
+		}
+		state.Members[uint32(idx)] = mState
 	}
 
 	return json.Marshal(state)
@@ -202,13 +218,25 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 
 	// Restaurant members
 	for idx, mData := range state.Members {
-		kp, err := keypackages.UnmarshalKeyPackage(mData.KeyPackage)
-		if err != nil {
-			return nil, fmt.Errorf("unmarshaling member %d key package: %w", idx, err)
+		var kp *keypackages.KeyPackage
+		if len(mData.KeyPackage) > 0 {
+			kp, err = keypackages.UnmarshalKeyPackage(mData.KeyPackage)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshaling member %d key package: %w", idx, err)
+			}
+		}
+		var cred *credentials.Credential
+		if len(mData.Credential) > 0 {
+			cred, err = credentials.UnmarshalCredential(mData.Credential)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshaling member %d credential: %w", idx, err)
+			}
 		}
 		g.members[LeafNodeIndex(idx)] = &Member{
 			LeafIndex:  LeafNodeIndex(mData.LeafIndex),
 			KeyPackage: kp,
+			Credential: cred,
+			Active:     mData.Active,
 		}
 	}
 

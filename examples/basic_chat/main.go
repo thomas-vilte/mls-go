@@ -145,7 +145,7 @@ func receiveApplicationMessage(g *group.Group, wire []byte) ([]byte, error) {
 		return nil, fmt.Errorf("expected PrivateMessage")
 	}
 
-	plaintext, _, err := g.ReceiveApplicationMessage(pm)
+	plaintext, _, _, err := g.ReceiveApplicationMessage(pm)
 	if err != nil {
 		return nil, err
 	}
