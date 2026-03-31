@@ -284,49 +284,7 @@ func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageByte
 	if _, err := g.AddMember(memberKP); err != nil {
 		return nil, nil, fmt.Errorf("adding member: %w", err)
 	}
-
-	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating commit: %w", err)
-	}
-
-	var newMemberKPs []*keypackages.KeyPackage
-	for _, prop := range staged.Proposals() {
-		if prop.Type == group.ProposalTypeAdd && prop.Add != nil {
-			newMemberKPs = append(newMemberKPs, prop.Add.KeyPackage)
-		}
-	}
-
-	joinerSecret := staged.JoinerSecret()
-
-	if err := g.MergeCommit(staged); err != nil {
-		return nil, nil, fmt.Errorf("merging own commit: %w", err)
-	}
-
-	welcomeObj, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: c.sigKey,
-		PskIDs:        staged.PskIDs(),
-		PskSecret:     staged.RawPskSecret(),
-		StagedCommit:  staged,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating welcome: %w", err)
-	}
-
-	if err := c.persistGroupLocked(ctx, g); err != nil {
-		return nil, nil, err
-	}
-
-	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
-		Content:       staged.AuthenticatedContent().Content,
-		Auth:          staged.AuthenticatedContent().Auth,
-		MembershipTag: staged.MembershipTag(),
-	})
-
-	welcomeMsg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
-
-	return commitMsg.Marshal(), welcomeMsg.Marshal(), nil
+	return c.commitPendingProposalsLocked(ctx, g)
 }
 
 // JoinGroup joins a group using the most recently generated pending KeyPackage.
@@ -379,6 +337,96 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 	}
 	delete(c.pendingKPs, matchKey)
 	return cloneBytes(joinedGroup.GroupID().AsSlice()), nil
+}
+
+// ProposeAddMember stores an Add proposal locally and returns a signed PublicMessage.
+func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []byte) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(memberKPBytes) == 0 {
+		return nil, ErrEmptyKeyPackage
+	}
+	g, err := c.loadGroupLocked(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	memberKP, err := keypackages.UnmarshalKeyPackage(memberKPBytes)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshaling member key package: %w", err)
+	}
+	if err := c.validateCredentialLocked(ctx, memberKP.LeafNode.Credential); err != nil {
+		return nil, err
+	}
+	proposal, err := g.AddMember(memberKP)
+	if err != nil {
+		return nil, fmt.Errorf("adding member proposal: %w", err)
+	}
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing add proposal: %w", err)
+	}
+	if err := c.persistGroupLocked(ctx, g); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// ProposeRemoveMember stores a Remove proposal locally and returns a signed PublicMessage.
+func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentity []byte) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	g, err := c.loadGroupLocked(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	leafIndex, err := findMemberLeafIndexByIdentity(g, memberIdentity)
+	if err != nil {
+		return nil, err
+	}
+	proposal, err := g.RemoveMember(leafIndex)
+	if err != nil {
+		return nil, fmt.Errorf("creating remove proposal: %w", err)
+	}
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing remove proposal: %w", err)
+	}
+	if err := c.persistGroupLocked(ctx, g); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// CommitPendingProposals commits all currently stored proposals in one operation.
+func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte) (commit, welcome []byte, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
+		return nil, nil, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	g, err := c.loadGroupLocked(ctx, groupID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.commitPendingProposalsLocked(ctx, g)
 }
 
 // ProcessCommit applies a commit from another existing group member.
@@ -858,6 +906,55 @@ func (c *Client) commitCurrentStateLocked(ctx context.Context, g *group.Group, e
 		MembershipTag: staged.MembershipTag(),
 	})
 	return commitMsg.Marshal(), nil
+}
+
+func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Group) (commit, welcome []byte, err error) {
+	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating commit: %w", err)
+	}
+
+	var newMemberKPs []*keypackages.KeyPackage
+	for _, prop := range staged.Proposals() {
+		if prop.Type == group.ProposalTypeAdd && prop.Add != nil {
+			newMemberKPs = append(newMemberKPs, prop.Add.KeyPackage)
+		}
+	}
+
+	joinerSecret := staged.JoinerSecret()
+	if err := g.MergeCommit(staged); err != nil {
+		return nil, nil, fmt.Errorf("merging own commit: %w", err)
+	}
+
+	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
+		Content:       staged.AuthenticatedContent().Content,
+		Auth:          staged.AuthenticatedContent().Auth,
+		MembershipTag: staged.MembershipTag(),
+	})
+	commitBytes := commitMsg.Marshal()
+
+	if len(newMemberKPs) == 0 {
+		if err := c.persistGroupLocked(ctx, g); err != nil {
+			return nil, nil, err
+		}
+		return commitBytes, nil, nil
+	}
+
+	welcomeObj, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		SignerPrivKey: c.sigKey,
+		PskIDs:        staged.PskIDs(),
+		PskSecret:     staged.RawPskSecret(),
+		StagedCommit:  staged,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating welcome: %w", err)
+	}
+	if err := c.persistGroupLocked(ctx, g); err != nil {
+		return nil, nil, err
+	}
+	welcomeMsg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
+	return commitBytes, welcomeMsg.Marshal(), nil
 }
 
 func findMemberLeafIndexByIdentity(g *group.Group, memberIdentity []byte) (group.LeafNodeIndex, error) {

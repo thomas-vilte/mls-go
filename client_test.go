@@ -691,3 +691,164 @@ func TestClientWithPaddingSizeOption(t *testing.T) {
 		t.Fatalf("bob padding size = %d, want 64", bobGroup.PaddingSize())
 	}
 }
+
+func TestClientCommitPendingProposalsWithTwoAdds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	charlie, err := NewClient([]byte("charlie"), cs)
+	if err != nil {
+		t.Fatalf("creating charlie client: %v", err)
+	}
+	dave, err := NewClient([]byte("dave"), cs)
+	if err != nil {
+		t.Fatalf("creating dave client: %v", err)
+	}
+
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, bobWelcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+
+	charlieKP, err := charlie.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating charlie key package: %v", err)
+	}
+	daveKP, err := dave.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating dave key package: %v", err)
+	}
+	if _, err := alice.ProposeAddMember(ctx, groupID, charlieKP); err != nil {
+		t.Fatalf("proposing charlie add: %v", err)
+	}
+	if _, err := alice.ProposeAddMember(ctx, groupID, daveKP); err != nil {
+		t.Fatalf("proposing dave add: %v", err)
+	}
+
+	commit, welcome, err := alice.CommitPendingProposals(ctx, groupID)
+	if err != nil {
+		t.Fatalf("committing pending proposals: %v", err)
+	}
+	if len(welcome) == 0 {
+		t.Fatal("expected welcome bytes for add proposals")
+	}
+	if err := bob.ProcessCommit(ctx, bobGroupID, commit); err != nil {
+		t.Fatalf("bob processing batched commit: %v", err)
+	}
+	charlieGroupID, err := charlie.JoinGroup(ctx, welcome)
+	if err != nil {
+		t.Fatalf("charlie joining from batched welcome: %v", err)
+	}
+	daveGroupID, err := dave.JoinGroup(ctx, welcome)
+	if err != nil {
+		t.Fatalf("dave joining from batched welcome: %v", err)
+	}
+	if !bytes.Equal(groupID, charlieGroupID) || !bytes.Equal(groupID, daveGroupID) {
+		t.Fatal("joined group IDs do not match creator group")
+	}
+	members, err := alice.ListMembers(ctx, groupID)
+	if err != nil {
+		t.Fatalf("listing members after batched add: %v", err)
+	}
+	if len(members) != 4 {
+		t.Fatalf("member count = %d, want 4", len(members))
+	}
+}
+
+func TestClientCommitPendingProposalsRemove(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	charlie, err := NewClient([]byte("charlie"), cs)
+	if err != nil {
+		t.Fatalf("creating charlie client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, bobWelcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+	charlieKP, err := charlie.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating charlie key package: %v", err)
+	}
+	commit, charlieWelcome, err := alice.InviteMember(ctx, groupID, charlieKP)
+	if err != nil {
+		t.Fatalf("inviting charlie: %v", err)
+	}
+	if err := bob.ProcessCommit(ctx, bobGroupID, commit); err != nil {
+		t.Fatalf("bob processing charlie commit: %v", err)
+	}
+	if _, err := charlie.JoinGroup(ctx, charlieWelcome); err != nil {
+		t.Fatalf("charlie joining group: %v", err)
+	}
+
+	proposalBytes, err := alice.ProposeRemoveMember(ctx, groupID, []byte("charlie"))
+	if err != nil {
+		t.Fatalf("proposing remove member: %v", err)
+	}
+	if len(proposalBytes) == 0 {
+		t.Fatal("expected signed proposal bytes")
+	}
+	commit, welcome, err := alice.CommitPendingProposals(ctx, groupID)
+	if err != nil {
+		t.Fatalf("committing remove proposal: %v", err)
+	}
+	if len(welcome) != 0 {
+		t.Fatalf("unexpected welcome bytes for remove-only commit: %x", welcome)
+	}
+	if err := bob.ProcessCommit(ctx, bobGroupID, commit); err != nil {
+		t.Fatalf("bob processing remove commit: %v", err)
+	}
+	members, err := bob.ListMembers(ctx, bobGroupID)
+	if err != nil {
+		t.Fatalf("listing members after remove commit: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("member count = %d, want 2", len(members))
+	}
+	for _, member := range members {
+		if string(member.Identity) == "charlie" {
+			t.Fatal("charlie should not remain after remove commit")
+		}
+	}
+}

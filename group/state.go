@@ -46,6 +46,7 @@ type GroupStateData struct {
 	ConfirmationTag       []byte                      `json:"confirmation_tag"`
 	EpochSecrets          *schedule.EpochSecretsData  `json:"epoch_secrets"`
 	Members               map[uint32]*MemberStateData `json:"members"`
+	StoredProposals       []*StoredProposalStateData  `json:"stored_proposals,omitempty"`
 	CachedPsks            map[string][]byte           `json:"cached_psks"`
 	MyLeafEncryptionKey   []byte                      `json:"my_leaf_encryption_key"`
 }
@@ -60,6 +61,13 @@ type MemberStateData struct {
 	Credential []byte `json:"credential,omitempty"`
 	SigningKey []byte `json:"signing_key,omitempty"`
 	Active     bool   `json:"active"`
+}
+
+// StoredProposalStateData represents a pending proposal persisted across reloads.
+type StoredProposalStateData struct {
+	Proposal []byte `json:"proposal"`
+	Sender   uint32 `json:"sender"`
+	Ref      []byte `json:"ref,omitempty"`
 }
 
 // MarshalState serializes the complete group state to JSON.
@@ -124,6 +132,17 @@ func (g *Group) MarshalState() ([]byte, error) {
 			mState.SigningKey = append([]byte(nil), leaf.LeafData.SigKeyBytes()...)
 		}
 		state.Members[uint32(idx)] = mState
+	}
+
+	for _, stored := range g.proposals.Proposals {
+		if stored.Proposal == nil {
+			continue
+		}
+		state.StoredProposals = append(state.StoredProposals, &StoredProposalStateData{
+			Proposal: ProposalMarshal(stored.Proposal),
+			Sender:   uint32(stored.Sender),
+			Ref:      append([]byte(nil), stored.Ref...),
+		})
 	}
 
 	return json.Marshal(state)
@@ -238,6 +257,17 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 			Credential: cred,
 			Active:     mData.Active,
 		}
+	}
+
+	for i, pData := range state.StoredProposals {
+		if pData == nil {
+			continue
+		}
+		proposal, err := UnmarshalProposal(pData.Proposal)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshaling stored proposal %d: %w", i, err)
+		}
+		g.proposals.AddProposalWithRef(proposal, LeafNodeIndex(pData.Sender), append([]byte(nil), pData.Ref...))
 	}
 
 	if err := g.ValidateRestoredState(); err != nil {
