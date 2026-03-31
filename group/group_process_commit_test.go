@@ -482,13 +482,48 @@ func TestGetMembers_Count(t *testing.T) {
 }
 
 // TestValidateAddProposal_DuplicateKey verifies that KeyPackages with same InitKey cannot be added
-// Note: This test documents a desired behavior (RFC §12.2), but the validation
-// of duplicate InitKey is not currently implemented in AddMember.
-// Test plan: Create two KeyPackages with the same InitKey (artificially forced),
-// add the first member, then verify that adding the second member with the duplicate
-// InitKey fails.
 func TestValidateAddProposal_DuplicateKey(t *testing.T) {
-	t.Skip("Duplicate InitKey validation not implemented yet")
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	aliceSigPub := aliceSigPriv.PublicKey()
+
+	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("CharlieDupInitA"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(CharlieDupInitA): %v", err)
+	}
+	charlieKP, _, err := keypackages.Generate(charlieCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(CharlieDupInitA): %v", err)
+	}
+
+	daveCred, _, err := credentials.GenerateCredentialWithKey([]byte("CharlieDupInitB"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(CharlieDupInitB): %v", err)
+	}
+	daveKP, _, err := keypackages.Generate(daveCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(CharlieDupInitB): %v", err)
+	}
+
+	// Force the second KeyPackage to reuse the first InitKey.
+	daveKP.InitKey = append([]byte(nil), charlieKP.InitKey...)
+
+	if _, err := aliceGroup.AddMember(charlieKP); err != nil {
+		t.Fatalf("AddMember(first): %v", err)
+	}
+	stagedCommit, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit(first add): %v", err)
+	}
+	if err := aliceGroup.MergeCommit(stagedCommit); err != nil {
+		t.Fatalf("MergeCommit(first add): %v", err)
+	}
+
+	if _, err := aliceGroup.AddMember(daveKP); err == nil {
+		t.Fatal("AddMember should fail for duplicate InitKey")
+	} else if !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("AddMember error = %v, want ErrInvalidProposal", err)
+	}
 }
 
 // TestValidateUpdateProposal_InvalidLeafNode verifies that UpdateProposal with invalid LeafNode fails

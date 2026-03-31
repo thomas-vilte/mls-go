@@ -485,6 +485,15 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not in operational state")
 	}
+	if keyPackage == nil {
+		return nil, ErrNilKeyPackage
+	}
+	if err := keyPackage.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid key package: %w", err)
+	}
+	if err := g.validateAddKeyPackageUniqueness(keyPackage); err != nil {
+		return nil, err
+	}
 
 	// Create Add proposal
 	proposal := &Proposal{
@@ -498,6 +507,35 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 	g.proposals.AddProposal(proposal, g.ownLeafIndex)
 
 	return proposal, nil
+}
+
+func (g *Group) validateAddKeyPackageUniqueness(keyPackage *keypackages.KeyPackage) error {
+	if keyPackage == nil {
+		return ErrNilKeyPackage
+	}
+	if len(keyPackage.InitKey) == 0 {
+		return nil
+	}
+	initKey := string(keyPackage.InitKey)
+	for _, member := range g.members {
+		if member == nil || !member.Active || member.KeyPackage == nil {
+			continue
+		}
+		if string(member.KeyPackage.InitKey) == initKey {
+			return fmt.Errorf("init key in Add proposal already in use by group member: %w", ErrInvalidProposal)
+		}
+	}
+	if g.proposals != nil {
+		for _, stored := range g.proposals.Proposals {
+			if stored.Proposal == nil || stored.Proposal.Type != ProposalTypeAdd || stored.Proposal.Add == nil || stored.Proposal.Add.KeyPackage == nil {
+				continue
+			}
+			if string(stored.Proposal.Add.KeyPackage.InitKey) == initKey {
+				return fmt.Errorf("duplicate init key in Add proposals: %w", ErrInvalidProposal)
+			}
+		}
+	}
+	return nil
 }
 
 // UpdateMember updates the own leaf node.
@@ -2157,6 +2195,9 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
+			if err := g.validateAddKeyPackageUniqueness(proposal.Add.KeyPackage); err != nil {
+				return err
+			}
 			leafData := keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
 			if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
 				return fmt.Errorf("invalid add proposal lifetime: %w", err)
