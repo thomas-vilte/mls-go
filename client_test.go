@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -25,6 +26,43 @@ func (v rejectingValidator) ValidateCredential(_ context.Context, cred *credenti
 		return fmt.Errorf("identity %q rejected", v.rejectIdentity)
 	}
 	return nil
+}
+
+func awaitEventType(t *testing.T, ch <-chan GroupEvent, want EventType) GroupEvent {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == want {
+				return event
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for event type %d", want)
+		}
+	}
+}
+
+func awaitEventTypes(t *testing.T, ch <-chan GroupEvent, wants ...EventType) map[EventType]GroupEvent {
+	t.Helper()
+	remaining := make(map[EventType]struct{}, len(wants))
+	seen := make(map[EventType]GroupEvent, len(wants))
+	for _, want := range wants {
+		remaining[want] = struct{}{}
+	}
+	timeout := time.After(2 * time.Second)
+	for len(remaining) > 0 {
+		select {
+		case event := <-ch:
+			if _, ok := remaining[event.Type]; ok {
+				seen[event.Type] = event
+				delete(remaining, event.Type)
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for events: %+v", remaining)
+		}
+	}
+	return seen
 }
 
 func TestClientBasicFlow(t *testing.T) {
@@ -903,5 +941,118 @@ func TestClientExternalJoin(t *testing.T) {
 	}
 	if len(members) != 2 {
 		t.Fatalf("member count = %d, want 2", len(members))
+	}
+}
+
+func TestClientEventHandlerInviteAndReceive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	events := make(chan GroupEvent, 8)
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs, WithEventHandler(func(event GroupEvent) {
+		events <- event
+	}))
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs, WithEventHandler(func(event GroupEvent) {
+		events <- event
+	}))
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	seen := awaitEventTypes(t, events, EventMemberJoined, EventEpochAdvanced)
+	joinEvent := seen[EventMemberJoined]
+	if string(joinEvent.MemberIdentity) != "bob" {
+		t.Fatalf("member joined identity = %q, want bob", joinEvent.MemberIdentity)
+	}
+	if !bytes.Equal(joinEvent.GroupID, groupID) {
+		t.Fatalf("member joined group id mismatch")
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, welcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+	msg, err := alice.SendMessage(ctx, groupID, []byte("hello events"))
+	if err != nil {
+		t.Fatalf("alice sending message: %v", err)
+	}
+	received, err := bob.ReceiveMessage(ctx, bobGroupID, msg)
+	if err != nil {
+		t.Fatalf("bob receiving message: %v", err)
+	}
+	if string(received.Plaintext) != "hello events" {
+		t.Fatalf("unexpected plaintext: %q", received.Plaintext)
+	}
+	messageEvent := awaitEventType(t, events, EventMessageReceived)
+	if string(messageEvent.MemberIdentity) != "alice" {
+		t.Fatalf("message event identity = %q, want alice", messageEvent.MemberIdentity)
+	}
+	if !bytes.Equal(messageEvent.GroupID, bobGroupID) {
+		t.Fatalf("message event group id mismatch")
+	}
+}
+
+func TestClientEventHandlerSelfUpdateAndRemove(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	events := make(chan GroupEvent, 16)
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs, WithEventHandler(func(event GroupEvent) {
+		events <- event
+	}))
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	_, err = bob.JoinGroup(ctx, bobWelcome)
+	if err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+	_ = awaitEventTypes(t, events, EventMemberJoined, EventEpochAdvanced)
+
+	if _, err := alice.SelfUpdate(ctx, groupID); err != nil {
+		t.Fatalf("alice self update: %v", err)
+	}
+	seen := awaitEventTypes(t, events, EventSelfUpdated, EventEpochAdvanced)
+	selfUpdateEvent := seen[EventSelfUpdated]
+	if string(selfUpdateEvent.MemberIdentity) != "alice" {
+		t.Fatalf("self update identity = %q, want alice", selfUpdateEvent.MemberIdentity)
+	}
+
+	if _, err := alice.RemoveMember(ctx, groupID, []byte("bob")); err != nil {
+		t.Fatalf("alice removing bob: %v", err)
+	}
+	seen = awaitEventTypes(t, events, EventMemberRemoved, EventEpochAdvanced)
+	removeEvent := seen[EventMemberRemoved]
+	if string(removeEvent.MemberIdentity) != "bob" {
+		t.Fatalf("remove identity = %q, want bob", removeEvent.MemberIdentity)
 	}
 }
