@@ -34,6 +34,7 @@ type clientConfig struct {
 	credentialValidator group.CredentialValidator
 	eventHandler        EventHandler
 	paddingSize         int
+	cacheStrategy       CacheStrategy
 }
 
 // ClientOption configures optional Client behavior.
@@ -69,6 +70,22 @@ func WithPaddingSize(n int) ClientOption {
 			n = 0
 		}
 		cfg.paddingSize = n
+	}
+}
+
+type CacheStrategy int
+
+const (
+	CacheNone CacheStrategy = iota
+	CacheAlways
+)
+
+func WithCacheStrategy(s CacheStrategy) ClientOption {
+	return func(cfg *clientConfig) {
+		if cfg == nil {
+			return
+		}
+		cfg.cacheStrategy = s
 	}
 }
 
@@ -178,15 +195,17 @@ type Client struct {
 	identity []byte
 	cs       ciphersuite.CipherSuite
 
-	credWithKey *credentials.CredentialWithKey
-	sigKey      *ciphersuite.SignaturePrivateKey
-	store       clientStore
-	validator   group.CredentialValidator
-	events      EventHandler
-	paddingSize int
-	closed      bool
+	credWithKey   *credentials.CredentialWithKey
+	sigKey        *ciphersuite.SignaturePrivateKey
+	store         clientStore
+	validator     group.CredentialValidator
+	events        EventHandler
+	paddingSize   int
+	cacheStrategy CacheStrategy
+	closed        bool
 
-	pendingKPs map[string]*pendingEntry
+	pendingKPs   map[string]*pendingEntry
+	cachedGroups map[string]*group.Group
 }
 
 type pendingEntry struct {
@@ -216,15 +235,17 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 	}
 
 	return &Client{
-		identity:    append([]byte(nil), identity...),
-		cs:          cs,
-		credWithKey: credWithKey,
-		sigKey:      sigKey,
-		store:       cfg.storage,
-		validator:   cfg.credentialValidator,
-		events:      cfg.eventHandler,
-		paddingSize: cfg.paddingSize,
-		pendingKPs:  make(map[string]*pendingEntry),
+		identity:      append([]byte(nil), identity...),
+		cs:            cs,
+		credWithKey:   credWithKey,
+		sigKey:        sigKey,
+		store:         cfg.storage,
+		validator:     cfg.credentialValidator,
+		events:        cfg.eventHandler,
+		paddingSize:   cfg.paddingSize,
+		cacheStrategy: cfg.cacheStrategy,
+		pendingKPs:    make(map[string]*pendingEntry),
+		cachedGroups:  make(map[string]*group.Group),
 	}, nil
 }
 
@@ -712,14 +733,15 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) ([]byte, error)
 	if err := c.store.DeleteGroupState(ctx, g.GroupID()); err != nil {
 		return nil, fmt.Errorf("deleting group state: %w", err)
 	}
+	delete(c.cachedGroups, groupCacheKey(g.GroupID()))
 	return nil, nil
 }
 
 // ListMembers returns all active members in the group.
 func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if err := c.ensureOpenRLocked(); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
 	ctx = normalizeContext(ctx)
@@ -740,9 +762,9 @@ func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo,
 
 // Export derives exporter secret material for the current epoch.
 func (c *Client) Export(ctx context.Context, groupID []byte, label string, exportContext []byte, length int) ([]byte, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if err := c.ensureOpenRLocked(); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
 	ctx = normalizeContext(ctx)
@@ -762,9 +784,9 @@ func (c *Client) Export(ctx context.Context, groupID []byte, label string, expor
 
 // EpochAuthenticator returns the epoch authenticator for the current epoch.
 func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if err := c.ensureOpenRLocked(); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
 	ctx = normalizeContext(ctx)
@@ -780,9 +802,9 @@ func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte
 
 // GroupInfo returns a signed GroupInfo structure encoded as bytes.
 func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if err := c.ensureOpenRLocked(); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
 	ctx = normalizeContext(ctx)
@@ -857,6 +879,7 @@ func (c *Client) Close() error {
 	c.credWithKey = nil
 	c.sigKey = nil
 	c.pendingKPs = nil
+	c.cachedGroups = nil
 	if closer, ok := any(c.store).(io.Closer); ok {
 		if err := closer.Close(); err != nil {
 			return err
@@ -872,6 +895,13 @@ func (c *Client) loadGroupLocked(ctx context.Context, groupIDBytes []byte) (*gro
 	if len(groupIDBytes) == 0 {
 		return nil, ErrEmptyGroupID
 	}
+	cacheKey := groupCacheKeyBytes(groupIDBytes)
+	if c.cacheStrategy == CacheAlways {
+		if cached, ok := c.cachedGroups[cacheKey]; ok && cached != nil {
+			cached.SetPaddingSize(c.paddingSize)
+			return cached, nil
+		}
+	}
 	groupID := group.NewGroupID(cloneBytes(groupIDBytes))
 	state, err := c.store.LoadGroupState(ctx, groupID)
 	if err != nil {
@@ -885,6 +915,9 @@ func (c *Client) loadGroupLocked(ctx context.Context, groupIDBytes []byte) (*gro
 		return nil, fmt.Errorf("unmarshaling group state: %w", err)
 	}
 	g.SetPaddingSize(c.paddingSize)
+	if c.cacheStrategy == CacheAlways {
+		c.cachedGroups[cacheKey] = g
+	}
 	return g, nil
 }
 
@@ -906,6 +939,9 @@ func (c *Client) persistGroupLocked(ctx context.Context, g *group.Group) error {
 		if err := c.store.StoreLeafEncryptionKey(ctx, groupID, g.OwnLeafIndex(), leafKey); err != nil {
 			return fmt.Errorf("saving leaf encryption key: %w", err)
 		}
+	}
+	if c.cacheStrategy == CacheAlways {
+		c.cachedGroups[groupCacheKey(groupID)] = g
 	}
 	return nil
 }
@@ -950,6 +986,17 @@ func normalizeContext(ctx context.Context) context.Context {
 func keyPackageFingerprint(kpBytes []byte) string {
 	sum := sha256.Sum256(kpBytes)
 	return hex.EncodeToString(sum[:])
+}
+
+func groupCacheKey(groupID *group.GroupID) string {
+	if groupID == nil {
+		return ""
+	}
+	return groupCacheKeyBytes(groupID.AsSlice())
+}
+
+func groupCacheKeyBytes(groupID []byte) string {
+	return hex.EncodeToString(groupID)
 }
 
 func (c *Client) emitEvent(event GroupEvent) {
