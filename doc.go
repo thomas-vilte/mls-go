@@ -53,12 +53,12 @@
 //		log.Fatal(err)
 //	}
 //
-//	plaintext, err := bob.ReceiveMessage(ctx, groupID, msg)
+//	received, err := bob.ReceiveMessage(ctx, groupID, msg)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	_ = plaintext
+//	_ = received.Plaintext
 //
 // For a full low-level example, see ./examples/basic_chat.
 // For the high-level Client flow, see ./examples/basic_chat_v2.

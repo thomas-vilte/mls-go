@@ -394,7 +394,7 @@ func (s *Server) Unprotect(ctx context.Context, req *proto.UnprotectRequest) (*p
 		return nil, status.Errorf(codes.InvalidArgument, "ciphertext is not a PrivateMessage")
 	}
 
-	plaintext, authData, err := g.ReceiveApplicationMessage(pm)
+	plaintext, authData, _, err := g.ReceiveApplicationMessage(pm)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "decrypting message: %v", err)
 	}

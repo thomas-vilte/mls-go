@@ -57,7 +57,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Bob received: %s\n", string(receivedByBob))
+	fmt.Printf("Bob received from %s: %s\n", string(receivedByBob.SenderIdentity), string(receivedByBob.Plaintext))
 	// Bob replies.
 	bobToAlice, err := bob.SendMessage(ctx, bobGroupID, []byte("hello alice"))
 	if err != nil {
@@ -67,6 +67,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Alice received: %s\n", string(receivedByAlice))
+	fmt.Printf("Alice received from %s: %s\n", string(receivedByAlice.SenderIdentity), string(receivedByAlice.Plaintext))
 	fmt.Printf("Group established with mls.Client: %x\n", groupID)
 }

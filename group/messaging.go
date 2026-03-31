@@ -187,12 +187,12 @@ func (g *Group) ReceiveMessage(
 //
 // Messages from previous epochs are decrypted and verified using the cached
 // EpochHistory to support out-of-order delivery across epoch boundaries.
-func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext, authenticatedData []byte, err error) {
+func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext, authenticatedData []byte, senderLeafIdx treesync.LeafIndex, err error) {
 	if g.state != StateOperational {
-		return nil, nil, fmt.Errorf("group not operational")
+		return nil, nil, 0, fmt.Errorf("group not operational")
 	}
 	if pm == nil {
-		return nil, nil, fmt.Errorf("private message is nil")
+		return nil, nil, 0, fmt.Errorf("private message is nil")
 	}
 
 	var senderDataSecret *ciphersuite.Secret
@@ -203,13 +203,13 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 
 	if pm.Epoch == g.epoch.AsUint64() {
 		if g.epochSecrets == nil || g.epochSecrets.SenderDataSecret == nil {
-			return nil, nil, fmt.Errorf("sender_data_secret not available")
+			return nil, nil, 0, fmt.Errorf("sender_data_secret not available")
 		}
 		if g.secretTree == nil {
-			return nil, nil, fmt.Errorf("secret tree not available")
+			return nil, nil, 0, fmt.Errorf("secret tree not available")
 		}
 		if g.ratchetTree == nil {
-			return nil, nil, fmt.Errorf("ratchet tree not available")
+			return nil, nil, 0, fmt.Errorf("ratchet tree not available")
 		}
 		senderDataSecret = g.epochSecrets.SenderDataSecret
 		secretTree = g.secretTree
@@ -222,12 +222,12 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 			secretTree = state.SecretTree
 			ratchetTree = state.RatchetTree
 			if state.GroupContext == nil {
-				return nil, nil, fmt.Errorf("group context not available for epoch %d", pm.Epoch)
+				return nil, nil, 0, fmt.Errorf("group context not available for epoch %d", pm.Epoch)
 			}
 			groupContextBytes = state.GroupContext.Marshal()
 			cs = state.CipherSuite
 		} else {
-			return nil, nil, fmt.Errorf("message from unknown epoch %d (current: %d)", pm.Epoch, g.epoch.AsUint64())
+			return nil, nil, 0, fmt.Errorf("message from unknown epoch %d (current: %d)", pm.Epoch, g.epoch.AsUint64())
 		}
 	}
 
@@ -238,36 +238,36 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 		GroupContext:     groupContextBytes,
 	})
 	if decErr != nil {
-		return nil, nil, &ErrDecryptionFailed{Reason: "message", Err: decErr}
+		return nil, nil, 0, &ErrDecryptionFailed{Reason: "message", Err: decErr}
 	}
 
-	senderLeafIdx := treesync.LeafIndex(ac.Content.Sender.LeafIndex)
+	senderLeafIdx = treesync.LeafIndex(ac.Content.Sender.LeafIndex)
 	if ratchetTree == nil {
-		return nil, nil, fmt.Errorf("ratchet tree not available for epoch %d", pm.Epoch)
+		return nil, nil, 0, fmt.Errorf("ratchet tree not available for epoch %d", pm.Epoch)
 	}
 
 	if uint32(senderLeafIdx) >= ratchetTree.NumLeaves {
-		return nil, nil, fmt.Errorf("sender index %d out of bounds (tree has %d leaves)", senderLeafIdx, ratchetTree.NumLeaves)
+		return nil, nil, 0, fmt.Errorf("sender index %d out of bounds (tree has %d leaves)", senderLeafIdx, ratchetTree.NumLeaves)
 	}
 
 	senderLeaf := ratchetTree.GetLeaf(senderLeafIdx)
 	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent || senderLeaf.LeafData == nil {
-		return nil, nil, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
+		return nil, nil, 0, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
 	}
 
 	rawKey := senderLeaf.LeafData.SigKeyBytes()
 	if len(rawKey) == 0 {
-		return nil, nil, fmt.Errorf("missing sender signature key")
+		return nil, nil, 0, fmt.Errorf("missing sender signature key")
 	}
 
 	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
 	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
-		return nil, nil, fmt.Errorf("private message signature invalid: %w", err)
+		return nil, nil, 0, fmt.Errorf("private message signature invalid: %w", err)
 	}
 
 	data, ok := ac.Content.ApplicationData()
 	if !ok {
-		return nil, nil, fmt.Errorf("received message is not application data")
+		return nil, nil, 0, fmt.Errorf("received message is not application data")
 	}
-	return data, ac.Content.AuthenticatedData, nil
+	return data, ac.Content.AuthenticatedData, senderLeafIdx, nil
 }
