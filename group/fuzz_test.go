@@ -59,3 +59,20 @@ func FuzzJoinFromWelcome(f *testing.F) {
 		_, _ = JoinFromWelcome(welcome, kp, kpPriv, nil)
 	})
 }
+
+func FuzzUnmarshalGroupState(f *testing.F) {
+	f.Add([]byte("{}"))
+	f.Add([]byte{})
+
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		g, err := UnmarshalGroupState(data)
+		if err != nil || g == nil {
+			return
+		}
+		roundTrip, err := g.MarshalState()
+		if err != nil {
+			return
+		}
+		_, _ = UnmarshalGroupState(roundTrip)
+	})
+}

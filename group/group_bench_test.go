@@ -7,6 +7,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
@@ -192,6 +193,92 @@ func BenchmarkReceiveMessage(b *testing.B) {
 
 		if _, err := g.ReceiveMessage(pm, 0); err != nil {
 			b.Fatalf("ReceiveMessage: %v", err)
+		}
+	}
+}
+
+func BenchmarkMarshalState(b *testing.B) {
+	g, _ := setupBenchGroup(b, 10)
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := g.MarshalState(); err != nil {
+			b.Fatalf("MarshalState: %v", err)
+		}
+	}
+}
+
+func BenchmarkUnmarshalGroupState(b *testing.B) {
+	g, _ := setupBenchGroup(b, 10)
+	state, err := g.MarshalState()
+	if err != nil {
+		b.Fatalf("MarshalState: %v", err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := UnmarshalGroupState(state); err != nil {
+			b.Fatalf("UnmarshalGroupState: %v", err)
+		}
+	}
+}
+
+func BenchmarkJoinFromWelcome(b *testing.B) {
+	creatorCred, _, err := credentials.GenerateCredentialWithKey([]byte("CreatorJoinBench"))
+	if err != nil {
+		b.Fatalf("GenerateCredentialWithKey creator: %v", err)
+	}
+	creatorKP, creatorPriv, err := keypackages.Generate(creatorCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		b.Fatalf("Generate creator KP: %v", err)
+	}
+	groupID, err := NewGroupIDRandom()
+	if err != nil {
+		b.Fatalf("NewGroupIDRandom: %v", err)
+	}
+	creatorGroup, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, creatorKP, creatorPriv)
+	if err != nil {
+		b.Fatalf("NewGroup: %v", err)
+	}
+	creatorSig := ciphersuite.NewSignaturePrivateKey(creatorPriv.SignatureKey)
+
+	joinerCred, _, err := credentials.GenerateCredentialWithKey([]byte("JoinerJoinBench"))
+	if err != nil {
+		b.Fatalf("GenerateCredentialWithKey joiner: %v", err)
+	}
+	joinerKP, joinerPriv, err := keypackages.Generate(joinerCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		b.Fatalf("Generate joiner KP: %v", err)
+	}
+	if _, err := creatorGroup.AddMember(joinerKP); err != nil {
+		b.Fatalf("AddMember: %v", err)
+	}
+	staged, err := creatorGroup.Commit(creatorSig, creatorSig.PublicKey(), nil)
+	if err != nil {
+		b.Fatalf("Commit: %v", err)
+	}
+	joinerSecret := staged.JoinerSecret()
+	if err := creatorGroup.MergeCommit(staged); err != nil {
+		b.Fatalf("MergeCommit: %v", err)
+	}
+	welcomeObj, err := creatorGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{joinerKP}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		SignerPrivKey: creatorSig,
+		PskIDs:        staged.PskIDs(),
+		PskSecret:     staged.RawPskSecret(),
+		StagedCommit:  staged,
+	})
+	if err != nil {
+		b.Fatalf("CreateWelcomeWithOptions: %v", err)
+	}
+	welcomeMsg := &framing.MLSMessage{Welcome: welcomeObj.Marshal()}
+	parsedWelcome, err := UnmarshalWelcome(welcomeMsg.Welcome)
+	if err != nil {
+		b.Fatalf("UnmarshalWelcome: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := JoinFromWelcome(parsedWelcome, joinerKP, joinerPriv, nil); err != nil {
+			b.Fatalf("JoinFromWelcome: %v", err)
 		}
 	}
 }
