@@ -1281,14 +1281,18 @@ func (g *Group) ProcessReceivedCommit(
 	senderLeafIdx treesync.LeafIndex,
 	myHpkePrivKeyBytes []byte,
 ) error {
-	// RFC §12.4.1: validar GroupID y epoch antes de cualquier trabajo costoso.
+	// RFC §12.4.1: validate GroupID and epoch before any costly work.
 	if !bytes.Equal(ac.Content.GroupID, g.groupContext.GroupID.AsSlice()) {
-		return fmt.Errorf("group_id mismatch: message has %x, group is %x",
-			ac.Content.GroupID, g.groupContext.GroupID.AsSlice())
+		return &ErrGroupIDMismatch{
+			Got:  append([]byte(nil), ac.Content.GroupID...),
+			Want: append([]byte(nil), g.groupContext.GroupID.AsSlice()...),
+		}
 	}
 	if ac.Content.Epoch != g.groupContext.Epoch.AsUint64() {
-		return fmt.Errorf("epoch mismatch: commit has %d, group is at %d",
-			ac.Content.Epoch, g.groupContext.Epoch.AsUint64())
+		return &ErrEpochMismatch{
+			Got:  ac.Content.Epoch,
+			Want: g.groupContext.Epoch.AsUint64(),
+		}
 	}
 
 	commitBody, ok := ac.Content.Body.(framing.CommitBody)

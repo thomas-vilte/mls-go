@@ -3,6 +3,7 @@ package group
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -211,10 +212,48 @@ func TestProcessCommit_Valid(t *testing.T) {
 }
 
 // TestProcessCommit_WrongEpoch verifies that a commit with incorrect epoch fails.
-// ProcessCommit does not validate the epoch because it delegates to MergeCommit.
-// Epoch validation currently exists only in ReceiveMessage. RFC §12.4.1 gap.
 func TestProcessCommit_WrongEpoch(t *testing.T) {
-	t.Skip("epoch validation not implemented in ProcessCommit - RFC §12.4.1 gap")
+	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
+
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	aliceSigPub := aliceSigPriv.PublicKey()
+
+	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("CharlieWrongEpoch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+
+	charlieKP, _, err := keypackages.Generate(charlieCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage: %v", err)
+	}
+
+	if _, err := aliceGroup.AddMember(charlieKP); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+
+	stagedCommit, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	stagedCommit.authenticatedContent.Content.Epoch++
+
+	err = bobGroup.ProcessCommit(stagedCommit)
+	if err == nil {
+		t.Fatal("ProcessCommit should fail with wrong epoch")
+	}
+
+	var epochErr *ErrEpochMismatch
+	if !errors.As(err, &epochErr) {
+		t.Fatalf("ProcessCommit error = %v, want ErrEpochMismatch", err)
+	}
+	if epochErr.Got != stagedCommit.authenticatedContent.Content.Epoch {
+		t.Fatalf("ErrEpochMismatch.Got = %d, want %d", epochErr.Got, stagedCommit.authenticatedContent.Content.Epoch)
+	}
+	if epochErr.Want != bobGroup.groupContext.Epoch.AsUint64() {
+		t.Fatalf("ErrEpochMismatch.Want = %d, want %d", epochErr.Want, bobGroup.groupContext.Epoch.AsUint64())
+	}
 }
 
 // TestProcessCommit_CorruptedUpdatePath verifies that a commit with corrupted UpdatePath fails

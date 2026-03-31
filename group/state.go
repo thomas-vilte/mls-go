@@ -1,6 +1,7 @@
 package group
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -211,5 +212,64 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		}
 	}
 
+	if err := g.ValidateRestoredState(); err != nil {
+		return nil, err
+	}
+
 	return g, nil
+}
+
+// ValidateRestoredState verifies that a deserialized group is internally consistent
+// before it is returned to callers.
+func (g *Group) ValidateRestoredState() error {
+	if g == nil {
+		return fmt.Errorf("validating restored state: %w", ErrInvalidGroupState)
+	}
+	if g.groupContext == nil {
+		return fmt.Errorf("validating restored state: missing group context: %w", ErrInvalidGroupState)
+	}
+	if g.ratchetTree == nil {
+		return fmt.Errorf("validating restored state: missing ratchet tree: %w", ErrInvalidGroupState)
+	}
+	if g.epochSecrets == nil {
+		return fmt.Errorf("validating restored state: missing epoch secrets: %w", ErrInvalidGroupState)
+	}
+	if g.secretTree == nil {
+		return fmt.Errorf("validating restored state: missing secret tree: %w", ErrInvalidGroupState)
+	}
+	if g.groupContext.GroupID == nil || !bytes.Equal(g.groupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
+		return fmt.Errorf("validating restored state: group ID mismatch: %w", ErrInvalidGroupState)
+	}
+	if g.groupContext.CipherSuite != g.cipherSuite {
+		return fmt.Errorf("validating restored state: cipher suite mismatch: %w", ErrInvalidGroupState)
+	}
+	if g.groupContext.Epoch != g.epoch {
+		return fmt.Errorf("validating restored state: epoch mismatch: %w", ErrInvalidGroupState)
+	}
+	if uint32(g.ownLeafIndex) >= g.ratchetTree.NumLeaves {
+		return fmt.Errorf("validating restored state: own leaf index %d out of bounds for tree with %d leaves: %w", g.ownLeafIndex, g.ratchetTree.NumLeaves, ErrInvalidGroupState)
+	}
+
+	ownLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
+	if ownLeaf == nil || ownLeaf.State != treesync.NodeStatePresent || ownLeaf.LeafData == nil {
+		return fmt.Errorf("validating restored state: own leaf %d is not active: %w", g.ownLeafIndex, ErrInvalidGroupState)
+	}
+
+	computedTreeHash := g.ratchetTree.TreeHash()
+	if !bytes.Equal(computedTreeHash, g.groupContext.TreeHash) {
+		return fmt.Errorf("validating restored state: computed tree hash %x does not match stored tree hash %x: %w", computedTreeHash, g.groupContext.TreeHash, ErrTreeHashMismatch)
+	}
+
+	if len(g.confirmationTag) > 0 {
+		expectedTag := schedule.ComputeConfirmationTag(
+			g.cipherSuite,
+			g.epochSecrets.ConfirmationKey.AsSlice(),
+			g.groupContext.ConfirmedTranscriptHash,
+		)
+		if !ciphersuite.EqualCT(expectedTag, g.confirmationTag) {
+			return fmt.Errorf("validating restored state: stored confirmation tag %x does not match computed confirmation tag %x: %w", g.confirmationTag, expectedTag, ErrConfirmationTagMismatch)
+		}
+	}
+
+	return nil
 }
