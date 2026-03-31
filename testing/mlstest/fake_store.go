@@ -40,6 +40,14 @@ type FakeStore struct {
 	groups   map[string][]byte
 	sigKeys  map[string]*ciphersuite.SignaturePrivateKey
 	leafKeys map[string][]byte
+
+	SaveCalls      int
+	LoadCalls      int
+	DeleteCalls    int
+	StoreSigCalls  int
+	LoadSigCalls   int
+	StoreLeafCalls int
+	LoadLeafCalls  int
 }
 
 var (
@@ -71,6 +79,7 @@ func (s *FakeStore) SaveGroupState(ctx context.Context, groupID *group.GroupID, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.SaveCalls++
 	s.groups[key] = append([]byte(nil), state...)
 	return nil
 }
@@ -89,8 +98,9 @@ func (s *FakeStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) 
 	if err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LoadCalls++
 	state, ok := s.groups[key]
 	if !ok {
 		return nil, ErrGroupStateNotFound
@@ -114,6 +124,7 @@ func (s *FakeStore) DeleteGroupState(ctx context.Context, groupID *group.GroupID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.DeleteCalls++
 	delete(s.groups, key)
 	return nil
 }
@@ -134,6 +145,7 @@ func (s *FakeStore) StoreSignatureKey(ctx context.Context, groupID *group.GroupI
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.StoreSigCalls++
 	s.sigKeys[groupKeyValue] = key
 	return nil
 }
@@ -152,8 +164,9 @@ func (s *FakeStore) LoadSignatureKey(ctx context.Context, groupID *group.GroupID
 	if err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LoadSigCalls++
 	key, ok := s.sigKeys[groupKeyValue]
 	if !ok {
 		return nil, ErrSignatureKeyNotFound
@@ -177,6 +190,7 @@ func (s *FakeStore) StoreLeafEncryptionKey(ctx context.Context, groupID *group.G
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.StoreLeafCalls++
 	s.leafKeys[leafKeyValue] = append([]byte(nil), key...)
 	return nil
 }
@@ -195,8 +209,9 @@ func (s *FakeStore) LoadLeafEncryptionKey(ctx context.Context, groupID *group.Gr
 	if err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LoadLeafCalls++
 	key, ok := s.leafKeys[leafKeyValue]
 	if !ok {
 		return nil, ErrLeafKeyNotFound

@@ -18,6 +18,20 @@ type rejectingValidator struct {
 	rejectIdentity string
 }
 
+type countingStore struct {
+	*memorystore.Store
+	loadCalls int
+}
+
+func newCountingStore() *countingStore {
+	return &countingStore{Store: memorystore.NewStore()}
+}
+
+func (s *countingStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
+	s.loadCalls++
+	return s.Store.LoadGroupState(ctx, groupID)
+}
+
 func (v rejectingValidator) ValidateCredential(_ context.Context, cred *credentials.Credential) error {
 	if cred == nil {
 		return nil
@@ -727,6 +741,65 @@ func TestClientWithPaddingSizeOption(t *testing.T) {
 	}
 	if bobGroup.PaddingSize() != 64 {
 		t.Fatalf("bob padding size = %d, want 64", bobGroup.PaddingSize())
+	}
+}
+
+func TestClientWithCacheNoneLoadsEveryRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := newCountingStore()
+	writer, err := NewClient([]byte("writer"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store))
+	if err != nil {
+		t.Fatalf("creating writer client: %v", err)
+	}
+	groupID, err := writer.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	store.loadCalls = 0
+	reader, err := NewClient([]byte("reader"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store), WithCacheStrategy(CacheNone))
+	if err != nil {
+		t.Fatalf("creating reader client: %v", err)
+	}
+	if _, err := reader.ListMembers(ctx, groupID); err != nil {
+		t.Fatalf("first ListMembers: %v", err)
+	}
+	if _, err := reader.ListMembers(ctx, groupID); err != nil {
+		t.Fatalf("second ListMembers: %v", err)
+	}
+	if store.loadCalls != 2 {
+		t.Fatalf("load calls = %d, want 2 for CacheNone", store.loadCalls)
+	}
+}
+
+func TestClientWithCacheAlwaysCachesLoadedGroup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := newCountingStore()
+	writer, err := NewClient([]byte("writer"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store))
+	if err != nil {
+		t.Fatalf("creating writer client: %v", err)
+	}
+	groupID, err := writer.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	store.loadCalls = 0
+	reader, err := NewClient([]byte("reader"), ciphersuite.MLS128DHKEMP256, WithStorage(store, store), WithCacheStrategy(CacheAlways))
+	if err != nil {
+		t.Fatalf("creating reader client: %v", err)
+	}
+	if _, err := reader.ListMembers(ctx, groupID); err != nil {
+		t.Fatalf("first ListMembers: %v", err)
+	}
+	if _, err := reader.ListMembers(ctx, groupID); err != nil {
+		t.Fatalf("second ListMembers: %v", err)
+	}
+	if store.loadCalls != 1 {
+		t.Fatalf("load calls = %d, want 1 for CacheAlways", store.loadCalls)
+	}
+	if _, ok := reader.cachedGroups[groupCacheKeyBytes(groupID)]; !ok {
+		t.Fatal("expected group to be present in cache")
 	}
 }
 
