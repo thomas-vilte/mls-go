@@ -12,9 +12,12 @@ import (
 )
 
 var (
-	ErrGroupStateNotFound   = errors.New("mlstest: group state not found")
+	// ErrGroupStateNotFound is returned by FakeStore when a requested group state does not exist.
+	ErrGroupStateNotFound = errors.New("mlstest: group state not found")
+	// ErrSignatureKeyNotFound is returned by FakeStore when no signing key is stored for the requested group.
 	ErrSignatureKeyNotFound = errors.New("mlstest: signature key not found")
-	ErrLeafKeyNotFound      = errors.New("mlstest: leaf key not found")
+	// ErrLeafKeyNotFound is returned by FakeStore when no leaf encryption key is stored for the requested group and leaf index.
+	ErrLeafKeyNotFound = errors.New("mlstest: leaf key not found")
 )
 
 // FakeStore is a failure-injectable in-memory implementation of GroupStorage and KeyStore.
@@ -55,6 +58,7 @@ var (
 	_ group.KeyStore     = (*FakeStore)(nil)
 )
 
+// NewFakeStore returns an initialized FakeStore ready for use in tests.
 func NewFakeStore() *FakeStore {
 	return &FakeStore{
 		groups:   make(map[string][]byte),
@@ -63,6 +67,7 @@ func NewFakeStore() *FakeStore {
 	}
 }
 
+// SaveGroupState stores the serialized group state, honoring FailSave/SaveErr.
 func (s *FakeStore) SaveGroupState(ctx context.Context, groupID *group.GroupID, state []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -84,6 +89,7 @@ func (s *FakeStore) SaveGroupState(ctx context.Context, groupID *group.GroupID, 
 	return nil
 }
 
+// LoadGroupState retrieves the serialized group state, honoring FailLoad/LoadErr.
 func (s *FakeStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -108,6 +114,7 @@ func (s *FakeStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) 
 	return append([]byte(nil), state...), nil
 }
 
+// DeleteGroupState removes the group state, honoring FailDelete/DeleteErr.
 func (s *FakeStore) DeleteGroupState(ctx context.Context, groupID *group.GroupID) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -129,6 +136,7 @@ func (s *FakeStore) DeleteGroupState(ctx context.Context, groupID *group.GroupID
 	return nil
 }
 
+// StoreSignatureKey persists the signing key for a group, honoring FailStoreSig/StoreSigErr.
 func (s *FakeStore) StoreSignatureKey(ctx context.Context, groupID *group.GroupID, key *ciphersuite.SignaturePrivateKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -150,6 +158,7 @@ func (s *FakeStore) StoreSignatureKey(ctx context.Context, groupID *group.GroupI
 	return nil
 }
 
+// LoadSignatureKey retrieves the signing key for a group, honoring FailLoadSig/LoadSigErr.
 func (s *FakeStore) LoadSignatureKey(ctx context.Context, groupID *group.GroupID) (*ciphersuite.SignaturePrivateKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -174,6 +183,7 @@ func (s *FakeStore) LoadSignatureKey(ctx context.Context, groupID *group.GroupID
 	return key, nil
 }
 
+// StoreLeafEncryptionKey persists a leaf encryption key, honoring FailStoreLeaf/StoreLeafErr.
 func (s *FakeStore) StoreLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -195,6 +205,7 @@ func (s *FakeStore) StoreLeafEncryptionKey(ctx context.Context, groupID *group.G
 	return nil
 }
 
+// LoadLeafEncryptionKey retrieves a leaf encryption key, honoring FailLoadLeaf/LoadLeafErr.
 func (s *FakeStore) LoadLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

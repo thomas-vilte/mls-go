@@ -21,13 +21,13 @@ func NewGroup(t testing.TB, n int, cs ciphersuite.CipherSuite) []*mls.Client {
 
 // NewGroupWithID creates n high-level clients, establishes a single shared group,
 // and returns both the clients and the resulting group ID.
-func NewGroupWithID(t testing.TB, n int, cs ciphersuite.CipherSuite) ([]*mls.Client, []byte) {
+func NewGroupWithID(t testing.TB, n int, cs ciphersuite.CipherSuite) (clients []*mls.Client, groupID []byte) {
 	t.Helper()
 	if n < 1 {
 		t.Fatalf("NewGroup requires at least one client, got %d", n)
 	}
 	ctx := context.Background()
-	clients := make([]*mls.Client, 0, n)
+	clients = make([]*mls.Client, 0, n)
 	for i := 0; i < n; i++ {
 		client, err := mls.NewClient([]byte(fmt.Sprintf("client-%d", i)), cs)
 		if err != nil {

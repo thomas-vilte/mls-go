@@ -83,7 +83,7 @@ func (s *Store) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]b
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from the library's own directory, not user input
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrGroupStateNotFound
@@ -171,7 +171,7 @@ func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.GroupI
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from the library's own directory, not user input
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrLeafKeyNotFound
@@ -234,18 +234,15 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
 	cleanup = false
-	if err := syncDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return nil
+	return syncDir(filepath.Dir(path))
 }
 
 func syncDir(dir string) error {
-	f, err := os.Open(dir)
+	f, err := os.Open(dir) //nolint:gosec // dir is constructed from the library's own base directory, not user input
 	if err != nil {
 		return fmt.Errorf("opening directory for sync: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("syncing directory: %w", err)
 	}
