@@ -227,7 +227,7 @@ func TestUnmarshalGroupState_FailsOnOwnLeafOutOfBounds(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	state.OwnLeafIndex = state.OwnLeafIndex + 10
+	state.OwnLeafIndex += 10
 
 	tampered, err := json.Marshal(&state)
 	if err != nil {

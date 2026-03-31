@@ -252,6 +252,26 @@ func (g *Group) StoreProposalWithRef(p *Proposal, sender LeafNodeIndex, ref []by
 	g.proposals.AddProposalWithRef(p, sender, ref)
 }
 
+// RegisterProposalRef associates a ProposalRef with a proposal already stored in
+// g.proposals. Call this after signing a locally-created proposal so that commits
+// from other actors that reference the proposal byReference can be resolved.
+//
+// Unlike StoreProposalWithRef, this does NOT add a new entry to g.proposals;
+// it only updates the existing entry's Ref field and registers the ref in the
+// lookup map.
+func (g *Group) RegisterProposalRef(p *Proposal, ref []byte) {
+	if g.proposalByRef == nil {
+		g.proposalByRef = make(map[string]*Proposal)
+	}
+	g.proposalByRef[string(ref)] = p
+	for i, sp := range g.proposals.Proposals {
+		if sp.Proposal == p {
+			g.proposals.Proposals[i].Ref = ref
+			return
+		}
+	}
+}
+
 // FindMemberBySigKey returns the leaf index of the member whose current leaf
 // node carries the given signature key bytes. Returns 0, false if not found.
 func (g *Group) FindMemberBySigKey(sigKeyBytes []byte) (LeafNodeIndex, bool) {
