@@ -2,15 +2,17 @@ package group
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
-	keypackages "github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 func TestStateSerialization_RoundTrip(t *testing.T) {
-	// 1. Crear grupo con un par de miembros
+	// Create a group with a couple of members
 	credAlice, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
 	kpAlice, privAlice, _ := keypackages.Generate(credAlice, keypackages.MLS128DHKEMP256)
 	groupID, _ := NewGroupIDRandom()
@@ -170,5 +172,120 @@ func TestStateSerialization_FailsIfNotOperational(t *testing.T) {
 	_, err := group.MarshalState()
 	if err == nil {
 		t.Error("MarshalState should fail when group is not operational")
+	}
+}
+
+func TestUnmarshalGroupState_FailsOnTreeHashMismatch(t *testing.T) {
+	credAlice, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
+	kpAlice, privAlice, _ := keypackages.Generate(credAlice, keypackages.MLS128DHKEMP256)
+	groupID, _ := NewGroupIDRandom()
+	aliceGroup, _ := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kpAlice, privAlice)
+
+	data, err := aliceGroup.MarshalState()
+	if err != nil {
+		t.Fatalf("MarshalState failed: %v", err)
+	}
+
+	var state GroupStateData
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	gc, err := UnmarshalGroupContext(state.GroupContext)
+	if err != nil {
+		t.Fatalf("UnmarshalGroupContext: %v", err)
+	}
+	gc.TreeHash[0] ^= 0xFF
+	state.GroupContext = gc.Marshal()
+
+	tampered, err := json.Marshal(&state)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	_, err = UnmarshalGroupState(tampered)
+	if err == nil {
+		t.Fatal("UnmarshalGroupState should fail with mismatched tree hash")
+	}
+	if !errors.Is(err, ErrTreeHashMismatch) {
+		t.Fatalf("UnmarshalGroupState error = %v, want ErrTreeHashMismatch", err)
+	}
+}
+
+func TestUnmarshalGroupState_FailsOnOwnLeafOutOfBounds(t *testing.T) {
+	credAlice, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
+	kpAlice, privAlice, _ := keypackages.Generate(credAlice, keypackages.MLS128DHKEMP256)
+	groupID, _ := NewGroupIDRandom()
+	aliceGroup, _ := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kpAlice, privAlice)
+
+	data, err := aliceGroup.MarshalState()
+	if err != nil {
+		t.Fatalf("MarshalState failed: %v", err)
+	}
+
+	var state GroupStateData
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	state.OwnLeafIndex = state.OwnLeafIndex + 10
+
+	tampered, err := json.Marshal(&state)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	_, err = UnmarshalGroupState(tampered)
+	if err == nil {
+		t.Fatal("UnmarshalGroupState should fail with out-of-bounds own leaf")
+	}
+	if !errors.Is(err, ErrInvalidGroupState) {
+		t.Fatalf("UnmarshalGroupState error = %v, want ErrInvalidGroupState", err)
+	}
+}
+
+func TestUnmarshalGroupState_FailsOnConfirmationTagMismatch(t *testing.T) {
+	credAlice, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
+	kpAlice, privAlice, _ := keypackages.Generate(credAlice, keypackages.MLS128DHKEMP256)
+	groupID, _ := NewGroupIDRandom()
+	aliceGroup, _ := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kpAlice, privAlice)
+
+	credBob, _, _ := credentials.GenerateCredentialWithKey([]byte("bob"))
+	kpBob, _, _ := keypackages.Generate(credBob, keypackages.MLS128DHKEMP256)
+	if _, err := aliceGroup.AddMember(kpBob); err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
+
+	sigPriv := ciphersuite.NewSignaturePrivateKey(privAlice.SignatureKey)
+	sigPub := sigPriv.PublicKey()
+	sc, err := aliceGroup.Commit(sigPriv, sigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit failed: %v", err)
+	}
+
+	data, err := aliceGroup.MarshalState()
+	if err != nil {
+		t.Fatalf("MarshalState failed: %v", err)
+	}
+
+	var state GroupStateData
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	state.ConfirmationTag[0] ^= 0xFF
+
+	tampered, err := json.Marshal(&state)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	_, err = UnmarshalGroupState(tampered)
+	if err == nil {
+		t.Fatal("UnmarshalGroupState should fail with confirmation tag mismatch")
+	}
+	if !errors.Is(err, ErrConfirmationTagMismatch) {
+		t.Fatalf("UnmarshalGroupState error = %v, want ErrConfirmationTagMismatch", err)
 	}
 }
