@@ -14,13 +14,13 @@ import (
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
-// Welcome represents an MLS Welcome message as defined in RFC 9420 §11.2.2.
+// Welcome represents an MLS Welcome message as defined in RFC 9420 §12.4.3.1.
 //
 // Welcome messages are sent to new members to allow them to join a group.
 // They contain encrypted group secrets for each new member, encrypted using
 // HPKE (RFC 9180) with the recipient's KeyPackage public key.
 //
-// RFC 9420 §11.2.2:
+// RFC 9420 §12.4.3.1:
 //
 //	struct {
 //	    CipherSuite cipher_suite;
@@ -34,7 +34,7 @@ type Welcome struct {
 }
 
 // EncryptedGroupSecrets contains encrypted secrets for a new group member
-// as defined in RFC 9420 §11.2.2.
+// as defined in RFC 9420 §12.4.3.1.
 //
 // Each new member receives their own encrypted secrets in the Welcome message.
 // The key_package_hash identifies which KeyPackage this secret is for.
@@ -45,7 +45,7 @@ type Welcome struct {
 //	    opaque ciphertext<V>;
 //	} EncryptedGroupSecrets;
 type EncryptedGroupSecrets struct {
-	KeyPackageHash []byte // Hash reference of the member's KeyPackage (RFC 9420 §10.5)
+	KeyPackageHash []byte // Hash reference of the member's KeyPackage (RFC 9420 §10.1)
 	EncryptedKey   []byte // HPKE encapsulated key (kem_output from RFC 9180)
 	Ciphertext     []byte // Encrypted group secrets (AES-GCM ciphertext)
 }
@@ -92,7 +92,7 @@ func (w *Welcome) Marshal() ([]byte, error) {
 
 // UnmarshalWelcome parses a Welcome message from TLS presentation language format.
 //
-// This function decodes the binary data according to RFC 9420 §11.2.2:
+// This function decodes the binary data according to RFC 9420 §12.4.3.1:
 //   - cipher_suite: uint16
 //   - secrets: vector of EncryptedGroupSecrets
 //   - encrypted_group_info: opaque bytes
@@ -168,7 +168,7 @@ func unmarshalEncryptedGroupSecrets(data []byte) ([]EncryptedGroupSecrets, error
 // FindSecret finds the encrypted secrets for a specific KeyPackage hash.
 //
 // This method searches the Welcome message for secrets intended for a
-// particular KeyPackage, identified by its hash (RFC 9420 §10.5).
+// particular KeyPackage, identified by its hash (RFC 9420 §10.1).
 // Returns nil if no matching secrets are found.
 func (w *Welcome) FindSecret(keyPackageHash []byte) *EncryptedGroupSecrets {
 	for i := range w.Secrets {
@@ -179,13 +179,13 @@ func (w *Welcome) FindSecret(keyPackageHash []byte) *EncryptedGroupSecrets {
 	return nil
 }
 
-// GroupInfo represents the MLS GroupInfo structure as defined in RFC 9420 §11.2.1.
+// GroupInfo represents the MLS GroupInfo structure as defined in RFC 9420 §12.4.3.
 //
 // GroupInfo contains public information about a group's state, signed by a
 // current member. It is encrypted for transmission in Welcome messages to
 // protect group secrets from unauthorized disclosure.
 //
-// RFC 9420 §11.2.1:
+// RFC 9420 §12.4.3:
 //
 //	struct {
 //	    GroupContext group_context;
@@ -256,7 +256,7 @@ func (gi *GroupInfo) marshalTBS() []byte {
 
 // UnmarshalGroupInfo parses a GroupInfo from TLS presentation language format.
 //
-// This function decodes the binary data according to RFC 9420 §11.2.1:
+// This function decodes the binary data according to RFC 9420 §12.4.3:
 //   - group_context: GroupContext structure
 //   - extensions: vector of extensions
 //   - confirmation_tag: MAC for epoch confirmation
@@ -308,7 +308,7 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 
 // UnmarshalGroupContext parses a GroupContext from TLS presentation language format.
 //
-// This function decodes the binary data according to RFC 9420 §5.2:
+// This function decodes the binary data according to RFC 9420 §8.1:
 //   - protocol_version: uint16
 //   - cipher_suite: uint16
 //   - group_id: variable-length identifier
@@ -356,7 +356,7 @@ func unmarshalExtensions(data []byte) ([]Extension, error) {
 }
 
 // EncryptGroupInfo encrypts a GroupInfo for inclusion in a Welcome message
-// as specified in RFC 9420 §11.2.2.
+// as specified in RFC 9420 §12.4.3.1.
 //
 // The AEAD algorithm is selected based on cs (AES-128-GCM for CS1/CS2,
 // ChaCha20-Poly1305 for CS3). welcome_key and welcome_nonce must be derived
@@ -422,14 +422,14 @@ func VerifyConfirmationTag(h func() hash.Hash, confirmationKey, confirmedTranscr
 }
 
 // HashKeyPackage computes the hash reference of a KeyPackage as specified in
-// RFC 9420 §10.5 (KeyPackage Hash Reference).
+// RFC 9420 §10.1 (KeyPackage Hash Reference).
 //
 // The hash is computed using SHA-256 over the serialized KeyPackage:
 //
 //	key_package_hash = Hash(KeyPackage.Marshal())
 //
 // This hash is used in Welcome messages to identify which KeyPackage each
-// EncryptedGroupSecrets entry is intended for (RFC 9420 §11.2.2).
+// EncryptedGroupSecrets entry is intended for (RFC 9420 §12.4.3.1).
 func HashKeyPackage(keyPackageBytes []byte) []byte {
 	hashSum := sha256.Sum256(keyPackageBytes)
 	return hashSum[:]

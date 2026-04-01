@@ -13,7 +13,7 @@
 //
 // # Message Types
 //
-// Welcome Messages (§11.2.2) - For adding new members to a group:
+// Welcome Messages (§12.4.3.1) - For adding new members to a group:
 //
 //	┌─────────────────────────────────────────────────────────────────┐
 //	│                    Welcome Structure                            │
@@ -26,7 +26,7 @@
 //	│  encrypted_group_info<V>      - Encrypted GroupInfo object      │
 //	└─────────────────────────────────────────────────────────────────┘
 //
-// GroupInfo (§11.2.1) - Public information about a group's state:
+// GroupInfo (§12.4.3) - Public information about a group's state:
 //
 //	┌─────────────────────────────────────────────────────────────────┐
 //	│                    GroupInfo Structure                          │
@@ -38,7 +38,7 @@
 //	│  signature<V>                 - Signature over GroupInfo        │
 //	└─────────────────────────────────────────────────────────────────┘
 //
-// GroupContext (§5.2) - Summary of shared group state:
+// GroupContext (§8.1) - Summary of shared group state:
 //
 //	┌─────────────────────────────────────────────────────────────────┐
 //	│                   GroupContext Structure                        │
@@ -99,7 +99,7 @@
 // # GroupInfo Encryption
 //
 // The GroupInfo is encrypted using AES-128-GCM with keys derived from the
-// welcome_secret (RFC 9420 §11.2.2):
+// welcome_secret (RFC 9420 §12.4.3.1):
 //
 //	┌─────────────────────────────────────────────────────────────────┐
 //	│              GroupInfo Encryption Flow                          │
@@ -202,11 +202,11 @@
 // This package is fully compliant with:
 //   - RFC 9420: The Messaging Layer Security (MLS) Protocol
 //   - §2.1.2: Variable-Size Vector Length Headers
-//   - §5.2: Group Context
+//   - §8.1: Group Context
 //   - §8.2: Transcript Hashes and Confirmation Tags
-//   - §10.5: KeyPackage Hash References
-//   - §11.2.1: GroupInfo
-//   - §11.2.2: Welcome Messages
+//   - §10.1: KeyPackage Hash References
+//   - §12.4.3: GroupInfo
+//   - §12.4.3.1: Welcome Messages
 //   - RFC 8446: TLS 1.3 Presentation Language
 //
 // # Testing

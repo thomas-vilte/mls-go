@@ -58,17 +58,6 @@ var (
 	ErrKdfLabelTooLarge = errors.New("ciphersuite: KDF label too large")
 )
 
-// Serialization errors
-var (
-	// ErrKdfSerializationError occurs when KDF label serialization fails.
-	// This is typically an internal error.
-	ErrKdfSerializationError = errors.New("ciphersuite: KDF serialization error")
-
-	// ErrTLSSerializationError occurs when TLS serialization fails.
-	// This indicates invalid data structure for TLS encoding.
-	ErrTLSSerializationError = errors.New("ciphersuite: TLS serialization error")
-)
-
 // Suite errors
 var (
 	// ErrUnsupportedSuite occurs when an operation is requested for a cipher suite
@@ -81,12 +70,4 @@ var (
 	// ErrCryptoLibraryError occurs when an underlying crypto operation fails.
 	// This is a generic wrapper for crypto library errors.
 	ErrCryptoLibraryError = errors.New("ciphersuite: crypto library error")
-
-	// ErrHKDFExpand occurs when HKDF-Expand operation fails.
-	// This typically indicates output length too large.
-	ErrHKDFExpand = errors.New("ciphersuite: HKDF expand failed")
-
-	// ErrHKDFExtract occurs when HKDF-Extract operation fails.
-	// This is typically an internal error.
-	ErrHKDFExtract = errors.New("ciphersuite: HKDF extract failed")
 )

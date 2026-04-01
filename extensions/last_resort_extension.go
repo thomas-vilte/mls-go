@@ -1,4 +1,4 @@
-// Package extensions - Last Resort Extension (RFC 9420 §11.2.5)
+// Package extensions - Last Resort Extension (RFC 9420 §16.8)
 package extensions
 
 import (
@@ -9,10 +9,10 @@ import (
 
 // LastResortExtension marks a KeyPackage for "last resort" use.
 //
-// Per RFC 9420 §11.2.5, this extension marks KeyPackages that should only
+// Per RFC 9420 §16.8, this extension marks KeyPackages that should only
 // be used when no other KeyPackages are available.
 //
-// # Structure (RFC 9420 §11.2.5)
+// # Structure (RFC 9420 §16.8)
 //
 // ```text
 // ┌─────────────────────────────────────────┐
@@ -60,7 +60,7 @@ import (
 //
 // # RFC Compliance
 //
-// RFC 9420 §11.2.5:
+// RFC 9420 §16.8:
 // "The LastResort extension is used to mark KeyPackages that should
 // only be used as a last resort, when no other KeyPackages are available."
 type LastResortExtension struct {

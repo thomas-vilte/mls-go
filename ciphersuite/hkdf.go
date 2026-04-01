@@ -28,12 +28,6 @@ func NewHKDF() *HKDF {
 	return &HKDF{hashNew: sha256.New}
 }
 
-// NewHKDFForCS creates a new HKDF instance using the hash function of the given cipher suite.
-// This ensures forward compatibility when cipher suites with SHA-384/SHA-512 are added.
-func NewHKDFForCS(cs CipherSuite) *HKDF {
-	return &HKDF{hashNew: cs.HashFunction()}
-}
-
 // Extract extracts a pseudorandom key (PRK) from input keying material (IKM).
 //
 // RFC 5869 §2.2:

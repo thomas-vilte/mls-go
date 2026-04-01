@@ -180,16 +180,6 @@ func NewReInitProposal(
 	}
 }
 
-// NewExternalInitProposal creates a new ExternalInit proposal.
-func NewExternalInitProposal(kemOutput []byte) *Proposal {
-	return &Proposal{
-		Type: ProposalTypeExternalInit,
-		ExternalInit: &ExternalInitProposal{
-			KemOutput: kemOutput,
-		},
-	}
-}
-
 // NewGroupContextExtensionsProposal creates a new GroupContextExtensions proposal.
 func NewGroupContextExtensionsProposal(extensions []Extension) *Proposal {
 	return &Proposal{

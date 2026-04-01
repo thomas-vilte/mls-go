@@ -184,20 +184,12 @@ type MLSSignaturePublicKey struct {
 	Value           []byte
 }
 
-// OpenMlsSignaturePublicKey is kept as an alias for the old public API name.
-type OpenMlsSignaturePublicKey = MLSSignaturePublicKey
-
 // NewMLSSignaturePublicKey creates an enriched public key.
 func NewMLSSignaturePublicKey(value []byte, scheme SignatureScheme) *MLSSignaturePublicKey {
 	return &MLSSignaturePublicKey{
 		SignatureScheme: scheme,
 		Value:           value,
 	}
-}
-
-// NewOpenMlsSignaturePublicKey creates an enriched public key.
-func NewOpenMlsSignaturePublicKey(value []byte, scheme SignatureScheme) *OpenMlsSignaturePublicKey {
-	return NewMLSSignaturePublicKey(value, scheme)
 }
 
 // AsSlice returns the key bytes.

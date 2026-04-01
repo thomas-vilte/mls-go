@@ -1,4 +1,4 @@
-// Package extensions - Ratchet Tree Extension (RFC 9420 §11.2.2)
+// Package extensions - Ratchet Tree Extension (RFC 9420 §12.4.3.3)
 package extensions
 
 import (
@@ -10,10 +10,10 @@ import (
 
 // RatchetTreeExtension contains the full ratchet tree for a group.
 //
-// Per RFC 9420 §11.2.2, this extension appears in GroupInfo and provides
+// Per RFC 9420 §12.4.3.3, this extension appears in GroupInfo and provides
 // the complete ratchet tree to new members joining via External Commit.
 //
-// # Structure (RFC 9420 §11.2.2)
+// # Structure (RFC 9420 §12.4.3.3)
 //
 // ```text
 //
@@ -64,7 +64,7 @@ import (
 //
 // # RFC Compliance
 //
-// RFC 9420 §11.2.2:
+// RFC 9420 §12.4.3.3:
 // "The RatchetTree extension provides the full public state of the
 // ratchet tree to allow new members to initialize their state."
 type RatchetTreeExtension struct {

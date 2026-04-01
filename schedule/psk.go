@@ -43,8 +43,6 @@ const (
 	PskTypeExternal PskType = 0x01 // matches other implementation / interop test vectors
 	// PskTypeResumption represents a resumption PSK from a previous epoch.
 	PskTypeResumption PskType = 0x02
-	// PskTypeBranch represents a PSK used for branching a group.
-	PskTypeBranch PskType = 0x03
 )
 
 // Psk represents a Pre-Shared Key as defined in RFC 9420 §8.4.

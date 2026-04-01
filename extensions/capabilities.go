@@ -1,7 +1,7 @@
 // Use of this source code is governed by a MIT-style license
 // that can be found in the LICENSE file.
 
-// Package extensions - Required Capabilities Extension (RFC 9420 §11.2.3)
+// Package extensions - Required Capabilities Extension (RFC 9420 §11.1)
 package extensions
 
 import (
@@ -17,7 +17,7 @@ import (
 // This extension is used in GroupContext to ensure all members support the required
 // features before joining the group.
 //
-// # Structure (RFC 9420 §11.2.3)
+// # Structure (RFC 9420 §11.1)
 //
 // ```text
 //
@@ -111,7 +111,7 @@ func (r *RequiredCapabilitiesExtension) AddCredential(cred credentials.Credentia
 
 // Marshal serializes the RequiredCapabilities extension to TLS format.
 //
-// # Encoding (RFC 9420 §11.2.3)
+// # Encoding (RFC 9420 §11.1)
 //
 // ```text
 // ┌─────────────────────────────────────────────────────────────┐

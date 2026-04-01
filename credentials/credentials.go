@@ -97,13 +97,6 @@ const (
 	// Used for PKI-based authentication.
 	// First certificate is end-entity, rest are intermediates.
 	X509Credential CredentialType = 0x0002
-
-	// GREASE_CREDENTIAL is for extensibility testing (RFC 9420 §13.5).
-	// GREASE values (0x0A0A, 0x1A1A, etc.) ensure implementations
-	// handle unknown types gracefully without breaking.
-	//
-	//nolint:revive // GREASE naming follows RFC 9420 convention
-	GREASE_CREDENTIAL CredentialType = 0x0A0A
 )
 
 // String returns a human-readable name for the credential type.

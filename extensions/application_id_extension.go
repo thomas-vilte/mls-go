@@ -1,4 +1,4 @@
-// Package extensions - Application ID Extension (RFC 9420 §11.2.1)
+// Package extensions - Application ID Extension (RFC 9420 §5.3.3)
 package extensions
 
 import (
@@ -12,10 +12,10 @@ import (
 
 // ApplicationIDExtension adds an application-specific identifier to a KeyPackage.
 //
-// Per RFC 9420 §11.2.1, this extension identifies the application or service
+// Per RFC 9420 §5.3.3, this extension identifies the application or service
 // using the MLS client. Useful when multiple apps share MLS infrastructure.
 //
-// # Structure (RFC 9420 §11.2.1)
+// # Structure (RFC 9420 §5.3.3)
 //
 // ```text
 // ┌─────────────────────────────────────────┐
@@ -57,7 +57,7 @@ import (
 //
 // # RFC Compliance
 //
-// RFC 9420 §11.2.1:
+// RFC 9420 §5.3.3:
 // "The ApplicationId extension allows applications to add an explicit,
 // application-defined identifier to a KeyPackage."
 type ApplicationIDExtension struct {
@@ -72,13 +72,6 @@ func NewApplicationIDExtension(appID []byte) *ApplicationIDExtension {
 	return &ApplicationIDExtension{
 		ApplicationID: appID,
 	}
-}
-
-// NewApplicationIDExtensionFromString creates an ApplicationIDExtension from string.
-//
-// Converts the string to UTF-8 bytes.
-func NewApplicationIDExtensionFromString(appID string) *ApplicationIDExtension {
-	return NewApplicationIDExtension([]byte(appID))
 }
 
 // Marshal serializes the extension to TLS format.
@@ -98,7 +91,7 @@ func (a *ApplicationIDExtension) Marshal() []byte {
 
 // UnmarshalApplicationIDExtension parses an ApplicationIDExtension from TLS.
 //
-// Reads application_id as variable-length bytes per RFC 9420 §11.2.1.
+// Reads application_id as variable-length bytes per RFC 9420 §5.3.3.
 func UnmarshalApplicationIDExtension(data []byte) (*ApplicationIDExtension, error) {
 	buf := tls.NewReader(data)
 	appID, err := buf.ReadVLBytes()
@@ -110,7 +103,7 @@ func UnmarshalApplicationIDExtension(data []byte) (*ApplicationIDExtension, erro
 	}, nil
 }
 
-// Validate validates the extension per RFC 9420 §11.2.1.
+// Validate validates the extension per RFC 9420 §5.3.3.
 //
 // # Validation Rules
 //

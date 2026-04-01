@@ -100,19 +100,6 @@ func unmarshalUpdatePathFromReader(r *tls.Reader) (*UpdatePath, error) {
 	return &UpdatePath{LeafNode: leafNode, Nodes: nodes}, nil
 }
 
-// UnmarshalUpdatePath deserializes an UpdatePath from TLS-encoded bytes.
-func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
-	r := tls.NewReader(data)
-	up, err := unmarshalUpdatePathFromReader(r)
-	if err != nil {
-		return nil, err
-	}
-	if r.Remaining() != 0 {
-		return nil, fmt.Errorf("trailing bytes in UpdatePath: %d", r.Remaining())
-	}
-	return up, nil
-}
-
 // ComputeProposalRef computes ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent))
 // per RFC 9420 §12.4.
 //

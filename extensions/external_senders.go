@@ -366,15 +366,6 @@ func (e *ExternalSendersExtension) ToExtension() (*Extension, error) {
 	}, nil
 }
 
-// FromExternalSendersExtension creates an ExternalSendersExtension from a generic Extension.
-func FromExternalSendersExtension(ext *Extension) (*ExternalSendersExtension, error) {
-	if ext.Type != ExtensionTypeExternalSenders {
-		return nil, fmt.Errorf("wrong extension type: %d", ext.Type)
-	}
-
-	return UnmarshalExternalSendersExtension(ext.Data)
-}
-
 // Helper functions
 
 func unmarshalECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {

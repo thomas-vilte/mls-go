@@ -2516,7 +2516,7 @@ func NewGroupFromReInit(
 		return nil, fmt.Errorf("key package leaf node is nil")
 	}
 
-	cs := ciphersuite.CipherSuite(reInit.CipherSuite)
+	cs := reInit.CipherSuite
 	ratchetTree := treesync.NewRatchetTree(1, cs)
 	leafData := treesync.LeafNodeData{
 		EncryptionKey:   myKP.LeafNode.EncryptionKey, // RFC §10.1: use LeafNode.encryption_key for TreeKEM

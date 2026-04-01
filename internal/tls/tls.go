@@ -56,7 +56,7 @@ func (w *Writer) WriteUint64(v uint64) {
 // WriteVLBytes writes a variable-length byte vector.
 //
 // Format: length<V> || data
-// where length is encoded as MLS varint (RFC 9420 §3.5)
+// where length is encoded as MLS varint (RFC 9420 §2.1.2)
 func (w *Writer) WriteVLBytes(data []byte) {
 	w.WriteMLSVarint(uint32(len(data)))
 	w.buf = append(w.buf, data...)
@@ -67,7 +67,7 @@ func (w *Writer) WriteRaw(data []byte) {
 	w.buf = append(w.buf, data...)
 }
 
-// WriteMLSVarint writes an unsigned integer in MLS variable-length encoding (RFC 9420 §3.5).
+// WriteMLSVarint writes an unsigned integer in MLS variable-length encoding (RFC 9420 §2.1.2).
 //
 // Encoding:
 //   - 0–63: 1 byte (high 2 bits = 00)
@@ -181,7 +181,7 @@ func (r *Reader) ReadVLBytes() ([]byte, error) {
 	return data, nil
 }
 
-// ReadMLSVarint reads an unsigned integer in MLS variable-length encoding (RFC 9420 §3.5).
+// ReadMLSVarint reads an unsigned integer in MLS variable-length encoding (RFC 9420 §2.1.2).
 func (r *Reader) ReadMLSVarint() (uint32, error) {
 	if r.pos >= len(r.buf) {
 		return 0, ErrBufferUnderrun

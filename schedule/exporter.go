@@ -15,10 +15,6 @@ type ExporterLabel string
 const (
 	// ExporterLabelAuthenticationKey derives an authentication key.
 	ExporterLabelAuthenticationKey ExporterLabel = "authentication_key"
-	// ExporterLabelExporterSecret derives an exporter secret.
-	ExporterLabelExporterSecret ExporterLabel = "exporter_secret"
-	// ExporterLabelResumptionPsk derives a resumption PSK.
-	ExporterLabelResumptionPsk ExporterLabel = "resumption_psk"
 )
 
 // Exporter derives an external secret using the MLS-Exporter construction per RFC 9420 §8.5.

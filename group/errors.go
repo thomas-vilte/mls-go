@@ -95,11 +95,8 @@ var (
 	ErrNilLeafNode   = errors.New("group: leaf node is nil")
 
 	// Group state errors
-	ErrEmptyGroupID             = errors.New("group: group ID is empty")
-	ErrInvalidGroupState        = errors.New("group: invalid group state")
-	ErrCommitVerificationFailed = errors.New("group: commit verification failed")
-	ErrConfirmationTagMismatch  = errors.New("group: confirmation tag mismatch")
-	ErrWelcomeDecryptionFailed  = errors.New("group: welcome decryption failed")
-	ErrTreeHashMismatch         = errors.New("group: tree hash mismatch")
-	ErrInvalidEpoch             = errors.New("group: invalid epoch")
+	ErrEmptyGroupID            = errors.New("group: group ID is empty")
+	ErrInvalidGroupState       = errors.New("group: invalid group state")
+	ErrConfirmationTagMismatch = errors.New("group: confirmation tag mismatch")
+	ErrTreeHashMismatch        = errors.New("group: tree hash mismatch")
 )

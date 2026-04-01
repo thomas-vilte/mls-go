@@ -272,28 +272,6 @@ func nodeLevel(x uint32) uint32 {
 	return uint32(bits.TrailingZeros32(^x))
 }
 
-// LowestCommonAncestor returns the lowest common ancestor of two leaves
-// in the binary tree (RFC Appendix C). The result is a NodeIndex.
-func LowestCommonAncestor(x, y LeafIndex) NodeIndex {
-	xn := uint32(LeafIndexToNodeIndex(x))
-	yn := uint32(LeafIndexToNodeIndex(y))
-	lx := nodeLevel(xn) + 1
-	ly := nodeLevel(yn) + 1
-	if lx <= ly && (xn>>ly) == (yn>>ly) {
-		return NodeIndex(yn)
-	}
-	if ly <= lx && (xn>>lx) == (yn>>lx) {
-		return NodeIndex(xn)
-	}
-	k := uint32(0)
-	for xn != yn {
-		xn >>= 1
-		yn >>= 1
-		k++
-	}
-	return NodeIndex((xn << k) + (1 << (k - 1)) - 1)
-}
-
 // FindLeafByEncKey returns the leaf index of a leaf with the given encryption key.
 func (t *RatchetTree) FindLeafByEncKey(encKey []byte) (LeafIndex, bool) {
 	for i := LeafIndex(0); i < LeafIndex(t.NumLeaves); i++ {

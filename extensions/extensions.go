@@ -20,12 +20,12 @@
 //
 // | Type | ID | Location | RFC | Description |
 // |------|-----|-----------|-----|-------------|
-// | ApplicationID | 0x0001 | LeafNode | §11.2.1 | App identifier |
-// | RatchetTree | 0x0002 | GroupInfo | §11.2.2 | Full tree |
-// | RequiredCapabilities | 0x0003 | GroupContext | §11.2.3 | Required features |
-// | ExternalPub | 0x0004 | GroupInfo | §11.2.4 | HPKE key for External Commit |
+// | ApplicationID | 0x0001 | LeafNode | §5.3.3 | App identifier |
+// | RatchetTree | 0x0002 | GroupInfo | §12.4.3.3 | Full tree |
+// | RequiredCapabilities | 0x0003 | GroupContext | §11.1 | Required features |
+// | ExternalPub | 0x0004 | GroupInfo | §12.4.3.2 | HPKE key for External Commit |
 // | ExternalSenders | 0x0005 | GroupContext | §12.1.8.1 | External senders |
-// | LastResort | 0x000A | KeyPackage | §11.2.5 | Backup KeyPackage |
+// | LastResort | 0x000A | KeyPackage | §16.8 | Backup KeyPackage |
 //
 // # Usage
 //
@@ -50,7 +50,7 @@
 // # RFC Compliance
 //
 //   - RFC 9420 §13: Extensions
-//   - RFC 9420 §11.2: Extensions in MLS objects
+//   - RFC 9420 §13.4: Serialization (ascending type order)
 //   - RFC 9420 §13.4: Serialization order (ascending by type)
 //   - RFC 9420 §13.5: GREASE handling
 //
@@ -75,14 +75,8 @@ import (
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
 
-// Extension errors
-var (
-	ErrDuplicateExtension   = errors.New("extensions: duplicate extension type")
-	ErrInvalidExtension     = errors.New("extensions: invalid extension")
-	ErrExtensionNotFound    = errors.New("extensions: extension not found")
-	ErrInvalidExtensionType = errors.New("extensions: invalid extension type")
-	ErrEmptyExtensionData   = errors.New("extensions: empty extension data")
-)
+// ErrInvalidExtension is returned when an extension has invalid or nil data.
+var ErrInvalidExtension = errors.New("extensions: invalid extension")
 
 // ExtensionType identifies an MLS extension per RFC 9420 §17.3.
 //
@@ -91,22 +85,22 @@ var (
 type ExtensionType uint16
 
 const (
-	// ExtensionTypeApplicationID - RFC 9420 §11.2.1
+	// ExtensionTypeApplicationID - RFC 9420 §5.3.3
 	// Location: LeafNode
 	// Data: opaque application_id<V>
 	ExtensionTypeApplicationID ExtensionType = 0x0001
 
-	// ExtensionTypeRatchetTree - RFC 9420 §11.2.2
+	// ExtensionTypeRatchetTree - RFC 9420 §12.4.3.3
 	// Location: GroupInfo
 	// Usage: Help new members join via External Commit
 	ExtensionTypeRatchetTree ExtensionType = 0x0002
 
-	// ExtensionTypeRequiredCapabilities - RFC 9420 §11.2.3
+	// ExtensionTypeRequiredCapabilities - RFC 9420 §11.1
 	// Location: GroupContext
 	// Usage: Ensure all members support same features
 	ExtensionTypeRequiredCapabilities ExtensionType = 0x0003
 
-	// ExtensionTypeExternalPub - RFC 9420 §11.2.4
+	// ExtensionTypeExternalPub - RFC 9420 §12.4.3.2
 	// Location: GroupInfo
 	// Usage: HPKE public key for External Commit
 	ExtensionTypeExternalPub ExtensionType = 0x0004
@@ -116,19 +110,7 @@ const (
 	// Usage: List of allowed external senders
 	ExtensionTypeExternalSenders ExtensionType = 0x0005
 
-	// ExtensionTypeEncryptionKey - RFC 9420 §11.2.5
-	ExtensionTypeEncryptionKey ExtensionType = 0x0006
-
-	// ExtensionTypeConfirmationKey - RFC 9420 §11.2.6
-	ExtensionTypeConfirmationKey ExtensionType = 0x0007
-
-	// ExtensionTypeMilestoneCommit - RFC 9420 §11.2.7
-	ExtensionTypeMilestoneCommit ExtensionType = 0x0008
-
-	// ExtensionTypeGroupContextExtensions - RFC 9420 §11.2.8
-	ExtensionTypeGroupContextExtensions ExtensionType = 0x0009
-
-	// ExtensionTypeLastResort - RFC 9420 §11.2.5
+	// ExtensionTypeLastResort - RFC 9420 §16.8
 	// Location: KeyPackage
 	// Usage: Backup KeyPackage when normal ones exhausted
 	ExtensionTypeLastResort ExtensionType = 0x000A
@@ -427,22 +409,3 @@ func (e *Extensions) Clone() *Extensions {
 	}
 	return result
 }
-
-// GREASE extension types for extensibility testing (RFC 9420 §13.5)
-const (
-	ExtensionTypeGREASE0 ExtensionType = 0x0A0A
-	ExtensionTypeGREASE1 ExtensionType = 0x1A1A
-	ExtensionTypeGREASE2 ExtensionType = 0x2A2A
-	ExtensionTypeGREASE3 ExtensionType = 0x3A3A
-	ExtensionTypeGREASE4 ExtensionType = 0x4A4A
-	ExtensionTypeGREASE5 ExtensionType = 0x5A5A
-	ExtensionTypeGREASE6 ExtensionType = 0x6A6A
-	ExtensionTypeGREASE7 ExtensionType = 0x7A7A
-	ExtensionTypeGREASE8 ExtensionType = 0x8A8A
-	ExtensionTypeGREASE9 ExtensionType = 0x9A9A
-	ExtensionTypeGREASEA ExtensionType = 0xAAAA
-	ExtensionTypeGREASEB ExtensionType = 0xBABA
-	ExtensionTypeGREASEC ExtensionType = 0xCACA
-	ExtensionTypeGREASED ExtensionType = 0xDADA
-	ExtensionTypeGREASEE ExtensionType = 0xEAEA
-)

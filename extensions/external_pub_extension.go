@@ -1,4 +1,4 @@
-// Package extensions - External Pub Extension (RFC 9420 §11.2.4)
+// Package extensions - External Pub Extension (RFC 9420 §12.4.3.2)
 package extensions
 
 import (
@@ -11,10 +11,10 @@ import (
 
 // ExternalPubExtension contains an HPKE public key for External Commit.
 //
-// Per RFC 9420 §11.2.4, this extension appears in GroupInfo and provides
+// Per RFC 9420 §12.4.3.2, this extension appears in GroupInfo and provides
 // the HPKE public key that new members use to encrypt their External Commit.
 //
-// # Structure (RFC 9420 §11.2.4)
+// # Structure (RFC 9420 §12.4.3.2)
 //
 // ```text
 // ┌─────────────────────────────────────────┐
@@ -66,7 +66,7 @@ import (
 //
 // # RFC Compliance
 //
-// RFC 9420 §11.2.4:
+// RFC 9420 §12.4.3.2:
 // "The ExternalPub extension is used in GroupInfo to provide the
 // information necessary for a new member to join the group via an
 // External Commit."
