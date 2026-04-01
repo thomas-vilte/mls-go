@@ -116,6 +116,29 @@ func DefaultLifetime() *Lifetime {
 	}
 }
 
+// GenerateOption configures optional behavior for Generate.
+type GenerateOption func(*generateConfig)
+
+type generateConfig struct {
+	lifetime *Lifetime
+}
+
+// WithLifetime overrides the default KeyPackage lifetime.
+func WithLifetime(notBefore, notAfter uint64) GenerateOption {
+	return func(cfg *generateConfig) {
+		cfg.lifetime = &Lifetime{
+			NotBefore: notBefore,
+			NotAfter:  notAfter,
+		}
+	}
+}
+
+// InfiniteLifetime returns a GenerateOption that sets the KeyPackage lifetime to
+// not_before=0, not_after=2^64-1, effectively making it never expire.
+func InfiniteLifetime() GenerateOption {
+	return WithLifetime(0, ^uint64(0))
+}
+
 // Generate creates a new KeyPackage.
 //
 // This is the main entry point for creating KeyPackages.
@@ -126,9 +149,23 @@ func DefaultLifetime() *Lifetime {
 // This function generates the necessary HPKE keys, constructs the LeafNode with the
 // provided credential, signs the LeafNode, and finally signs the entire KeyPackage.
 // The resulting KeyPackage can be published to a directory or sent directly to a group creator.
-func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuite) (*KeyPackage, *KeyPackagePrivateKeys, error) {
+func Generate(
+	credWithKey *credentials.CredentialWithKey,
+	cipherSuite CipherSuite,
+	opts ...GenerateOption,
+) (*KeyPackage, *KeyPackagePrivateKeys, error) {
 	if credWithKey == nil || credWithKey.Credential == nil {
 		return nil, nil, errors.New("credential is nil")
+	}
+
+	cfg := &generateConfig{
+		lifetime: DefaultLifetime(),
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
 	}
 
 	// Generate two separate HPKE key pairs per RFC §10.1:
@@ -141,23 +178,19 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating encryption HPKE keys: %w", err)
 	}
-
 	// Create LeafNode with capabilities that advertise the actual cipher suite.
 	caps := DefaultCapabilities()
 	caps.CipherSuites = []CipherSuite{cipherSuite}
-
 	leafNode := &LeafNode{
 		EncryptionKey:     encPubKey.Bytes(),
-		SignatureKey:      credWithKey.SignatureKey,      // *ecdsa.PublicKey, nil for Ed25519
-		SignatureKeyBytes: credWithKey.SignatureKeyBytes, // raw bytes for Ed25519
+		SignatureKey:      credWithKey.SignatureKey,
+		SignatureKeyBytes: credWithKey.SignatureKeyBytes,
 		Credential:        credWithKey.Credential,
 		Capabilities:      caps,
-		Lifetime:          DefaultLifetime(),
+		Lifetime:          cfg.lifetime,
 		Extensions:        []Extension{},
 		LeafNodeSource:    1, // key_package
 	}
-
-	// Create KeyPackage first so we can sign it
 	keyPackage := &KeyPackage{
 		ProtocolVersion: MLS10,
 		CipherSuite:     cipherSuite,
@@ -165,39 +198,30 @@ func Generate(credWithKey *credentials.CredentialWithKey, cipherSuite CipherSuit
 		LeafNode:        leafNode,
 		Extensions:      []Extension{},
 	}
-
-	// Create signature private key wrapper
 	var sigPrivKey *ciphersuite.SignaturePrivateKey
 	if credWithKey.Ed25519PrivateKey != nil {
 		sigPrivKey = ciphersuite.NewEd25519SignaturePrivateKey(credWithKey.Ed25519PrivateKey)
 	} else {
 		sigPrivKey = ciphersuite.NewSignaturePrivateKey(credWithKey.PrivateKey)
 	}
-
-	// Sign LeafNode using SignWithLabel (RFC 9420 §7.2)
 	leafNodeTBS := leafNode.marshalTBS()
 	leafNodeSig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", leafNodeTBS)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signing LeafNode: %w", err)
 	}
 	leafNode.Signature = leafNodeSig.AsSlice()
-
-	// Sign KeyPackage using SignWithLabel (RFC 9420 §10.1)
 	keyPackageTBS := keyPackage.marshalTBS()
 	signature, err := ciphersuite.SignWithLabel(sigPrivKey, "KeyPackageTBS", keyPackageTBS)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signing KeyPackage: %w", err)
 	}
 	keyPackage.Signature = signature.AsSlice()
-
-	// Create private keys
 	privKeys := &KeyPackagePrivateKeys{
 		InitKey:             initPrivKey,
 		EncryptionKey:       encPrivKey,
-		SignatureKey:        credWithKey.PrivateKey,        // *ecdsa.PrivateKey, nil for Ed25519
-		Ed25519SignatureKey: credWithKey.Ed25519PrivateKey, // non-nil for CS1/CS3
+		SignatureKey:        credWithKey.PrivateKey,
+		Ed25519SignatureKey: credWithKey.Ed25519PrivateKey,
 	}
-
 	return keyPackage, privKeys, nil
 }
 

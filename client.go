@@ -259,24 +259,43 @@ type MemberInfo struct {
 	SigningKey []byte
 }
 
+// groupEntry holds a per-group mutex and optional cached group state.
+// The mutex serializes all operations on a single group, allowing concurrent
+// operations on different groups to proceed independently.
+type groupEntry struct {
+	mu    sync.Mutex
+	group *group.Group // non-nil only when cacheStrategy == CacheAlways
+}
+
 // Client is a high-level, thread-safe facade over the low-level MLS group API.
+//
+// The Client uses lock striping: a global mutex (mu) protects the map of group
+// entries and the pending key packages, while each group entry carries its own
+// mutex that serializes operations on that particular group. This allows N groups
+// to perform cryptographic operations concurrently.
 type Client struct {
-	mu sync.RWMutex
+	// mu protects closed, pendingKPs, and groupEntries.
+	// It is held only for map reads/writes, never during cryptographic operations.
+	mu sync.Mutex
 
 	identity []byte
 	cs       ciphersuite.CipherSuite
 
+	// These fields are immutable after NewClient returns. Close() does not nil
+	// them because in-flight per-group operations may still reference them after
+	// the brief global lock section completes.
 	credWithKey   *credentials.CredentialWithKey
 	sigKey        *ciphersuite.SignaturePrivateKey
 	store         clientStore
 	validator     group.CredentialValidator
-	events        EventHandler
 	paddingSize   int
 	cacheStrategy CacheStrategy
-	closed        bool
+
+	events EventHandler
+	closed bool
 
 	pendingKPs   map[string]*pendingEntry
-	cachedGroups map[string]*group.Group
+	groupEntries map[string]*groupEntry
 }
 
 type pendingEntry struct {
@@ -332,7 +351,7 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 		paddingSize:   cfg.paddingSize,
 		cacheStrategy: cfg.cacheStrategy,
 		pendingKPs:    make(map[string]*pendingEntry),
-		cachedGroups:  make(map[string]*group.Group),
+		groupEntries:  make(map[string]*groupEntry),
 	}, nil
 }
 
@@ -385,28 +404,36 @@ func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("creating group: %w", err)
 	}
 	g.SetPaddingSize(c.paddingSize)
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	entry := &groupEntry{}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
+	c.groupEntries[groupCacheKey(groupID)] = entry
 	return cloneBytes(groupID.AsSlice()), nil
 }
 
 // InviteMember adds a member and returns the commit bytes to broadcast plus the welcome bytes for the joiner.
 func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageBytes []byte) (commit, welcome []byte, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-
 	if len(memberKeyPackageBytes) == 0 {
 		return nil, nil, ErrEmptyKeyPackage
 	}
 
-	g, err := c.loadGroup(ctx, groupID)
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -415,14 +442,14 @@ func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageByte
 	if err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling member key package: %w", err)
 	}
-	if err := c.validateCredentialLocked(ctx, memberKP.LeafNode.Credential); err != nil {
+	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, nil, err
 	}
 
 	if _, err := g.AddMember(memberKP); err != nil {
 		return nil, nil, fmt.Errorf("adding member: %w", err)
 	}
-	return c.commitPendingProposalsLocked(ctx, g)
+	return c.commitPendingProposals(ctx, g, entry)
 }
 
 // JoinGroup joins a group using the most recently generated pending KeyPackage.
@@ -449,12 +476,12 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 	var joinedGroup *group.Group
 	var matchKey string
 	var joinMatchErr error
-	for key, entry := range c.pendingKPs {
-		g, joinErr := group.JoinFromWelcomeWithContext(ctx, welcome, entry.kp, entry.kpPriv, nil)
+	for key, pe := range c.pendingKPs {
+		g, joinErr := group.JoinFromWelcomeWithContext(ctx, welcome, pe.kp, pe.kpPriv, nil)
 		if joinErr != nil {
 			continue
 		}
-		if err := c.validateGroupMembersLocked(ctx, g); err != nil {
+		if err := c.validateGroupMembers(ctx, g); err != nil {
 			joinMatchErr = err
 			continue
 		}
@@ -469,27 +496,37 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 		}
 		return nil, ErrNoPendingKeyPackage
 	}
-	if err := c.persistGroupLocked(ctx, joinedGroup); err != nil {
+	entry := &groupEntry{}
+	if err := c.persistGroup(ctx, joinedGroup, entry); err != nil {
 		return nil, err
 	}
+	c.groupEntries[groupCacheKey(joinedGroup.GroupID())] = entry
 	delete(c.pendingKPs, matchKey)
 	return cloneBytes(joinedGroup.GroupID().AsSlice()), nil
 }
 
 // ProposeAddMember stores an Add proposal locally and returns a signed PublicMessage.
 func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []byte) ([]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if len(memberKPBytes) == 0 {
 		return nil, ErrEmptyKeyPackage
 	}
-	g, err := c.loadGroup(ctx, groupID)
+
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +534,7 @@ func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling member key package: %w", err)
 	}
-	if err := c.validateCredentialLocked(ctx, memberKP.LeafNode.Credential); err != nil {
+	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, err
 	}
 	proposal, err := g.AddMember(memberKP)
@@ -508,7 +545,7 @@ func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []
 	if err != nil {
 		return nil, fmt.Errorf("signing add proposal: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	return msg, nil
@@ -517,14 +554,21 @@ func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []
 // ProposeRemoveMember stores a Remove proposal locally and returns a signed PublicMessage.
 func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentity []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +584,7 @@ func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentit
 	if err != nil {
 		return nil, fmt.Errorf("signing remove proposal: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	return msg, nil
@@ -549,34 +593,49 @@ func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentit
 // CommitPendingProposals commits all currently stored proposals in one operation.
 func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte) (commit, welcome []byte, err error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, nil, err
 	}
-	return c.commitPendingProposalsLocked(ctx, g)
+	return c.commitPendingProposals(ctx, g, entry)
 }
 
 // ProcessCommit applies a commit from another existing group member.
 func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if len(commitBytes) == 0 {
 		return ErrEmptyCommit
 	}
-	g, err := c.loadGroup(ctx, groupID)
+
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return err
 	}
@@ -628,20 +687,27 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return fmt.Errorf("processing received commit: %w", err)
 	}
-	return c.persistGroupLocked(ctx, g)
+	return c.persistGroup(ctx, g, entry)
 }
 
 // SendMessage encrypts an application message for the given group.
 func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -649,7 +715,7 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]
 	if err != nil {
 		return nil, fmt.Errorf("sending message: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	return framing.NewMLSMessagePrivate(pm).Marshal(), nil
@@ -658,14 +724,21 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]
 // SendMessageWithAAD encrypts an application message with authenticated associated data.
 func (c *Client) SendMessageWithAAD(ctx context.Context, groupID, plaintext, authenticatedData []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +746,7 @@ func (c *Client) SendMessageWithAAD(ctx context.Context, groupID, plaintext, aut
 	if err != nil {
 		return nil, fmt.Errorf("sending message with AAD: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	return framing.NewMLSMessagePrivate(pm).Marshal(), nil
@@ -681,18 +754,26 @@ func (c *Client) SendMessageWithAAD(ctx context.Context, groupID, plaintext, aut
 
 // ReceiveMessage decrypts an application message for the given group.
 func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []byte) (*ReceivedMessage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if len(ciphertextBytes) == 0 {
 		return nil, ErrEmptyCiphertext
 	}
-	g, err := c.loadGroup(ctx, groupID)
+
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +793,7 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 	if !ok || member == nil {
 		return nil, fmt.Errorf("sender %d not found in group", senderLeafIdx)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	received := &ReceivedMessage{
@@ -733,14 +814,21 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 // RemoveMember removes a member by credential identity and returns the commit bytes to broadcast.
 func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -751,7 +839,7 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	if _, err := g.RemoveMember(leafIndex); err != nil {
 		return nil, fmt.Errorf("creating remove proposal: %w", err)
 	}
-	commit, err := c.commitCurrentStateLocked(ctx, g, "creating remove commit")
+	commit, err := c.commitCurrentState(ctx, g, entry, "creating remove commit")
 	if err != nil {
 		return nil, err
 	}
@@ -763,21 +851,28 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 // SelfUpdate rotates the local member's leaf encryption key and returns the commit bytes to broadcast.
 func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := g.SelfUpdate(c.sigKey); err != nil {
 		return nil, fmt.Errorf("creating self-update proposal: %w", err)
 	}
-	commit, err := c.commitCurrentStateLocked(ctx, g, "creating self-update commit")
+	commit, err := c.commitCurrentState(ctx, g, entry, "creating self-update commit")
 	if err != nil {
 		return nil, err
 	}
@@ -799,28 +894,36 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	g, err := c.loadGroup(ctx, groupID)
-	if err != nil {
-		return err
+	if len(groupID) == 0 {
+		return ErrEmptyGroupID
 	}
-	if err := c.store.DeleteGroupState(ctx, g.GroupID()); err != nil {
+	cacheKey := groupCacheKeyBytes(groupID)
+	gID := group.NewGroupID(cloneBytes(groupID))
+	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
 		return fmt.Errorf("deleting group state: %w", err)
 	}
-	delete(c.cachedGroups, groupCacheKey(g.GroupID()))
+	delete(c.groupEntries, cacheKey)
 	return nil
 }
 
 // ListMembers returns all active members in the group.
 func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -835,14 +938,21 @@ func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo,
 // Export derives exporter secret material for the current epoch.
 func (c *Client) Export(ctx context.Context, groupID []byte, label string, exportContext []byte, length int) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -856,14 +966,21 @@ func (c *Client) Export(ctx context.Context, groupID []byte, label string, expor
 // EpochAuthenticator returns the epoch authenticator for the current epoch.
 func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -873,14 +990,21 @@ func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte
 // GroupInfo returns a signed GroupInfo structure encoded as bytes.
 func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
-	g, err := c.loadGroup(ctx, groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -919,13 +1043,15 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating external commit: %w", err)
 	}
-	if err := c.validateGroupMembersLocked(ctx, g); err != nil {
+	if err := c.validateGroupMembers(ctx, g); err != nil {
 		return nil, nil, err
 	}
 	g.SetPaddingSize(c.paddingSize)
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	entry := &groupEntry{}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, nil, err
 	}
+	c.groupEntries[groupCacheKey(g.GroupID())] = entry
 	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	pm := &framing.PublicMessage{
 		Content: staged.AuthenticatedContent().Content,
@@ -944,30 +1070,37 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	c.identity = nil
-	c.credWithKey = nil
-	c.sigKey = nil
 	c.pendingKPs = nil
-	c.cachedGroups = nil
+	c.groupEntries = nil
+	c.events = nil
 	if closer, ok := any(c.store).(io.Closer); ok {
 		if err := closer.Close(); err != nil {
 			return err
 		}
 	}
-	c.store = nil
-	c.events = nil
 	return nil
 }
 
-func (c *Client) loadGroup(ctx context.Context, groupIDBytes []byte) (*group.Group, error) {
+// getOrCreateEntryLocked returns an existing groupEntry for the given cache key,
+// or creates and stores a new one. Must be called with c.mu held (write lock).
+func (c *Client) getOrCreateEntryLocked(cacheKey string) *groupEntry {
+	if entry, ok := c.groupEntries[cacheKey]; ok {
+		return entry
+	}
+	entry := &groupEntry{}
+	c.groupEntries[cacheKey] = entry
+	return entry
+}
+
+// loadGroupEntry loads group state from storage (or the in-memory cache).
+// Must be called with entry.mu held.
+func (c *Client) loadGroupEntry(ctx context.Context, groupIDBytes []byte, entry *groupEntry) (*group.Group, error) {
 	if len(groupIDBytes) == 0 {
 		return nil, ErrEmptyGroupID
 	}
-	cacheKey := groupCacheKeyBytes(groupIDBytes)
-	if c.cacheStrategy == CacheAlways {
-		if cached, ok := c.cachedGroups[cacheKey]; ok && cached != nil {
-			cached.SetPaddingSize(c.paddingSize)
-			return cached, nil
-		}
+	if c.cacheStrategy == CacheAlways && entry.group != nil {
+		entry.group.SetPaddingSize(c.paddingSize)
+		return entry.group, nil
 	}
 	groupID := group.NewGroupID(cloneBytes(groupIDBytes))
 	state, err := c.store.LoadGroupState(ctx, groupID)
@@ -983,12 +1116,16 @@ func (c *Client) loadGroup(ctx context.Context, groupIDBytes []byte) (*group.Gro
 	}
 	g.SetPaddingSize(c.paddingSize)
 	if c.cacheStrategy == CacheAlways {
-		c.cachedGroups[cacheKey] = g
+		entry.group = g
 	}
 	return g, nil
 }
 
-func (c *Client) persistGroupLocked(ctx context.Context, g *group.Group) error {
+// persistGroup marshals and saves group state, and updates the in-memory cache.
+// For per-group operations this is called with entry.mu held.
+// For global-lock operations (CreateGroup, JoinGroup, ExternalJoin) it is called
+// with c.mu held exclusively, which also provides the necessary exclusion.
+func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupEntry) error {
 	state, err := g.MarshalState()
 	if err != nil {
 		return fmt.Errorf("marshaling group state: %w", err)
@@ -1007,7 +1144,7 @@ func (c *Client) persistGroupLocked(ctx context.Context, g *group.Group) error {
 		}
 	}
 	if c.cacheStrategy == CacheAlways {
-		c.cachedGroups[groupCacheKey(groupID)] = g
+		entry.group = g
 	}
 	return nil
 }
@@ -1033,6 +1170,7 @@ func parseWelcomeBytes(data []byte) (*group.Welcome, error) {
 	}
 	return welcome, nil
 }
+
 func cloneBytes(in []byte) []byte {
 	if in == nil {
 		return nil
@@ -1110,7 +1248,7 @@ func memberInfoFromGroup(g *group.Group, member *group.Member) MemberInfo {
 	}
 }
 
-func (c *Client) commitCurrentStateLocked(ctx context.Context, g *group.Group, errContext string) ([]byte, error) {
+func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *groupEntry, errContext string) ([]byte, error) {
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errContext, err)
@@ -1118,7 +1256,7 @@ func (c *Client) commitCurrentStateLocked(ctx context.Context, g *group.Group, e
 	if err := g.MergeCommit(staged); err != nil {
 		return nil, fmt.Errorf("merging own commit: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
 	}
 	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
@@ -1129,7 +1267,7 @@ func (c *Client) commitCurrentStateLocked(ctx context.Context, g *group.Group, e
 	return commitMsg.Marshal(), nil
 }
 
-func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Group) (commit, welcome []byte, err error) {
+func (c *Client) commitPendingProposals(ctx context.Context, g *group.Group, entry *groupEntry) (commit, welcome []byte, err error) {
 	joinIdentities := make([][]byte, 0)
 	removeIdentities := make([][]byte, 0)
 	for _, stored := range g.StoredProposals() {
@@ -1175,7 +1313,7 @@ func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Grou
 	commitBytes := commitMsg.Marshal()
 
 	if len(newMemberKPs) == 0 {
-		if err := c.persistGroupLocked(ctx, g); err != nil {
+		if err := c.persistGroup(ctx, g, entry); err != nil {
 			return nil, nil, err
 		}
 		for _, identity := range removeIdentities {
@@ -1195,7 +1333,7 @@ func (c *Client) commitPendingProposalsLocked(ctx context.Context, g *group.Grou
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
 	}
-	if err := c.persistGroupLocked(ctx, g); err != nil {
+	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, nil, err
 	}
 	for _, identity := range joinIdentities {
@@ -1218,7 +1356,7 @@ func findMemberLeafIndexByIdentity(g *group.Group, memberIdentity []byte) (group
 	return 0, ErrMemberNotFound
 }
 
-func (c *Client) validateCredentialLocked(ctx context.Context, cred *credentials.Credential) error {
+func (c *Client) validateCredential(ctx context.Context, cred *credentials.Credential) error {
 	if c.validator == nil || cred == nil {
 		return nil
 	}
@@ -1228,12 +1366,12 @@ func (c *Client) validateCredentialLocked(ctx context.Context, cred *credentials
 	return nil
 }
 
-func (c *Client) validateGroupMembersLocked(ctx context.Context, g *group.Group) error {
+func (c *Client) validateGroupMembers(ctx context.Context, g *group.Group) error {
 	if c.validator == nil || g == nil {
 		return nil
 	}
 	for _, member := range g.GetMembers() {
-		if err := c.validateCredentialLocked(ctx, member.Credential); err != nil {
+		if err := c.validateCredential(ctx, member.Credential); err != nil {
 			return err
 		}
 	}

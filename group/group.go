@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	mlsext "github.com/thomas-vilte/mls-go/extensions"
@@ -91,6 +92,7 @@ type Group struct {
 	members               map[LeafNodeIndex]*Member
 	state                 GroupState
 	secretTree            *secrettree.Tree
+	pskMu                 sync.RWMutex
 	cachedPsks            map[string][]byte
 	PSKStore              PSKStore
 	// paddingSize controls the block size used to pad encrypted application
@@ -234,8 +236,17 @@ func (g *Group) EpochSecrets() *schedule.EpochSecrets { return g.epochSecrets }
 // SecretTree returns the current epoch's secret tree.
 func (g *Group) SecretTree() *secrettree.Tree { return g.secretTree }
 
-// CachedPsks returns the PSK cache (resumption PSKs and LoadPsk entries).
-func (g *Group) CachedPsks() map[string][]byte { return g.cachedPsks }
+// CachedPsks returns a snapshot of the PSK cache (resumption PSKs and LoadPsk
+// entries). The returned map is a deep copy — safe to read after the call.
+func (g *Group) CachedPsks() map[string][]byte {
+	g.pskMu.RLock()
+	defer g.pskMu.RUnlock()
+	out := make(map[string][]byte, len(g.cachedPsks))
+	for k, v := range g.cachedPsks {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}
 
 // Proposals returns the current proposal store.
 func (g *Group) Proposals() *ProposalStore { return g.proposals }
@@ -297,6 +308,21 @@ func (g *Group) IterateMembers(f func(leafIdx LeafNodeIndex, m *Member)) {
 // GetTreeLeaf returns the leaf node at the given index from the ratchet tree.
 func (g *Group) GetTreeLeaf(leafIdx LeafNodeIndex) *treesync.Node {
 	return g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
+}
+
+// RevokeProposal removes a pending proposal by its ProposalRef.
+//
+// This removes the proposal from both the pending proposal store and the
+// proposalByRef lookup map. After revocation, commits that reference the
+// proposal by ref will fail with "unknown proposal reference in commit".
+//
+// Returns true if the proposal was found and removed, false if not found.
+func (g *Group) RevokeProposal(ref []byte) bool {
+	if !g.proposals.RemoveByRef(ref) {
+		return false
+	}
+	delete(g.proposalByRef, string(ref))
+	return true
 }
 
 // epochState holds the decryption and verification material for a past epoch.
@@ -1989,11 +2015,14 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// Cache resumption secret for this epoch (keyed by group_id + epoch)
 	// so future resumption PSK proposals can resolve it.
 	if g.epochSecrets.ResumptionSecret != nil {
+		rKey := ResumptionPskCacheKey(g.groupContext.GroupID.AsSlice(), g.groupContext.Epoch.AsUint64())
+		secret := append([]byte(nil), g.epochSecrets.ResumptionSecret.AsSlice()...)
+		g.pskMu.Lock()
 		if g.cachedPsks == nil {
 			g.cachedPsks = make(map[string][]byte)
 		}
-		rKey := ResumptionPskCacheKey(g.groupContext.GroupID.AsSlice(), g.groupContext.Epoch.AsUint64())
-		g.cachedPsks[rKey] = append([]byte(nil), g.epochSecrets.ResumptionSecret.AsSlice()...)
+		g.cachedPsks[rKey] = secret
+		g.pskMu.Unlock()
 	}
 
 	// Save committed proposals before clearing (used by HandlePendingReInitCommit).
@@ -2750,6 +2779,8 @@ func (g *Group) getExternalSenderSigningKey(senderIndex uint32) ([]byte, error) 
 //
 // This is used for external PSKs that are referenced in PreSharedKey proposals.
 func (g *Group) LoadPsk(pskID, pskBytes []byte) {
+	g.pskMu.Lock()
+	defer g.pskMu.Unlock()
 	if g.cachedPsks == nil {
 		g.cachedPsks = make(map[string][]byte)
 	}
