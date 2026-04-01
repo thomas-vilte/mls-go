@@ -18,17 +18,21 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SELF_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch deep_random)
+# deep_random is opt-in via RUN_STRESS for both self and cross interop.
+# Without it the full suite runs in a few minutes instead of several hours.
+SELF_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
 MLSPP_CROSS_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
 OPENMLS_CROSS_CONFIGS=(welcome_join application external_join deep_random)
+
+if [ -n "$RUN_STRESS" ]; then
+    SELF_CONFIGS+=(deep_random)
+    MLSPP_CROSS_CONFIGS+=(deep_random)
+fi
 
 if [ "$CROSS_TARGET" = "openmls" ]; then
     CROSS_CONFIGS=("${OPENMLS_CROSS_CONFIGS[@]}")
 else
     CROSS_CONFIGS=("${MLSPP_CROSS_CONFIGS[@]}")
-    if [ -n "$RUN_STRESS" ]; then
-        CROSS_CONFIGS+=(deep_random)
-    fi
 fi
 
 cleanup() {
@@ -77,6 +81,11 @@ run_mode() {
     echo -e "${YELLOW}Suites:${NC} $SUITES"
     echo -e "${YELLOW}Configs:${NC} $configs_str"
 
+    # Run one background subshell per suite; each subshell runs its configs
+    # sequentially. This gives an N-suites speedup (typically 3x) without
+    # flooding the gRPC server with simultaneous connections.
+    #
+    # The inner shell is /bin/sh (ash on alpine) — only POSIX constructs used.
     docker compose -f "$COMPOSE_FILE" run --rm \
         -e SUITES="$SUITES" \
         -e CONFIGS="$configs_str" \
@@ -85,24 +94,56 @@ run_mode() {
         -e KIND="$kind" \
         --entrypoint /bin/sh test-runner -c '
 set -eu
+
+# One parallel worker per suite; configs run sequentially inside each worker.
+for suite in $SUITES; do
+  (
+    for cfg in $CONFIGS; do
+      log="/tmp/${KIND}-s${suite}-${cfg}.log"
+      res="/tmp/${KIND}-s${suite}-${cfg}.result"
+      if /test-runner \
+          -client "$CLIENT_A" \
+          -client "$CLIENT_B" \
+          -suite  "$suite" \
+          -fail-fast \
+          -config "/configs/${cfg}.json" \
+          >"$log" 2>&1
+      then
+        printf PASS > "$res"
+      else
+        printf FAIL > "$res"
+      fi
+    done
+  ) &
+done
+
+# Wait for all suite workers to finish.
+wait
+
+# Print results in deterministic order and tally.
 passed=0
 total=0
+failed=0
 for suite in $SUITES; do
   for cfg in $CONFIGS; do
     total=$((total + 1))
+    log="/tmp/${KIND}-s${suite}-${cfg}.log"
+    res="/tmp/${KIND}-s${suite}-${cfg}.result"
+    result=$(cat "$res" 2>/dev/null || printf FAIL)
     printf "--- [%s] suite=%s config=%s ---\n" "$KIND" "$suite" "$cfg"
-    log_file="/tmp/${KIND}-${suite}-${cfg}.log"
-    if /test-runner -client "$CLIENT_A" -client "$CLIENT_B" -suite "$suite" -fail-fast -config "/configs/${cfg}.json" >"$log_file" 2>&1; then
+    if [ "$result" = "PASS" ]; then
       passed=$((passed + 1))
       printf "PASS: [%s] suite=%s config=%s\n" "$KIND" "$suite" "$cfg"
     else
+      failed=$((failed + 1))
       printf "FAIL: [%s] suite=%s config=%s\n" "$KIND" "$suite" "$cfg"
-      sed -n "1,120p" "$log_file"
-      exit 1
+      sed -n "1,120p" "$log"
     fi
   done
 done
+
 printf "Summary: [%s] %s/%s passed\n" "$KIND" "$passed" "$total"
+[ "$failed" -eq 0 ]
 '
 }
 

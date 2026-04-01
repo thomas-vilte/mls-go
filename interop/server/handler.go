@@ -28,6 +28,13 @@ type Server struct {
 	// stateID -> *group.Group
 	groups sync.Map
 
+	// pskCacheMu protects pskCache from concurrent reads and writes.
+	pskCacheMu sync.RWMutex
+	// pskCache maps PSK IDs (as returned by group.ResumptionPskCacheKey and LoadPsk)
+	// to PSK bytes.  Updated by updatePskCache on every storeGroup call so that
+	// collectResumptionPSKs never needs to scan all groups (O(P) not O(N)).
+	pskCache map[string][]byte
+
 	// transactionID -> *keyPackageTransaction (pending)
 	transactions sync.Map
 
@@ -72,7 +79,32 @@ type reInitState struct {
 
 // NewServer creates a new gRPC server instance
 func NewServer() *Server {
-	return &Server{}
+	return &Server{pskCache: make(map[string][]byte)}
+}
+
+// updatePskCache merges the PSK cache from g into the server-wide PSK cache.
+// Called on every storeGroup so that collectResumptionPSKs never scans groups.
+func (s *Server) updatePskCache(g *group.Group) {
+	psks := g.CachedPsks() // deep copy, safe to read
+	if len(psks) == 0 {
+		return
+	}
+	s.pskCacheMu.Lock()
+	defer s.pskCacheMu.Unlock()
+	for k, v := range psks {
+		s.pskCache[k] = v
+	}
+}
+
+// storeGroup stores g under id and updates the server-wide PSK cache.
+func (s *Server) storeGroup(id uint32, g *group.Group) {
+	s.updatePskCache(g)
+	s.groups.Store(id, g)
+}
+
+// deleteGroup removes the group with the given id.
+func (s *Server) deleteGroup(id uint32) {
+	s.groups.Delete(id)
 }
 
 func (s *Server) generateStateID() uint32 {
@@ -154,7 +186,7 @@ func (s *Server) CreateGroup(ctx context.Context, req *proto.CreateGroupRequest)
 
 	// Store signer key for later use
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, g)
+	s.storeGroup(stateID, g)
 	s.signers.Store(stateID, sigPrivKey)
 	if req.EncryptHandshake {
 		s.encryptHandshake.Store(stateID, true)
@@ -223,6 +255,8 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 		return nil, status.Errorf(codes.NotFound, "transaction not found: %d", req.TransactionId)
 	}
 	tx := txVal.(*keyPackageTransaction)
+	// The KeyPackage is one-use; delete the transaction after joining.
+	defer s.transactions.Delete(req.TransactionId)
 
 	// Parse welcome (accepts both raw and MLSMessage-wrapped format).
 	welcome, err := unmarshalWelcomeAnyFormat(req.Welcome)
@@ -261,7 +295,7 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 	}
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, g)
+	s.storeGroup(stateID, g)
 	// Preserve the joiner's signature key so GroupInfo and Protect work after joining.
 	s.signers.Store(stateID, tx.PrivKeys.GetSignaturePrivateKey())
 	if req.EncryptHandshake {
@@ -277,15 +311,13 @@ func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*p
 }
 
 func (s *Server) collectResumptionPSKs() map[string][]byte {
-	psks := make(map[string][]byte)
-	s.groups.Range(func(_, value interface{}) bool {
-		g := value.(*group.Group)
-		for k, v := range g.CachedPsks() {
-			psks[k] = append([]byte(nil), v...)
-		}
-		return true
-	})
-	return psks
+	s.pskCacheMu.RLock()
+	defer s.pskCacheMu.RUnlock()
+	out := make(map[string][]byte, len(s.pskCache))
+	for k, v := range s.pskCache {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
 }
 
 // GroupInfo returns the GroupInfo for a group
@@ -431,7 +463,7 @@ func (s *Server) StorePSK(ctx context.Context, req *proto.StorePSKRequest) (*pro
 // Free releases a group state
 // freeState releases all server-side memory for a given stateID.
 func (s *Server) freeState(stateID uint32) {
-	s.groups.Delete(stateID)
+	s.deleteGroup(stateID)
 	s.signers.Delete(stateID)
 	s.encryptHandshake.Delete(stateID)
 }
@@ -518,7 +550,7 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 	commitData := framing.NewMLSMessagePublic(pm).Marshal()
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, g)
+	s.storeGroup(stateID, g)
 	s.signers.Store(stateID, sigPrivKey)
 
 	log.Printf("ExternalJoin: out=%d ownLeaf=%d pnpkLen=%d", stateID, g.OwnLeafIndex(), 0)
@@ -1033,7 +1065,7 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 	}
 
 	newStateID := s.generateStateID()
-	s.groups.Store(newStateID, g)
+	s.storeGroup(newStateID, g)
 	if signerVal, ok := s.signers.Load(req.StateId); ok {
 		s.signers.Store(newStateID, signerVal)
 	}
@@ -1069,7 +1101,7 @@ func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendi
 	}
 
 	newStateID := s.generateStateID()
-	s.groups.Store(newStateID, g)
+	s.storeGroup(newStateID, g)
 	if signerVal, ok := s.signers.Load(req.StateId); ok {
 		s.signers.Store(newStateID, signerVal)
 	}
@@ -1124,6 +1156,8 @@ func (s *Server) HandlePendingReInitCommit(ctx context.Context, req *proto.Handl
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
 	}
 	g := gVal.(*group.Group)
+	// The old group state is consumed by the reinit commit; free it now.
+	defer s.freeState(req.StateId)
 
 	// Capture proposals before MergeCommit clears them.
 	var proposals []*group.Proposal
@@ -1150,6 +1184,8 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
 	}
 	g := gVal.(*group.Group)
+	// The old group state is consumed by the reinit commit; free it now.
+	defer s.freeState(req.StateId)
 
 	// Pre-load proposals from the request so they can be resolved by-reference.
 	var proposals []*group.Proposal
@@ -1219,6 +1255,12 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 //  3. Generates a fresh KeyPackage for the new group's cipher suite.
 //  4. Stores the reinit state under a new reinit_id.
 func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposal) (*proto.HandleReInitCommitResponse, error) {
+	// The group just advanced its epoch (MergeCommit / ProcessReceivedCommit),
+	// so its cachedPsks now contains the resumption PSK for this epoch.
+	// storeGroup is not called in the reinit path, so we must push the PSK
+	// into s.pskCache here so that HandleReInitWelcome can find it.
+	s.updatePskCache(g)
+
 	// Find the ReInit proposal in the committed proposals.
 	var reInitProposal *group.ReInitProposal
 	for _, p := range proposals {
@@ -1283,6 +1325,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 		return nil, status.Errorf(codes.NotFound, "reinit not found: %d", req.ReinitId)
 	}
 	state := ri.(*reInitState)
+	defer s.reinits.Delete(req.ReinitId)
 
 	newGroup, err := group.NewGroupFromReInit(
 		state.ReInit,
@@ -1337,7 +1380,7 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 	}
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, newGroup)
+	s.storeGroup(stateID, newGroup)
 	s.signers.Store(stateID, state.SigPrivKey)
 
 	var ratchetTree []byte
@@ -1360,6 +1403,7 @@ func (s *Server) HandleReInitWelcome(ctx context.Context, req *proto.HandleReIni
 		return nil, status.Errorf(codes.NotFound, "reinit not found: %d", req.ReinitId)
 	}
 	state := ri.(*reInitState)
+	defer s.reinits.Delete(req.ReinitId)
 
 	welcome, err := unmarshalWelcomeAnyFormat(req.Welcome)
 	if err != nil {
@@ -1372,7 +1416,7 @@ func (s *Server) HandleReInitWelcome(ctx context.Context, req *proto.HandleReIni
 	}
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, newGroup)
+	s.storeGroup(stateID, newGroup)
 	s.signers.Store(stateID, state.SigPrivKey)
 
 	return &proto.JoinGroupResponse{
@@ -1502,7 +1546,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	}
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, newGroup)
+	s.storeGroup(stateID, newGroup)
 	s.signers.Store(stateID, newSigKey)
 
 	return &proto.CreateSubgroupResponse{
@@ -1523,6 +1567,7 @@ func (s *Server) HandleBranch(ctx context.Context, req *proto.HandleBranchReques
 		return nil, status.Errorf(codes.NotFound, "transaction not found: %d", req.TransactionId)
 	}
 	tx := txVal.(*keyPackageTransaction)
+	defer s.transactions.Delete(req.TransactionId)
 
 	welcome, err := unmarshalWelcomeAnyFormat(req.Welcome)
 	if err != nil {
@@ -1535,7 +1580,7 @@ func (s *Server) HandleBranch(ctx context.Context, req *proto.HandleBranchReques
 	}
 
 	stateID := s.generateStateID()
-	s.groups.Store(stateID, newGroup)
+	s.storeGroup(stateID, newGroup)
 	s.signers.Store(stateID, tx.PrivKeys.GetSignaturePrivateKey())
 
 	return &proto.HandleBranchResponse{

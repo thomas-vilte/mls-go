@@ -21,6 +21,21 @@ import (
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
 
+func loadGroupForTest(t *testing.T, c *Client, groupIDBytes []byte) *group.Group {
+	t.Helper()
+	ctx := context.Background()
+	c.mu.Lock()
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupIDBytes))
+	c.mu.Unlock()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	g, err := c.loadGroupEntry(ctx, groupIDBytes, entry)
+	if err != nil {
+		t.Fatalf("loadGroupForTest: %v", err)
+	}
+	return g
+}
+
 type rejectingValidator struct {
 	rejectIdentity string
 }
@@ -792,14 +807,8 @@ func TestClientWithPaddingSizeOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bob joining group: %v", err)
 	}
-	aliceGroup, err := alice.loadGroup(ctx, groupID)
-	if err != nil {
-		t.Fatalf("loading alice group: %v", err)
-	}
-	bobGroup, err := bob.loadGroup(ctx, bobGroupID)
-	if err != nil {
-		t.Fatalf("loading bob group: %v", err)
-	}
+	aliceGroup := loadGroupForTest(t, alice, groupID)
+	bobGroup := loadGroupForTest(t, bob, bobGroupID)
 	if aliceGroup.PaddingSize() != 64 {
 		t.Fatalf("alice padding size = %d, want 64", aliceGroup.PaddingSize())
 	}
@@ -919,7 +928,7 @@ func TestClientWithCacheAlwaysCachesLoadedGroup(t *testing.T) {
 	if store.loadCalls != 1 {
 		t.Fatalf("load calls = %d, want 1 for CacheAlways", store.loadCalls)
 	}
-	if _, ok := reader.cachedGroups[groupCacheKeyBytes(groupID)]; !ok {
+	if _, ok := reader.groupEntries[groupCacheKeyBytes(groupID)]; !ok {
 		t.Fatal("expected group to be present in cache")
 	}
 }
