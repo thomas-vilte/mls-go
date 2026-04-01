@@ -906,6 +906,80 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) error {
 	return nil
 }
 
+// Epoch returns the current epoch number of the group.
+func (c *Client) Epoch(ctx context.Context, groupID []byte) (uint64, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return 0, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return 0, err
+	}
+	return g.Epoch().AsUint64(), nil
+}
+
+// OwnLeafIndex returns the caller's leaf index in the ratchet tree for the given group.
+func (c *Client) OwnLeafIndex(ctx context.Context, groupID []byte) (uint32, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return 0, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(g.OwnLeafIndex()), nil
+}
+
+// CancelPendingProposals discards all locally stored proposals without committing them.
+// This is useful when the application decides to abort a batch of membership changes.
+func (c *Client) CancelPendingProposals(ctx context.Context, groupID []byte) error {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return err
+	}
+	g.ClearProposals()
+	return c.persistGroup(ctx, g, entry)
+}
+
 // ListMembers returns all active members in the group.
 func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo, error) {
 	c.mu.Lock()

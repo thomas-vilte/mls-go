@@ -79,6 +79,20 @@ For batched membership changes:
 
 This is more efficient than committing after every single change.
 
+To abort a pending batch without committing, call `CancelPendingProposals(...)`.
+
+## Group State Inspection
+
+The `Client` exposes read-only accessors that avoid the need to drop to the low-level `group.Group` API for common queries:
+
+```go
+epoch, err := client.Epoch(ctx, groupID)
+leafIdx, err := client.OwnLeafIndex(ctx, groupID)
+members, err := client.ListMembers(ctx, groupID)
+epochAuth, err := client.EpochAuthenticator(ctx, groupID)
+secret, err := client.Export(ctx, groupID, label, context, length)
+```
+
 ## Credential Validation
 
 If your application needs an allowlist, enterprise identity policy, or certificate policy, inject a `CredentialValidator` with `mls.WithCredentialValidator(...)`.

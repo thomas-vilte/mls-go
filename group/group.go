@@ -325,6 +325,12 @@ func (g *Group) RevokeProposal(ref []byte) bool {
 	return true
 }
 
+// ClearProposals discards all currently pending proposals without committing them.
+func (g *Group) ClearProposals() {
+	g.proposals.Clear()
+	g.proposalByRef = make(map[string]*Proposal)
+}
+
 // epochState holds the decryption and verification material for a past epoch.
 type epochState struct {
 	SenderDataSecret *ciphersuite.Secret
