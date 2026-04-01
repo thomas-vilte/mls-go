@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.3.x   | ✅        |
-| < 0.3.0 | ❌        |
+| 1.0.x   | ✅        |
+| < 1.0.0 | ❌        |
 
-This is beta software. Security fixes go into the latest minor version only.
+Security fixes go into the latest minor version only.
 
 ## Reporting a vulnerability
 
@@ -24,7 +24,7 @@ These are known gaps, not vulnerabilities. They are documented here because the 
 - `NewGroupFromReInit` still needs a tighter review of its `joiner_secret` derivation path
 - `new_member_proposal` PublicMessages do not yet verify the outer message signature independently
 - Application message padding defaults to zero unless `Group.PaddingSize` is configured explicitly
-- `LeaveGroup` in the high-level `Client` currently performs a local leave only; it does not broadcast a self-remove commit
+- `LeaveGroup` in the high-level `Client` performs a local state cleanup only; it does not broadcast a self-remove commit to other members. Use `RemoveMember` with the caller's own identity if a broadcast removal is required.
 
 Recent fixes:
 
@@ -55,9 +55,7 @@ No custom crypto implementations. All primitives come from audited libraries.
 - Call `SelfUpdate` periodically if your application expects long-lived memberships and wants fresh leaf encryption keys
 - Keep the full local group state durable; if you lose it, you cannot safely continue decrypting future epochs for that device
 - Treat each persisted group state as highly sensitive secret material: it includes epoch secrets, tree state, and enough data to continue as that member
-- This is beta software — not recommended for production handling sensitive data until v1.0.0
-
-For production use today, consider evaluating a mature MLS implementation that has already completed an external security review.
+- No external security audit has been performed. For applications handling highly sensitive data, consider commissioning an audit before deploying.
 
 ## State handling
 
