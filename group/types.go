@@ -1,6 +1,7 @@
 package group
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -430,6 +431,18 @@ func (ps *ProposalStore) AddProposalWithRef(proposal *Proposal, sender LeafNodeI
 // Clear clears all proposals.
 func (ps *ProposalStore) Clear() {
 	ps.Proposals = make([]StoredProposal, 0)
+}
+
+// RemoveByRef removes the first proposal with the given ProposalRef.
+// Returns true if a proposal was found and removed, false otherwise.
+func (ps *ProposalStore) RemoveByRef(ref []byte) bool {
+	for i, sp := range ps.Proposals {
+		if bytes.Equal(sp.Ref, ref) {
+			ps.Proposals = append(ps.Proposals[:i], ps.Proposals[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Member represents a group member.

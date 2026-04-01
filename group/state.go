@@ -40,11 +40,12 @@ type GroupStateData struct {
 	Epoch                 uint64                      `json:"epoch"`
 	CipherSuite           uint16                      `json:"cipher_suite"`
 	OwnLeafIndex          uint32                      `json:"own_leaf_index"`
-	RatchetTree           []byte                      `json:"ratchet_tree"` // serializado como extensión
+	RatchetTree           []byte                      `json:"ratchet_tree"`
 	GroupContext          []byte                      `json:"group_context"`
 	InterimTranscriptHash []byte                      `json:"interim_transcript_hash"`
 	ConfirmationTag       []byte                      `json:"confirmation_tag"`
 	EpochSecrets          *schedule.EpochSecretsData  `json:"epoch_secrets"`
+	SecretTree            *secrettree.TreeState       `json:"secret_tree,omitempty"`
 	Members               map[uint32]*MemberStateData `json:"members"`
 	StoredProposals       []*StoredProposalStateData  `json:"stored_proposals,omitempty"`
 	CachedPsks            map[string][]byte           `json:"cached_psks"`
@@ -101,6 +102,8 @@ func (g *Group) MarshalState() ([]byte, error) {
 		GroupContext:          g.groupContext.Marshal(),
 		InterimTranscriptHash: g.interimTranscriptHash,
 		ConfirmationTag:       g.confirmationTag,
+		EpochSecrets:          g.epochSecrets.MarshalData(),
+		SecretTree:            g.secretTree.MarshalFull(),
 		Members:               make(map[uint32]*MemberStateData),
 		CachedPsks:            g.cachedPsks,
 		MyLeafEncryptionKey:   g.myLeafEncryptionKey,
@@ -108,9 +111,6 @@ func (g *Group) MarshalState() ([]byte, error) {
 
 	// Serialize tree
 	state.RatchetTree = g.ratchetTree.MarshalTree()
-
-	// Serialize EpochSecrets (assumes schedule will export this soon)
-	state.EpochSecrets = g.epochSecrets.MarshalData()
 
 	// Serialize members
 	for idx, member := range g.members {
@@ -208,10 +208,20 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		}
 	}
 
-	// Restore SecretTree
-	st, err := secrettree.NewTree(epochSecrets.EncryptionSecret, tree.NumLeaves, cs)
-	if err != nil {
-		return nil, fmt.Errorf("recreating secret tree: %w", err)
+	var st *secrettree.Tree
+	switch {
+	case state.SecretTree != nil:
+		st, err = secrettree.UnmarshalFull(state.SecretTree, cs)
+		if err != nil {
+			return nil, fmt.Errorf("restoring secret tree: %w", err)
+		}
+	case epochSecrets != nil && epochSecrets.EncryptionSecret != nil:
+		st, err = secrettree.NewTree(epochSecrets.EncryptionSecret, tree.NumLeaves, cs)
+		if err != nil {
+			return nil, fmt.Errorf("recreating secret tree: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("missing secret tree and encryption secret")
 	}
 
 	// Restore Group

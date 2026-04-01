@@ -196,6 +196,56 @@ func TestGroupRemoveMember(t *testing.T) {
 	}
 }
 
+func TestGroupRevokeProposal(t *testing.T) {
+	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+
+	keyPackage, kpPrivKeys, err := keypackages.Generate(credWithKey, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, keyPackage, kpPrivKeys)
+	if err != nil {
+		t.Fatalf("NewGroup failed: %v", err)
+	}
+
+	newCred, _, err := credentials.GenerateCredentialWithKey([]byte("NewMember"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
+	}
+	newKeyPackage, _, err := keypackages.Generate(newCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage failed: %v", err)
+	}
+
+	proposal, err := g.AddMember(newKeyPackage)
+	if err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
+	ref := []byte("proposal-ref-1")
+	g.StoreProposalWithRef(proposal, g.OwnLeafIndex(), ref)
+
+	if got := len(g.Proposals().Proposals); got != 2 {
+		t.Fatalf("proposal count before revoke = %d, want 2", got)
+	}
+	if !g.RevokeProposal(ref) {
+		t.Fatal("RevokeProposal returned false, want true")
+	}
+	if got := len(g.Proposals().Proposals); got != 1 {
+		t.Fatalf("proposal count after revoke = %d, want 1", got)
+	}
+	if _, ok := g.proposalByRef[string(ref)]; ok {
+		t.Fatal("proposalByRef still contains revoked proposal")
+	}
+	if g.RevokeProposal([]byte("missing-ref")) {
+		t.Fatal("RevokeProposal returned true for missing ref")
+	}
+}
+
 func TestGroupCommit(t *testing.T) {
 	// Create initial group
 	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))

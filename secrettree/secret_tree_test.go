@@ -268,6 +268,74 @@ func TestSequenceNumber(t *testing.T) {
 	}
 }
 
+func TestMarshalFullRoundTripPreservesLeafState(t *testing.T) {
+	encSecret, err := ciphersuite.NewSecretRandom(32)
+	if err != nil {
+		t.Fatalf("NewSecretRandom: %v", err)
+	}
+	tree, err := NewTree(encSecret, 4, ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewTree: %v", err)
+	}
+	leaf, err := tree.LeafForIndex(0)
+	if err != nil {
+		t.Fatalf("LeafForIndex: %v", err)
+	}
+
+	if err := leaf.Advance(); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	seq0 := leaf.NextSequenceNumber()
+	if seq0 != 0 {
+		t.Fatalf("first sequence = %d, want 0", seq0)
+	}
+	seq1 := leaf.NextSequenceNumber()
+	if seq1 != 1 {
+		t.Fatalf("second sequence = %d, want 1", seq1)
+	}
+
+	beforeKey, err := leaf.ApplicationKey(1)
+	if err != nil {
+		t.Fatalf("ApplicationKey(1): %v", err)
+	}
+	beforeNonce, err := leaf.ApplicationNonce(1)
+	if err != nil {
+		t.Fatalf("ApplicationNonce(1): %v", err)
+	}
+
+	state := tree.MarshalFull()
+	restored, err := UnmarshalFull(state, ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("UnmarshalFull: %v", err)
+	}
+	restoredLeaf, err := restored.LeafForIndex(0)
+	if err != nil {
+		t.Fatalf("restored LeafForIndex: %v", err)
+	}
+
+	if got := restoredLeaf.CurrentGeneration(); got != 1 {
+		t.Fatalf("restored generation = %d, want 1", got)
+	}
+	if got := restoredLeaf.NextSequenceNumber(); got != 2 {
+		t.Fatalf("restored next sequence = %d, want 2", got)
+	}
+
+	afterKey, err := restoredLeaf.ApplicationKey(1)
+	if err != nil {
+		t.Fatalf("restored ApplicationKey(1): %v", err)
+	}
+	afterNonce, err := restoredLeaf.ApplicationNonce(1)
+	if err != nil {
+		t.Fatalf("restored ApplicationNonce(1): %v", err)
+	}
+	if !bytes.Equal(beforeKey, afterKey) {
+		t.Fatal("restored application key mismatch")
+	}
+	if !bytes.Equal(beforeNonce, afterNonce) {
+		t.Fatal("restored application nonce mismatch")
+	}
+}
+
 // ============================================================================
 // IncrementGeneration
 // ============================================================================

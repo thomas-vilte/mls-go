@@ -2,6 +2,7 @@ package keypackages_test
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -115,5 +116,55 @@ func TestKeyPackageLifetime(t *testing.T) {
 	}
 	if lt.NotAfter-lt.NotBefore < 24*60*60 {
 		t.Error("Lifetime too short (< 24h)")
+	}
+}
+
+func TestKeyPackageGenerate_WithLifetime(t *testing.T) {
+	keyPackage, _, err := kp.Generate(
+		newCredWithKey(t, "LifetimeOverride"),
+		kp.MLS128DHKEMP256,
+		kp.WithLifetime(0, math.MaxUint64),
+	)
+	if err != nil {
+		t.Fatalf("Generate with lifetime override failed: %v", err)
+	}
+
+	lt := keyPackage.LeafNode.Lifetime
+	if lt == nil {
+		t.Fatal("Lifetime is nil")
+	}
+	if lt.NotBefore != 0 {
+		t.Fatalf("NotBefore = %d, want 0", lt.NotBefore)
+	}
+	if lt.NotAfter != math.MaxUint64 {
+		t.Fatalf("NotAfter = %d, want %d", lt.NotAfter, uint64(math.MaxUint64))
+	}
+	if err := keyPackage.Verify(kp.MLS128DHKEMP256); err != nil {
+		t.Fatalf("Verify() failed on generated key package: %v", err)
+	}
+}
+
+func TestKeyPackageGenerate_InfiniteLifetime(t *testing.T) {
+	keyPackage, _, err := kp.Generate(
+		newCredWithKey(t, "InfiniteUser"),
+		kp.MLS128DHKEMP256,
+		kp.InfiniteLifetime(),
+	)
+	if err != nil {
+		t.Fatalf("Generate with DAVELifetime failed: %v", err)
+	}
+
+	lt := keyPackage.LeafNode.Lifetime
+	if lt == nil {
+		t.Fatal("Lifetime is nil")
+	}
+	if lt.NotBefore != 0 {
+		t.Fatalf("NotBefore = %d, want 0", lt.NotBefore)
+	}
+	if lt.NotAfter != math.MaxUint64 {
+		t.Fatalf("NotAfter = %d, want %d", lt.NotAfter, uint64(math.MaxUint64))
+	}
+	if err := keyPackage.Verify(kp.MLS128DHKEMP256); err != nil {
+		t.Fatalf("Verify() failed: %v", err)
 	}
 }

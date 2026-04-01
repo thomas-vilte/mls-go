@@ -77,6 +77,25 @@ type cachedGenSecret struct {
 	handshake   *ciphersuite.Secret
 }
 
+// LeafState holds the serializable per-leaf ratchet state.
+type LeafState struct {
+	Generation        uint64 `json:"generation"`
+	SequenceNumber    uint64 `json:"sequence_number"`
+	LeafSecret        []byte `json:"leaf_secret"`
+	ApplicationSecret []byte `json:"application_secret"`
+	HandshakeSecret   []byte `json:"handshake_secret"`
+}
+
+// TreeState holds the full serializable state of a Tree, including per-leaf ratchet
+// positions. Used by MarshalFull/UnmarshalFull to persist and restore the tree without
+// nonce reuse on application messages.
+type TreeState struct {
+	EncryptionSecret []byte               `json:"encryption_secret"`
+	LeafCount        uint32               `json:"leaf_count"`
+	Generation       uint64               `json:"generation"`
+	LeafStates       map[uint32]LeafState `json:"leaf_states,omitempty"`
+}
+
 // maxCachedGenerations is the maximum number of past generations to retain
 // for out-of-order delivery. RFC 9420 §9.2 leaves this as a local decision.
 const maxCachedGenerations = 2048
@@ -200,6 +219,41 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 	}
 	t.leafCache[leafIndex] = ls
 	return ls, nil
+}
+
+// MarshalFull exports the full persisted state of the secret tree, including
+// initialized per-leaf ratchet state. Past-generation caches are intentionally
+// excluded to preserve forward secrecy.
+func (t *Tree) MarshalFull() *TreeState {
+	if t == nil {
+		return nil
+	}
+
+	state := &TreeState{
+		EncryptionSecret: append([]byte(nil), t.encryptionSecret.AsSlice()...),
+		LeafCount:        t.leafCount,
+		Generation:       t.generation,
+		LeafStates:       make(map[uint32]LeafState, len(t.leafCache)),
+	}
+
+	for leafIndex, leaf := range t.leafCache {
+		if leaf == nil {
+			continue
+		}
+		state.LeafStates[leafIndex] = LeafState{
+			Generation:        leaf.generation,
+			SequenceNumber:    leaf.sequenceNumber,
+			LeafSecret:        cloneSecretBytes(leaf.leafSecret),
+			ApplicationSecret: cloneSecretBytes(leaf.applicationRatchetSecret),
+			HandshakeSecret:   cloneSecretBytes(leaf.handshakeRatchetSecret),
+		}
+	}
+
+	if len(state.LeafStates) == 0 {
+		state.LeafStates = nil
+	}
+
+	return state
 }
 
 // deriveLeafSecret derives the leaf secret for a given leaf index using
@@ -688,4 +742,48 @@ func Unmarshal(data []byte, cs ciphersuite.CipherSuite) (*Tree, error) {
 		generation:       generation,
 		leafCache:        make(map[uint32]*LeafSecret),
 	}, nil
+}
+
+// UnmarshalFull restores a Tree from a fully persisted TreeState.
+func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) {
+	if state == nil {
+		return nil, fmt.Errorf("tree state is nil")
+	}
+	if len(state.EncryptionSecret) == 0 {
+		return nil, fmt.Errorf("tree state encryption_secret is empty")
+	}
+	if state.LeafCount == 0 {
+		return nil, fmt.Errorf("tree state leaf_count must be > 0")
+	}
+	tree := &Tree{
+		cs:               cs,
+		encryptionSecret: ciphersuite.NewSecret(state.EncryptionSecret),
+		leafCount:        state.LeafCount,
+		generation:       state.Generation,
+		leafCache:        make(map[uint32]*LeafSecret),
+	}
+	for leafIndex, leafState := range state.LeafStates {
+		if leafIndex >= state.LeafCount {
+			return nil, fmt.Errorf("leaf state index %d out of range [0, %d)", leafIndex, state.LeafCount)
+		}
+		leaf := &LeafSecret{
+			cs:                       cs,
+			leafIndex:                leafIndex,
+			generation:               leafState.Generation,
+			leafSecret:               ciphersuite.NewSecret(leafState.LeafSecret),
+			handshakeRatchetSecret:   ciphersuite.NewSecret(leafState.HandshakeSecret),
+			applicationRatchetSecret: ciphersuite.NewSecret(leafState.ApplicationSecret),
+			sequenceNumber:           leafState.SequenceNumber,
+			secretCache:              make(map[uint32]*cachedGenSecret),
+		}
+		tree.leafCache[leafIndex] = leaf
+	}
+	return tree, nil
+}
+
+func cloneSecretBytes(secret *ciphersuite.Secret) []byte {
+	if secret == nil {
+		return nil
+	}
+	return append([]byte(nil), secret.AsSlice()...)
 }
