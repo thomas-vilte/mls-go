@@ -92,7 +92,10 @@ type LeafNodeLifetime = Lifetime
 // Extension re-exports the canonical MLS extension type.
 type Extension = mlsext.Extension
 
-// DefaultCapabilities returns the default capabilities for DAVE compatibility.
+// DefaultCapabilities returns the default capabilities per RFC 9420 §11.1.
+// The CipherSuites field is overridden at generation time to advertise only
+// the cipher suite actually in use; extensions and proposals are left empty
+// so callers can opt in to only what their group requires.
 func DefaultCapabilities() *Capabilities {
 	return &Capabilities{
 		ProtocolVersions: []ProtocolVersion{MLS10},

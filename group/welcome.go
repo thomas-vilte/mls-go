@@ -452,6 +452,9 @@ type CreateWelcomeOptions struct {
 	PskIDs        []PskID
 	PskSecret     *ciphersuite.Secret
 	StagedCommit  *StagedCommit
+	// GroupInfo controls which extensions are included in the GroupInfo.
+	// By default, all RFC 9420 extensions are included.
+	GroupInfoOpts GroupInfoOptions
 }
 
 // CreateWelcomeWithOptions creates a Welcome message using an options struct.
@@ -467,6 +470,7 @@ func (g *Group) CreateWelcomeWithOptions(
 		opts.PskIDs,
 		opts.PskSecret,
 		opts.StagedCommit,
+		opts.GroupInfoOpts,
 	)
 }
 
@@ -506,6 +510,7 @@ func (g *Group) createWelcome(
 	pskIDs []PskID,
 	pskSecret *ciphersuite.Secret,
 	staged *StagedCommit,
+	groupInfoOpts ...GroupInfoOptions,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
@@ -529,7 +534,12 @@ func (g *Group) createWelcome(
 		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
-	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey)
+	var opt GroupInfoOptions
+	if len(groupInfoOpts) > 0 {
+		opt = groupInfoOpts[0]
+	}
+
+	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -587,6 +597,8 @@ func (g *Group) createWelcome(
 				}
 			}
 		}
+		// When no UpdatePath is present, path_secret remains nil (absent).
+		// RFC 9420 §11.2.2: optional<PathSecret> path_secret — absent when no path.
 
 		// Build GroupSecrets
 		groupSecrets := &GroupSecrets{

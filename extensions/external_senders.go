@@ -21,8 +21,8 @@ import (
 // ExternalSender represents an external sender allowed to send proposals.
 //
 // External senders are entities that can send proposals to a group without
-// being full members. This is used by DAVE (Discord Audio Voice Encryption)
-// to allow the delivery service to manage group membership.
+// being full members. A common use case is a delivery service that manages
+// group membership on behalf of its users.
 //
 // # Structure (RFC 9420 §12.1.8.1)
 //
@@ -189,11 +189,12 @@ func (e *ExternalSendersExtension) Marshal() []byte {
 			sendersBuf.WriteVLBytes([]byte{})
 		}
 
-		// credential<V>
+		// RFC 9420 §12.1.8.1 encodes Credential inline inside ExternalSender,
+		// without an extra vector-length wrapper.
 		if sender.Credential != nil {
-			sendersBuf.WriteVLBytes(sender.Credential.Marshal())
+			sendersBuf.WriteRaw(sender.Credential.Marshal())
 		} else {
-			sendersBuf.WriteVLBytes([]byte{})
+			sendersBuf.WriteRaw(nilCredentialBytes())
 		}
 	}
 	buf.WriteVLBytes(sendersBuf.Bytes())
@@ -249,18 +250,9 @@ func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, 
 			}
 		}
 
-		// credential<V>
-		credBytes, err := inner.ReadVLBytes()
+		cred, err := credentials.UnmarshalCredentialFromReader(inner)
 		if err != nil {
-			return nil, fmt.Errorf("reading credential: %w", err)
-		}
-
-		var cred *credentials.Credential
-		if len(credBytes) > 0 {
-			cred, err = credentials.UnmarshalCredential(credBytes)
-			if err != nil {
-				return nil, fmt.Errorf("parsing credential: %w", err)
-			}
+			return nil, fmt.Errorf("parsing credential: %w", err)
 		}
 
 		sender := ExternalSender{
@@ -408,4 +400,11 @@ func ecdsaPublicKeyEqual(a, b *ecdsa.PublicKey) bool {
 	}
 	// If ECDH conversion fails, keys cannot be compared
 	return false
+}
+
+func nilCredentialBytes() []byte {
+	w := tls.NewWriter()
+	w.WriteUint16(0)
+	w.WriteVLBytes(nil)
+	return w.Bytes()
 }

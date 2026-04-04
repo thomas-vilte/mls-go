@@ -826,17 +826,22 @@ func (g *Group) CommitWithContext(
 	}
 	treeDiff = treeDiff.ExpandToPowerOf2()
 
-	// Generate UpdatePath if necessary (RFC §12.4.1)
+	// Generate UpdatePath if necessary (RFC §12.4.1).
+	// If the committer is the only member of the group, omit the path;
+	// new members receive the commit_secret via the Welcome message instead.
 	var updatePath *UpdatePath
 	var commitSecret *ciphersuite.Secret
-
-	// Generate UpdatePath, excluding newly added leaves from encryption.
 	var allPathSecrets []*ciphersuite.Secret
 	var committerDP, committerCopath []treesync.NodeIndex
 	var committerLevels []int
-	updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
-	if err != nil {
-		return nil, fmt.Errorf("creating update path: %w", err)
+
+	if g.ratchetTree.LeafCount() > 1 {
+		updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
+		if err != nil {
+			return nil, fmt.Errorf("creating update path: %w", err)
+		}
+	} else {
+		commitSecret = ciphersuite.ZeroSecret(g.cipherSuite.HashLength())
 	}
 
 	// Build Commit structure — use by-reference for proposals received from the
@@ -1353,6 +1358,10 @@ func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 
 // StoreProposal stores a proposal indexed by hash reference for future resolution (RFC 9420 §12.4).
 // acBytes must be the serialized AuthenticatedContent of the proposal's PublicMessage.
+//
+// RFC 9420 §5.4: ProposalRef = RefHash("MLS 1.0 Proposal Reference", AuthenticatedContent).
+// The input is the serialized AuthenticatedContent (wire_format + content + auth) without
+// any MLSMessage version prefix.
 func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte) []byte {
 	if g.proposalByRef == nil {
 		g.proposalByRef = make(map[string]*Proposal)
@@ -1363,7 +1372,7 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 	return ref
 }
 
-// ProcessReceivedCommit processes a commit sent by another member.
+// ProcessReceivedCommit processes a commit from another existing group member.
 // Decrypts the path secret using the receiver's private HPKE key,
 // then advances the group state. RFC 9420 §12.4.2
 func (g *Group) ProcessReceivedCommit(
@@ -2293,7 +2302,8 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 		Content:    ac.Content,
 		Auth:       ac.Auth,
 	}
-	g.StoreProposal(proposal, sender, acForRef.Marshal())
+	refBytes := acForRef.Marshal()
+	g.StoreProposal(proposal, sender, refBytes)
 	return nil
 }
 
@@ -2615,12 +2625,32 @@ func (g *Group) GetGroupInfo(
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}
-	return g.buildSignedGroupInfo(signerPrivKey)
+	return g.buildSignedGroupInfo(signerPrivKey, GroupInfoOptions{})
+}
+
+// GroupInfoOptions controls optional extensions in GroupInfo serialization.
+// By default, all RFC 9420 extensions are included for maximum compatibility.
+type GroupInfoOptions struct {
+	// IncludeRatchetTree controls whether the ratchet_tree extension is included.
+	// Default: true (required for Welcome messages so joiners can instantiate the group).
+	IncludeRatchetTree *bool
+	// IncludeExternalPub controls whether the external_pub extension is included.
+	// Default: true (required for external commits per RFC 9420 §11.2.4).
+	// Applications like DAVE that don't use external commits may set this to false.
+	IncludeExternalPub *bool
 }
 
 func (g *Group) buildSignedGroupInfo(
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
+	opts ...GroupInfoOptions,
 ) (*GroupInfo, error) {
+	var opt GroupInfoOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	// Defaults: include all extensions for RFC compliance
+	includeRatchetTree := opt.IncludeRatchetTree == nil || *opt.IncludeRatchetTree
+	includeExternalPub := opt.IncludeExternalPub == nil || *opt.IncludeExternalPub
 	if signerPrivKey == nil {
 		return nil, fmt.Errorf("signer private key is nil")
 	}
@@ -2636,28 +2666,34 @@ func (g *Group) buildSignedGroupInfo(
 		RatchetTree:     g.ratchetTree,
 	}
 
-	// ratchet_tree extension (RFC 9420 §11.2.2) — use RFC interoperable format.
-	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: mlsext.ExtensionTypeRatchetTree,
-		Data: g.ratchetTree.MarshalTreeRFC(),
-	})
-
-	// external_pub extension (RFC 9420 §11.2.4)
-	externalPriv, err := ciphersuite.DeriveKeyPair(
-		g.cipherSuite,
-		g.epochSecrets.ExternalSecret.AsSlice(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("deriving external key pair: %w", err)
+	// ratchet_tree extension (RFC 9420 §12.4.3.3) — use RFC interoperable format.
+	// Required in Welcome messages so joiners can instantiate the group.
+	if includeRatchetTree {
+		groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+			Type: mlsext.ExtensionTypeRatchetTree,
+			Data: g.ratchetTree.MarshalTreeRFC(),
+		})
 	}
-	// RFC 9420 §11.2.4: HPKEPublicKey is VLBytes, so the extension data
-	// must be VL-prefixed key bytes (not raw bytes).
-	extPubW := tls.NewWriter()
-	extPubW.WriteVLBytes(externalPriv.PublicKey().Bytes())
-	groupInfo.Extensions = append(groupInfo.Extensions, Extension{
-		Type: mlsext.ExtensionTypeExternalPub,
-		Data: extPubW.Bytes(),
-	})
+
+	// external_pub extension (RFC 9420 §11.2.4) — used for external commits.
+	// Applications that don't support external commits (e.g., DAVE) may omit this.
+	if includeExternalPub {
+		externalPriv, err := ciphersuite.DeriveKeyPair(
+			g.cipherSuite,
+			g.epochSecrets.ExternalSecret.AsSlice(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("deriving external key pair: %w", err)
+		}
+		// RFC 9420 §11.2.4: HPKEPublicKey is VLBytes, so the extension data
+		// must be VL-prefixed key bytes (not raw bytes).
+		extPubW := tls.NewWriter()
+		extPubW.WriteVLBytes(externalPriv.PublicKey().Bytes())
+		groupInfo.Extensions = append(groupInfo.Extensions, Extension{
+			Type: mlsext.ExtensionTypeExternalPub,
+			Data: extPubW.Bytes(),
+		})
+	}
 
 	tbs := groupInfo.MarshalTBS()
 	sig, err := ciphersuite.SignWithLabel(signerPrivKey, "GroupInfoTBS", tbs)

@@ -356,7 +356,7 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 }
 
 // FreshKeyPackageBytes generates a fresh single-use KeyPackage for invitations.
-func (c *Client) FreshKeyPackageBytes(ctx context.Context) ([]byte, error) {
+func (c *Client) FreshKeyPackageBytes(ctx context.Context, opts ...keypackages.GenerateOption) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
@@ -366,7 +366,7 @@ func (c *Client) FreshKeyPackageBytes(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 
-	kp, kpPriv, err := keypackages.Generate(c.credWithKey, c.cs)
+	kp, kpPriv, err := keypackages.Generate(c.credWithKey, c.cs, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("generating key package: %w", err)
 	}
@@ -402,6 +402,43 @@ func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 	g, err := group.NewGroup(groupID, c.cs, kp, kpPriv)
 	if err != nil {
 		return nil, fmt.Errorf("creating group: %w", err)
+	}
+	g.SetPaddingSize(c.paddingSize)
+	entry := &groupEntry{}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		return nil, err
+	}
+	c.groupEntries[groupCacheKey(groupID)] = entry
+	return cloneBytes(groupID.AsSlice()), nil
+}
+
+// CreateGroupWithExtensions creates a fresh one-member MLS group using the
+// provided GroupID, creator KeyPackage bytes, and GroupContext extensions.
+func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, keyPackageBytes []byte, extensions []group.Extension) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkOpen(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(groupIDBytes) == 0 {
+		return nil, ErrEmptyGroupID
+	}
+	if len(keyPackageBytes) == 0 {
+		return nil, ErrEmptyKeyPackage
+	}
+
+	pe, ok := c.pendingKPs[keyPackageFingerprint(keyPackageBytes)]
+	if !ok || pe == nil || pe.kp == nil || pe.kpPriv == nil {
+		return nil, ErrNoPendingKeyPackage
+	}
+
+	groupID := group.NewGroupID(cloneBytes(groupIDBytes))
+	g, err := group.NewGroupWithExtensions(groupID, c.cs, pe.kp, pe.kpPriv, extensions)
+	if err != nil {
+		return nil, fmt.Errorf("creating group with extensions: %w", err)
 	}
 	g.SetPaddingSize(c.paddingSize)
 	entry := &groupEntry{}
@@ -686,6 +723,41 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 	}
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return fmt.Errorf("processing received commit: %w", err)
+	}
+	return c.persistGroup(ctx, g, entry)
+}
+
+// ProcessPublicMessage applies a proposal or commit received as a public MLS message.
+func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes []byte) error {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return err
+	}
+	msg, err := framing.UnmarshalMLSMessage(messageBytes)
+	if err != nil {
+		return fmt.Errorf("parsing public message: %w", err)
+	}
+	pubMsg, ok := msg.AsPublic()
+	if !ok {
+		return ErrUnexpectedMessageType
+	}
+	if err := g.ProcessPublicMessage(pubMsg); err != nil {
+		return fmt.Errorf("processing public message: %w", err)
 	}
 	return c.persistGroup(ctx, g, entry)
 }
@@ -1341,7 +1413,43 @@ func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *
 	return commitMsg.Marshal(), nil
 }
 
+// CommitPendingProposalsOptions controls the behavior of CommitPendingProposalsWithOptions.
+type CommitPendingProposalsOptions struct {
+	// GroupInfo controls which extensions are included in the Welcome's GroupInfo.
+	// By default, all RFC 9420 extensions are included.
+	GroupInfoOpts group.GroupInfoOptions
+}
+
+// CommitPendingProposalsWithOptions commits pending proposals with fine-grained control.
+// Use this when you need to customize the Welcome message (e.g., omit extensions not needed by your protocol).
+func (c *Client) CommitPendingProposalsWithOptions(ctx context.Context, groupID []byte, opts CommitPendingProposalsOptions) (commit, welcome []byte, err error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.commitPendingProposalsWithOptions(ctx, g, entry, opts)
+}
+
 func (c *Client) commitPendingProposals(ctx context.Context, g *group.Group, entry *groupEntry) (commit, welcome []byte, err error) {
+	return c.commitPendingProposalsWithOptions(ctx, g, entry, CommitPendingProposalsOptions{})
+}
+
+func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group.Group, entry *groupEntry, opts CommitPendingProposalsOptions) (commit, welcome []byte, err error) {
 	joinIdentities := make([][]byte, 0)
 	removeIdentities := make([][]byte, 0)
 	for _, stored := range g.StoredProposals() {
@@ -1403,6 +1511,7 @@ func (c *Client) commitPendingProposals(ctx context.Context, g *group.Group, ent
 		PskIDs:        staged.PskIDs(),
 		PskSecret:     staged.RawPskSecret(),
 		StagedCommit:  staged,
+		GroupInfoOpts: opts.GroupInfoOpts,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
