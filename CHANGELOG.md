@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [v1.1.0] - 2026-04-04
+
+[v1.1.0]: https://github.com/thomas-vilte/mls-go/compare/v1.0.0...v1.1.0
+
+In this release, we focused on aligning our implementation with the RFC 9420 standard and expanding group management capabilities. We have introduced more flexibility for external senders and streamlined the core MLS logic for better performance and compliance.
+
+### ✨ New Features
+
+- We added support for creating groups with raw external senders, providing more flexibility in group initialization.
+- We introduced GroupInfo customization options to better align with the RFC 9420 specification.
+
+### 🛠️ Protocol & Implementation
+
+- We streamlined the MLS implementation to ensure full compliance with RFC 9420 standards.
+- We improved code clarity regarding protocol generality to assist developers in understanding the core logic.
+
 ## [v1.0.0] - 2026-04-01
 
 [v1.0.0]: https://github.com/thomas-vilte/mls-go/compare/v0.3.0...v1.0.0
