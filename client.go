@@ -13,6 +13,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/keypackages"
@@ -447,6 +448,30 @@ func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, ke
 	}
 	c.groupEntries[groupCacheKey(groupID)] = entry
 	return cloneBytes(groupID.AsSlice()), nil
+}
+
+// CreateGroupWithExternalSender creates a fresh one-member MLS group that includes
+// an external_senders extension built from a raw external sender payload.
+//
+// externalSenderBytes is the wire encoding of a single ExternalSender entry:
+// VL(signature_key) || Credential_inline (no outer senders<V> wrapper).
+// This is the format typically sent by a delivery service in its initial handshake.
+func (c *Client) CreateGroupWithExternalSender(ctx context.Context, groupIDBytes, keyPackageBytes, externalSenderBytes []byte) ([]byte, error) {
+	sender, err := mlsext.ParseSingleExternalSender(externalSenderBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing external sender: %w", err)
+	}
+
+	ext := mlsext.NewExternalSendersExtension()
+	if err := ext.AddSender(*sender); err != nil {
+		return nil, fmt.Errorf("building external senders extension: %w", err)
+	}
+	genericExt, err := ext.ToExtension()
+	if err != nil {
+		return nil, fmt.Errorf("converting external senders extension: %w", err)
+	}
+
+	return c.CreateGroupWithExtensions(ctx, groupIDBytes, keyPackageBytes, []group.Extension{*genericExt})
 }
 
 // InviteMember adds a member and returns the commit bytes to broadcast plus the welcome bytes for the joiner.

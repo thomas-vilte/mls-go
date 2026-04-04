@@ -269,6 +269,52 @@ func UnmarshalExternalSendersExtension(data []byte) (*ExternalSendersExtension, 
 	return ext, nil
 }
 
+// ParseSingleExternalSender parses an ExternalSendersExtension payload and
+// returns the first sender entry.
+//
+// Discord voice gateway opcode 25 sends a single ExternalSender entry directly
+// as VL(signature_key) || Credential_inline, without the outer senders<V> wrapper
+// that UnmarshalExternalSendersExtension expects.
+func ParseSingleExternalSender(data []byte) (*ExternalSender, error) {
+	if len(data) == 0 {
+		return nil, errors.New("no external sender found")
+	}
+
+	r := tls.NewReader(data)
+
+	pubKeyBytes, err := r.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading public_key: %w", err)
+	}
+
+	var pubKey *ecdsa.PublicKey
+	if len(pubKeyBytes) > 0 {
+		pubKey, err = unmarshalECDSAPublicKey(pubKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal external senders extension: parsing public key: %w", err)
+		}
+	}
+
+	cred, err := credentials.UnmarshalCredentialFromReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal external senders extension: parsing credential: %w", err)
+	}
+
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("unmarshal external senders extension: trailing bytes: %d", r.Remaining())
+	}
+
+	sender := ExternalSender{
+		Credential:     cred,
+		PublicKey:      pubKey,
+		publicKeyBytes: pubKeyBytes,
+	}
+	if err := sender.Validate(); err != nil {
+		return nil, fmt.Errorf("unmarshal external senders extension: invalid sender: %w", err)
+	}
+	return &sender, nil
+}
+
 // Validate validates the ExternalSendersExtension.
 func (e *ExternalSendersExtension) Validate() error {
 	for i, sender := range e.Senders {
