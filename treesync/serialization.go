@@ -307,6 +307,11 @@ func UnmarshalTreeFromExtension(data []byte, cs ciphersuite.CipherSuite) (*Ratch
 	if len(nodes) == 0 {
 		return UnmarshalTree(data, cs)
 	}
+	// RFC 9420 §12.4.3.3 requires the serialized ratchet_tree to end at the
+	// rightmost non-blank node, with no trailing blank entries.
+	if nodes[len(nodes)-1].State == NodeStateEmpty || nodes[len(nodes)-1].State == NodeStateBlank {
+		return nil, fmt.Errorf("ratchet_tree extension: last node must be non-blank")
+	}
 
 	numLeaves := uint32((len(nodes) + 1) / 2)
 	return &RatchetTree{

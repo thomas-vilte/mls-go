@@ -76,6 +76,30 @@ func TestSendMessage_NilSignKey(t *testing.T) {
 	}
 }
 
+func TestSendMessage_FailsWithPendingProposals(t *testing.T) {
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+
+	charlieCred, _, err := credentials.GenerateCredentialWithKey([]byte("Charlie-Pending"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Charlie): %v", err)
+	}
+	charlieKP, _, err := keypackages.Generate(charlieCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Charlie): %v", err)
+	}
+	if _, err := aliceGroup.AddMember(charlieKP); err != nil {
+		t.Fatalf("AddMember(Charlie): %v", err)
+	}
+
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	if _, err := aliceGroup.SendMessage([]byte("blocked"), aliceSigPriv); err == nil {
+		t.Fatal("SendMessage should fail when proposals are pending")
+	}
+	if _, err := aliceGroup.SendApplicationMessage([]byte("blocked"), []byte("aad"), aliceSigPriv); err == nil {
+		t.Fatal("SendApplicationMessage should fail when proposals are pending")
+	}
+}
+
 // TestReceiveMessage_WrongSender verifies that ReceiveMessage fails con sender inválido
 func TestReceiveMessage_WrongSender(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)

@@ -805,6 +805,13 @@ func JoinFromWelcomeWithContext(
 		ratchetTree = treesync.NewRatchetTree(1, groupInfo.GroupContext.CipherSuite)
 	}
 	groupInfo.RatchetTree = ratchetTree
+	// RFC 9420 §7.9.2 / §12.4.3.1 requires a joiner to validate the parent-hash
+	// chain for the committer represented by GroupInfo.signer.
+	if signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer)); signerLeaf != nil && signerLeaf.State == treesync.NodeStatePresent {
+		if err := ratchetTree.VerifyParentHashes(treesync.LeafIndex(groupInfo.Signer)); err != nil {
+			return nil, fmt.Errorf("welcome parent hash verification failed for signer leaf %d: %w", groupInfo.Signer, err)
+		}
+	}
 
 	// Verify GroupInfo signature when the signer leaf is available in the tree.
 	// Use SigKeyBytes() to support both ECDSA (stored in SignatureKey) and Ed25519 (stored in SignatureKeyRaw).

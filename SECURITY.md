@@ -32,6 +32,11 @@ Recent fixes:
 - PSKs are resolved in the commit receiver path
 - Ratchet trees are truncated after member removals
 - `PublicMessage` processing is implemented
+- **RFC 9420 §2.1.2**: MLS varint reader now rejects non-minimal encodings to preserve canonical wire format for hashed protocol objects
+- **RFC 9420 §12.4**: `SendMessage` and `SendApplicationMessage` now reject application data while valid proposals are pending
+- **RFC 9420 §7.9.2 / §12.4.3.1**: `JoinFromWelcome` now verifies the parent-hash chain for the GroupInfo signer leaf
+- **RFC 9420 §12.4.3.3**: `UnmarshalTreeFromExtension` now rejects ratchet_tree extensions whose last serialized node is blank
+- **RFC 9420 §12.1.8**: External senders are restricted to allowed proposal types (add, remove, psk, reinit, group_context_extensions)
 
 These limitations do not break the normal encrypted group flow, but they do reduce assurance on specific edge cases.
 

@@ -779,6 +779,21 @@ func TestUnmarshalTreeFromExtension_FallsBackToUnmarshalTree(t *testing.T) {
 	}
 }
 
+func TestUnmarshalTreeFromExtension_RejectsTrailingBlankLastNode(t *testing.T) {
+	w := tls.NewWriter()
+	nodes := tls.NewWriter()
+	leaf := createTestLeafExt(t, "leaf-0")
+	nodes.WriteUint8(1)
+	nodes.WriteUint8(nodeTypeLeaf)
+	nodes.WriteRaw(leaf.Marshal())
+	nodes.WriteUint8(0)
+	w.WriteVLBytes(nodes.Bytes())
+
+	if _, err := UnmarshalTreeFromExtension(w.Bytes(), ciphersuite.MLS128DHKEMP256); err == nil {
+		t.Fatal("expected trailing blank last node to be rejected")
+	}
+}
+
 func TestUnmarshalTree_ZeroLeaves(t *testing.T) {
 	// Write num_leaves=0
 	w := make([]byte, 4) // 0 as uint32 big-endian

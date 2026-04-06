@@ -111,6 +111,11 @@ func (pf *ProposalFilter) validateSingleProposal(
 		return err
 	}
 
+	if fp.IsExternal && !isAllowedExternalProposalTypes(proposal.Type) {
+		return fmt.Errorf("external sender cannot send proposal type %d: %w",
+			proposal.Type, ErrInvalidProposal)
+	}
+
 	requiredCaps := pf.extractRequiredCapabilities()
 
 	switch proposal.Type {
@@ -586,5 +591,18 @@ func toTreeSyncCapabilities(caps *keypackages.Capabilities) *treesync.LeafNodeCa
 		Extensions:       append([]uint16(nil), caps.Extensions...),
 		Proposals:        append([]uint16(nil), caps.Proposals...),
 		Credentials:      append([]uint16(nil), caps.Credentials...),
+	}
+}
+
+func isAllowedExternalProposalTypes(pt ProposalType) bool {
+	switch pt {
+	case ProposalTypeAdd,
+		ProposalTypeRemove,
+		ProposalTypePreSharedKey,
+		ProposalTypeReInit,
+		ProposalTypeGroupContextExtensions:
+		return true
+	default:
+		return false
 	}
 }

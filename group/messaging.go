@@ -21,6 +21,11 @@ func (g *Group) SendMessage(
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}
+	// RFC 9420 §12.4 requires committing observed proposals before sending
+	// application data in the current epoch.
+	if g.proposals != nil && len(g.proposals.Proposals) > 0 {
+		return nil, fmt.Errorf("cannot send application data while proposals are pending")
+	}
 	if sigPrivKey == nil {
 		return nil, fmt.Errorf("signature private key is nil")
 	}
@@ -62,6 +67,11 @@ func (g *Group) SendApplicationMessage(
 ) (*framing.PrivateMessage, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
+	}
+	// RFC 9420 §12.4 requires committing observed proposals before sending
+	// application data in the current epoch.
+	if g.proposals != nil && len(g.proposals.Proposals) > 0 {
+		return nil, fmt.Errorf("cannot send application data while proposals are pending")
 	}
 	if sigPrivKey == nil {
 		return nil, fmt.Errorf("signature private key is nil")
