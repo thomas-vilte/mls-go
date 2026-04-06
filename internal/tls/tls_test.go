@@ -1,7 +1,3 @@
-// Package tls - Tests exhaustivos para encoding/decoding TLS
-//
-// Objetivo: Encontrar TODOS los bugs en parsing/serialización
-// Cobertura: 80%+ del paquete internal/tls
 package tls
 
 import (
@@ -183,7 +179,6 @@ func TestReader_ReadMLSVarint(t *testing.T) {
 }
 
 func TestMLSVarint_Roundtrip(t *testing.T) {
-	// Test TODOS los valores en los boundaries
 	testValues := []uint32{
 		0, 1, 63, 64, 65, 16383, 16384, 16385,
 		100000, 1000000, 10000000, 1073741823,
@@ -207,7 +202,7 @@ func TestMLSVarint_Roundtrip(t *testing.T) {
 }
 
 func TestMLSVarint_InvalidPrefix(t *testing.T) {
-	// El prefix 0b11 (3) es INVÁLIDO según RFC 9420 §3.5
+	// the prefix 0b11 (3) is invalid according to RFC 9420 §3.5
 	invalid := []byte{0xC0, 0x00, 0x00, 0x00} // prefix = 3
 	r := NewReader(invalid)
 	_, err := r.ReadMLSVarint()
@@ -346,10 +341,8 @@ func TestReader_BytesAfterPosition(t *testing.T) {
 	}
 
 	// After reading 2 bytes
-	//nolint:errcheck,gosec // Test code, errors intentionally ignored
-	r.ReadUint8()
-	//nolint:errcheck,gosec // Test code, errors intentionally ignored
-	r.ReadUint8()
+	_, _ = r.ReadUint8()
+	_, _ = r.ReadUint8()
 	got = r.BytesAfterPosition()
 	if !bytes.Equal(got, []byte{0x03, 0x04}) {
 		t.Errorf("BytesAfterPosition() = %x, want %x", got, []byte{0x03, 0x04})
@@ -381,7 +374,7 @@ func TestReader_BufferUnderrun(t *testing.T) {
 }
 
 // ============================================================================
-// Edge Cases y Security Tests
+// Edge Cases and Security Tests
 // ============================================================================
 
 func TestWriter_EmptyWrites(t *testing.T) {
@@ -465,7 +458,6 @@ func TestReader_BoundaryValues(t *testing.T) {
 }
 
 func TestWriter_BigEndian(t *testing.T) {
-	// Verify que usamos big-endian correctamente
 	w := NewWriter()
 	w.WriteUint16(0x1234)
 
@@ -474,7 +466,6 @@ func TestWriter_BigEndian(t *testing.T) {
 		t.Errorf("WriteUint16 not big-endian: got %x, want %x", w.Bytes(), expected)
 	}
 
-	// Verify con binary.BigEndian
 	r := NewReader(w.Bytes())
 	got, _ := r.ReadUint16()
 	if got != 0x1234 {
@@ -508,7 +499,6 @@ func TestMLSVarint_MaxValues(t *testing.T) {
 }
 
 func TestReader_ReadVLBytes_MaxLength(t *testing.T) {
-	// Test VLBytes con length máximo que podemos manejar
 	maxInline := 16383
 	data := bytes.Repeat([]byte{0x42}, maxInline)
 
@@ -526,7 +516,6 @@ func TestReader_ReadVLBytes_MaxLength(t *testing.T) {
 }
 
 func TestWriter_Reset(t *testing.T) {
-	// Test que NewWriter siempre crea writer limpio
 	w1 := NewWriter()
 	w1.WriteUint8(0x42)
 
@@ -688,10 +677,22 @@ func TestReader_ReadBytes_Underrun(t *testing.T) {
 	}
 }
 
-// Helper para formatear uint32 en nombres de test
 func fmtUint32(v uint32) string {
 	if v < 1000 {
 		return fmt.Sprintf("%d", v)
 	}
 	return "large"
+}
+
+func TestReadMLSVarintRejectsNonMinimalTwoByteEncoding(t *testing.T) {
+	r := NewReader([]byte{0x40, 0x25}) // 37 encoded in 2 bytes
+	if _, err := r.ReadMLSVarint(); err == nil {
+		t.Fatal("expected error for non-minimal 2-byte varint")
+	}
+}
+func TestReadMLSVarintRejectsNonMinimalFourByteEncoding(t *testing.T) {
+	r := NewReader([]byte{0x80, 0x00, 0x00, 0x40}) // 64 encoded in 4 bytes
+	if _, err := r.ReadMLSVarint(); err == nil {
+		t.Fatal("expected error for non-minimal 4-byte varint")
+	}
 }

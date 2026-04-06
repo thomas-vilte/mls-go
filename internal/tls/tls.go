@@ -199,6 +199,11 @@ func (r *Reader) ReadMLSVarint() (uint32, error) {
 			return 0, ErrBufferUnderrun
 		}
 		v := uint32(b0&0x3F)<<8 | uint32(r.buf[r.pos+1])
+		// RFC 9420 §2.1.2 requires rejecting overlong encodings to preserve a
+		// canonical wire format for hashed protocol objects.
+		if v < 64 {
+			return 0, fmt.Errorf("non-minimal MLS varint encoding: %d encoded in 2 bytes", v)
+		}
 		r.pos += 2
 		return v, nil
 	case 2: // 4-byte: 16384–1073741823
@@ -206,6 +211,11 @@ func (r *Reader) ReadMLSVarint() (uint32, error) {
 			return 0, ErrBufferUnderrun
 		}
 		v := uint32(b0&0x3F)<<24 | uint32(r.buf[r.pos+1])<<16 | uint32(r.buf[r.pos+2])<<8 | uint32(r.buf[r.pos+3])
+		// RFC 9420 §2.1.2 requires rejecting overlong encodings to preserve a
+		// canonical wire format for hashed protocol objects.
+		if v < 16384 {
+			return 0, fmt.Errorf("non-minimal MLS varint encoding: %d encoded in 4 bytes", v)
+		}
 		r.pos += 4
 		return v, nil
 	default:

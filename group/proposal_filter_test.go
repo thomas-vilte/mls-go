@@ -38,23 +38,20 @@ func createValidUpdateProposal(t *testing.T, g *Group, sender LeafNodeIndex) *Pr
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
 	}
 
-	// Create un nuevo LeafNode para el Update
 	leafNode := &keypackages.LeafNode{
 		EncryptionKey:     []byte("new-encryption-key-32bytes-long"),
 		SignatureKey:      cred.SignatureKey,
 		Credential:        cred.Credential,
 		Capabilities:      keypackages.DefaultCapabilities(),
-		Lifetime:          nil, // No lifetime para Update
+		Lifetime:          nil,
 		Extensions:        []keypackages.Extension{},
 		LeafNodeSource:    2, // update
 		ParentHash:        []byte("parent-hash"),
 		SignatureKeyBytes: nil,
 	}
 
-	// Convertir a treesync.LeafNodeData para firmar
 	lnData := keyPackageLeafToTreeSync(leafNode)
 
-	// Firmar con el contexto del grupo
 	tbs := lnData.MarshalTBSWithContext(g.groupContext.GroupID.AsSlice(), uint32(sender))
 	sigPrivKey := ciphersuite.NewSignaturePrivateKey(cred.PrivateKey)
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", tbs)
@@ -124,12 +121,11 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 		},
 	}
 
-	// Create capabilities que soporten todos los tipos de proposals
 	allCapabilities := &keypackages.Capabilities{
 		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
 		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
 		Extensions:       []uint16{},
-		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7}, // Todos los tipos de proposals
+		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7},
 	}
 
 	for _, tt := range tests {
@@ -285,7 +281,6 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 		group.ratchetTree,
 	)
 
-	// Create proposals en orden aleatorio
 	proposals := []FilteredProposal{
 		{Proposal: NewAddProposal(kp), Sender: 0},
 		{Proposal: NewRemoveProposal(1), Sender: 0},
@@ -297,7 +292,6 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 
 	sorted := pf.sortProposals(proposals)
 
-	// Imprimir orden real para debug
 	t.Logf("Sorted order:")
 	for i, p := range sorted {
 		t.Logf("  %d: type=%d sender=%d", i, p.Proposal.Type, p.Sender)
@@ -348,7 +342,6 @@ func TestProposalFilter_SortProposals(t *testing.T) {
 func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	group, kp := createTestGroup(t)
 
-	// Agregar un miembro first
 	newCred, _, err := credentials.GenerateCredentialWithKey([]byte("new"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
@@ -392,12 +385,11 @@ func TestProposalFilter_FilterAndValidateProposals(t *testing.T) {
 	}
 	_ = kp
 
-	// Create capabilities que soporten todos los tipos de proposals
 	allCapabilities := &keypackages.Capabilities{
 		ProtocolVersions: []keypackages.ProtocolVersion{keypackages.MLS10},
 		CipherSuites:     []keypackages.CipherSuite{keypackages.MLS128DHKEMP256},
 		Extensions:       []uint16{},
-		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7}, // Todos los tipos de proposals
+		Proposals:        []uint16{1, 2, 3, 4, 5, 6, 7},
 	}
 
 	filtered, err := pf.FilterAndValidateProposals(proposals, allCapabilities)
@@ -434,7 +426,6 @@ func TestProposalFilter_AddInvalidSignature(t *testing.T) {
 		t.Fatalf("Generate KeyPackage failed: %v", err)
 	}
 
-	// Corromper la firma
 	newKp.Signature[0] ^= 0xFF
 
 	pf := NewProposalFilter(
@@ -469,7 +460,6 @@ func TestProposalFilter_AddInvalidSignature(t *testing.T) {
 func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 	group, kp := createTestGroup(t)
 
-	// Agregar un miembro existente
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("existing"))
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey failed: %v", err)
@@ -488,7 +478,6 @@ func TestProposalFilter_UpdateInvalidSignature(t *testing.T) {
 	updateLeafNode := kp.LeafNode
 	// RFC §7.3: Update proposals must have leaf_node_source = 2 (update)
 	updateLeafNode.LeafNodeSource = 2
-	// Corromper la firma del LeafNode
 	updateLeafNode.Signature[0] ^= 0xFF
 
 	pf := NewProposalFilter(
@@ -637,4 +626,24 @@ func TestProposalFilter_KeyUniqueness(t *testing.T) {
 			t.Fatalf("expected success for unique keys, got: %v", err)
 		}
 	})
+}
+
+func TestExternalSenderCannotSendUpdateProposal(t *testing.T) {
+	group, _ := createTestGroup(t)
+	pf := NewProposalFilter(
+		group.groupContext,
+		group.ownLeafIndex,
+		group.members,
+		group.cipherSuite,
+		group.ratchetTree,
+	)
+	fp := FilteredProposal{
+		Proposal:   createValidUpdateProposal(t, group, group.ownLeafIndex),
+		Sender:     0,
+		IsExternal: true,
+	}
+	err := pf.validateSingleProposal(fp, nil)
+	if err == nil {
+		t.Fatal("expected external update proposal to be rejected")
+	}
 }
