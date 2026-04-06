@@ -6,7 +6,7 @@
 
 Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420).
 
-**Current status:** `v1.0.0` — stable, interop-verified.
+**Current status:** `v1.1.0` — stable, interop-verified.
 
 ## Overview
 
@@ -42,6 +42,11 @@ Main packages:
 - MLS-Exporter (`group.Export`) and EpochAuthenticator
 - External Senders extension (RFC 9420 §12.1.8.1)
 - Proposal revocation by ProposalRef (`Group.RevokeProposal`)
+- RFC 9420 §12.4 enforcement: application data blocked while proposals are pending
+- RFC 9420 §2.1.2 varint canonical encoding: non-minimal encodings rejected
+- RFC 9420 §7.9.2 parent-hash verification during Welcome join
+- RFC 9420 §12.4.3.3 ratchet_tree extension: trailing blank nodes rejected
+- RFC 9420 §12.1.8 external sender proposal type restrictions enforced
 - State serialization with SecretTree generation counters (no nonce reuse on restore)
 - Thread-safe `Client` with per-group mutex striping
 - Cipher suites:
@@ -57,9 +62,21 @@ Verified by Docker-based test suite:
 |---------------|---------|----------------------------------------------------------|
 | mls-go self   | 1, 2, 3 | 21/21 PASS                                               |
 | mlspp cross   | 1, 2, 3 | 21/21 PASS                                               |
-| OpenMLS cross | 1, 2, 3 | 12/12 PASS (subset supported by upstream interop client) |
+| OpenMLS cross | 1, 2, 3 | ⚠️ subset only; upstream drift may break results (see below) |
 
 Scenarios covered: `welcome_join`, `application`, `commit`, `external_join`, `external_proposals`, `reinit`, `branch`.
+
+### OpenMLS Note
+
+OpenMLS cross-interop is **experimental** and limited to a subset of configs
+(`welcome_join`, `application`, `external_join`, `deep_random`). The OpenMLS
+Docker image tracks upstream HEAD without a pinned revision, so results can
+drift after upstream changes. If the OpenMLS cross suite fails, check whether
+the error originates from the OpenMLS interop client (e.g. key-store lookup
+failures) before assuming a regression in mls-go.
+
+See `interop/README.md` for details on the supported subset and known
+unimplemented OpenMLS handlers.
 
 ## Quick Start
 
