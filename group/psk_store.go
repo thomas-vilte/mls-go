@@ -1,6 +1,10 @@
 package group
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/thomas-vilte/mls-go/schedule"
+)
 
 // PSKStore is an interface for resolving Pre-Shared Keys per RFC 9420 §8.4.
 // Applications implement this interface to provide external PSKs.
@@ -27,18 +31,17 @@ func (r *PSKResolver) ResolvePSK(pskID *PskID) ([]byte, error) {
 		return nil, fmt.Errorf("psk_id is nil")
 	}
 
-	switch pskID.PskType {
-	case 1: // External PSK
+	switch schedule.PskType(pskID.PskType) {
+	case schedule.PskTypeExternal:
 		return r.store.GetPSK(pskID.ID)
-	case 2: // Resumption PSK - use compound key (group_id, epoch)
+	case schedule.PskTypeResumption:
 		resumptionKey := make([]byte, len(pskID.PskGroupID)+8)
 		copy(resumptionKey, pskID.PskGroupID)
-		// Convert epoch to big-endian bytes
 		for i := 0; i < 8; i++ {
 			resumptionKey[len(pskID.PskGroupID)+i] = byte(pskID.PskEpoch >> (8 * (7 - i)))
 		}
 		return r.store.GetPSK(resumptionKey)
-	case 3: // Branch PSK (schedule.PskTypeBranch)
+	case schedule.PskTypeBranch:
 		return r.store.GetPSK(pskID.ID)
 	default:
 		return nil, fmt.Errorf("unsupported PSK type: %d", pskID.PskType)
