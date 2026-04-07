@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v1.2.0] - 2026-04-07
+
+[v1.2.0]: https://github.com/thomas-vilte/mls-go/compare/v1.1.0...v1.2.0
+
+In this release, we focused on achieving strict compliance with the RFC 9420 specification for Messaging Layer Security. We introduced a staged commit workflow and strengthened validation across the protocol to ensure higher security and interoperability.
+
+### 🛡️ RFC 9420 Compliance & Security
+
+- We implemented the staged commit workflow as defined in RFC 9420 §14 to improve session state management.
+- We introduced strict validation and replay protection to enhance the security of the protocol implementation.
+- We added comprehensive validation for Welcome messages and TLS variable-length integers to ensure protocol integrity.
+- We enforced strict RFC 9420 compliance across the library to guarantee better interoperability.
+
+### 🔧 Protocol Refinements
+
+- We refined leaf node capabilities and validation logic for more robust group management.
+- We aligned Pre-Shared Key (PSK) types and added usage validation to prevent configuration errors.
+- We updated the joiner secret derivation process to maintain alignment with the latest security standards.
+
 ## [v1.1.0] - 2026-04-04
 
 [v1.1.0]: https://github.com/thomas-vilte/mls-go/compare/v1.0.0...v1.1.0
