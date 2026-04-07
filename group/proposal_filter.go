@@ -268,8 +268,7 @@ func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredPropo
 		if schedule.PskType(pid.PskType) != schedule.PskTypeResumption {
 			continue
 		}
-		switch schedule.ResumptionPSKUsage(pid.Usage) {
-		case schedule.ResumptionUsageReinit:
+		if schedule.ResumptionPSKUsage(pid.Usage) == schedule.ResumptionUsageReinit {
 			// RFC §11.3: usage=reinit MUST only appear with a ReInit proposal in the same commit.
 			if !hasReInit {
 				return fmt.Errorf("resumption PSK with usage=reinit requires a ReInit proposal in the same commit: %w", ErrInvalidProposal)

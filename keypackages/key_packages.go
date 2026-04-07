@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -124,6 +125,29 @@ func DefaultCapabilities() *Capabilities {
 		Proposals:        []uint16{grease},
 		Credentials:      []uint16{0x0001}, // BasicCredential
 	}
+}
+
+// supportedExtensionTypes lists all GroupContext extension types that this
+// implementation can process. Used for RFC §13.4 join-time validation.
+// Kept separate from DefaultCapabilities.Extensions so that applications
+// with strict capability requirements (e.g., Discord DAVE) are not affected
+// by what the library knows how to handle internally.
+var supportedExtensionTypes = []uint16{
+	uint16(mlsext.ExtensionTypeApplicationID),        // 0x0001
+	uint16(mlsext.ExtensionTypeRatchetTree),          // 0x0002
+	uint16(mlsext.ExtensionTypeRequiredCapabilities), // 0x0003
+	uint16(mlsext.ExtensionTypeExternalPub),          // 0x0004
+	uint16(mlsext.ExtensionTypeExternalSenders),      // 0x0005
+	uint16(mlsext.ExtensionTypeLastResort),           // 0x000A
+}
+
+// SupportedExtensionTypes returns the extension types that mls-go can process.
+// Applications may pass this to JoinFromWelcome checks or use it to build
+// a Capabilities struct that honestly reflects implementation support.
+func SupportedExtensionTypes() []uint16 {
+	result := make([]uint16, len(supportedExtensionTypes))
+	copy(result, supportedExtensionTypes)
+	return result
 }
 
 // DefaultLifetime returns a Lifetime valid from 1 hour ago through 90 days from now.
@@ -771,6 +795,14 @@ func (kp *KeyPackage) Validate() error {
 		return errors.New("init_key and encryption_key must be different (RFC §10.1)")
 	}
 
+	// RFC §10.1: "The cipher_suite of the KeyPackage MUST be supported by the
+	// capabilities of the leaf_node." Reject if not listed.
+	if kp.LeafNode.Capabilities != nil {
+		if !slices.Contains(kp.LeafNode.Capabilities.CipherSuites, kp.CipherSuite) {
+			return fmt.Errorf("cipher_suite %d not listed in LeafNode capabilities.cipher_suites (RFC §10.1)", kp.CipherSuite)
+		}
+	}
+
 	if err := kp.LeafNode.Validate(); err != nil {
 		return fmt.Errorf("LeafNode validation failed: %w", err)
 	}
@@ -799,14 +831,7 @@ func (ln *LeafNode) Validate() error {
 	// RFC §7.3: every extension in LeafNode.extensions MUST be declared in capabilities.extensions
 	if ln.Capabilities != nil {
 		for _, ext := range ln.Extensions {
-			declared := false
-			for _, capExt := range ln.Capabilities.Extensions {
-				if uint16(ext.Type) == capExt {
-					declared = true
-					break
-				}
-			}
-			if !declared {
+			if !slices.Contains(ln.Capabilities.Extensions, uint16(ext.Type)) {
 				return fmt.Errorf("extension type 0x%04x not declared in capabilities.extensions (RFC §7.3)",
 					ext.Type)
 			}

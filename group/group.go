@@ -204,6 +204,21 @@ func (g *Group) PendingCommit() *StagedCommit {
 	return g.pendingCommit
 }
 
+// DiscardPendingCommit rolls back a staged commit, returning the group to
+// StateOperational so it can generate a new commit.
+//
+// Per RFC 9420 §14: called when the Delivery Service rejects the commit or a
+// conflicting commit wins the epoch. The pending proposals are preserved —
+// the application should re-commit or clear them as appropriate.
+func (g *Group) DiscardPendingCommit() error {
+	if g.state != StatePendingCommit {
+		return fmt.Errorf("group: no pending commit to discard (state=%d)", g.state)
+	}
+	g.pendingCommit = nil
+	g.state = StateOperational
+	return nil
+}
+
 // LastCommittedProposals returns the list of proposals applied in the last commit.
 func (g *Group) LastCommittedProposals() []*Proposal {
 	if g == nil {
