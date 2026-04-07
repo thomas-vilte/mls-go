@@ -122,7 +122,7 @@ func DefaultCapabilities() *Capabilities {
 		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20},
 		Extensions:       []uint16{grease},
 		Proposals:        []uint16{grease},
-		Credentials:      []uint16{0x0001}, // BasicCredential
+		Credentials:      []uint16{0x0001, 0x0002}, // BasicCredential, X509Credential
 	}
 }
 

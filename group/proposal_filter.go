@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/schedule"
@@ -122,12 +123,19 @@ func (pf *ProposalFilter) validateSingleProposal(
 	switch proposal.Type {
 	case ProposalTypeAdd:
 		if proposal.Add != nil && proposal.Add.KeyPackage != nil && proposal.Add.KeyPackage.LeafNode != nil {
+			ln := proposal.Add.KeyPackage.LeafNode
 			if err := validateCapabilitiesCompatible(
 				pf.cipherSuite,
-				toTreeSyncCapabilities(proposal.Add.KeyPackage.LeafNode.Capabilities),
+				toTreeSyncCapabilities(ln.Capabilities),
 				requiredCaps,
 			); err != nil {
 				return err
+			}
+			// RFC §7.3: the new member's credential type must be supported by all existing members.
+			if ln.Credential != nil {
+				if err := pf.validateCredentialTypeSupported(ln.Credential.CredentialType); err != nil {
+					return err
+				}
 			}
 			// RFC 9420 §12.2: Verify KeyPackage signature in Add proposals
 			if err := proposal.Add.KeyPackage.Verify(pf.cipherSuite); err != nil {
@@ -143,21 +151,28 @@ func (pf *ProposalFilter) validateSingleProposal(
 			return fmt.Errorf("update proposal from non-present leaf %d: %w", fp.Sender, ErrInvalidProposal)
 		}
 		if proposal.Update != nil && proposal.Update.LeafNode != nil {
+			ln := proposal.Update.LeafNode
 			// RFC §7.3: leaf_node_source MUST be update (2) in an Update proposal
-			if proposal.Update.LeafNode.LeafNodeSource != 2 {
+			if ln.LeafNodeSource != 2 {
 				return fmt.Errorf("update proposal leaf_node_source is %d, want 2 (update): %w",
-					proposal.Update.LeafNode.LeafNodeSource, ErrInvalidProposal)
+					ln.LeafNodeSource, ErrInvalidProposal)
 			}
 			if err := validateCapabilitiesCompatible(
 				pf.cipherSuite,
-				toTreeSyncCapabilities(proposal.Update.LeafNode.Capabilities),
+				toTreeSyncCapabilities(ln.Capabilities),
 				requiredCaps,
 			); err != nil {
 				return err
 			}
+			// RFC §7.3: the updated credential type must be supported by all existing members.
+			if ln.Credential != nil {
+				if err := pf.validateCredentialTypeSupported(ln.Credential.CredentialType); err != nil {
+					return err
+				}
+			}
 			// RFC 9420 §12.2, §7.3: Verify LeafNode signature with context
-			ln := keyPackageLeafToTreeSync(proposal.Update.LeafNode)
-			if err := ln.VerifyWithContext(
+			lnTS := keyPackageLeafToTreeSync(ln)
+			if err := lnTS.VerifyWithContext(
 				pf.cipherSuite,
 				pf.groupContext.GroupID.AsSlice(),
 				uint32(fp.Sender),
@@ -255,13 +270,12 @@ func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredPropo
 		}
 		switch schedule.ResumptionPSKUsage(pid.Usage) {
 		case schedule.ResumptionUsageReinit:
+			// RFC §11.3: usage=reinit MUST only appear with a ReInit proposal in the same commit.
 			if !hasReInit {
 				return fmt.Errorf("resumption PSK with usage=reinit requires a ReInit proposal in the same commit: %w", ErrInvalidProposal)
 			}
-		case schedule.ResumptionUsageBranch:
-			// Branch PSKs are only valid in the initial commit of a branched group,
-			// not in regular commits. Reject them here to prevent misuse.
-			return fmt.Errorf("resumption PSK with usage=branch is not valid in a regular commit: %w", ErrInvalidProposal)
+			// usage=branch: valid only in a Branch commit, but ProposalFilter lacks the context
+			// to distinguish branch commits from regular ones — left to the call site.
 		}
 	}
 
@@ -579,6 +593,32 @@ func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapa
 	return nil
 }
 
+// validateCredentialTypeSupported verifies that the given credential type is supported
+// by all existing (non-blank) members of the tree (RFC §7.3).
+// A credential type is "supported" by a member if it appears in their Capabilities.Credentials.
+func (pf *ProposalFilter) validateCredentialTypeSupported(credType credentials.CredentialType) error {
+	for i, node := range pf.tree.Nodes {
+		if node.State != treesync.NodeStatePresent || !treesync.IsLeaf(treesync.NodeIndex(i)) {
+			continue
+		}
+		if node.LeafData == nil || node.LeafData.Capabilities == nil {
+			continue
+		}
+		found := false
+		for _, c := range node.LeafData.Capabilities.Credentials {
+			if credentials.CredentialType(c) == credType {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("credential type %d not supported by member at leaf %d: %w",
+				credType, treesync.LeafIndex(i/2), ErrInvalidProposal)
+		}
+	}
+	return nil
+}
+
 // validateGCEMemberCompatibility checks that all current tree members support any
 // required_capabilities present in the proposed new GroupContext extensions (RFC §12.1.7).
 func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) error {
@@ -588,9 +628,9 @@ func (pf *ProposalFilter) validateGCEMemberCompatibility(newExts []Extension) er
 			var err error
 			reqCaps, err = extensions.UnmarshalRequiredCapabilities(ext.Data)
 			if err != nil {
-				// Unparseable required_capabilities — treat as no requirements
-				// (forward-compatibility: unknown or malformed extension data is skipped).
-				break
+				// RFC §12.1.7: a GCE proposal with unparseable required_capabilities is invalid.
+				return fmt.Errorf("GroupContextExtensions has unparseable required_capabilities: %w: %w",
+					err, ErrInvalidProposal)
 			}
 			break
 		}

@@ -232,36 +232,38 @@ func UnmarshalRequiredCapabilities(data []byte) (*RequiredCapabilitiesExtension,
 		extensions = append(extensions, ExtensionType(ext))
 	}
 
-	// proposals<V>
-	propBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, fmt.Errorf("reading proposals: %w", err)
-	}
-
-	propBuf := tls.NewReader(propBytes)
+	// proposals<V> — optional trailing field; older implementations may omit it.
 	var proposals []uint16
-	for propBuf.Remaining() > 0 {
-		p, err := propBuf.ReadUint16()
+	if buf.Remaining() > 0 {
+		propBytes, err := buf.ReadVLBytes()
 		if err != nil {
-			return nil, fmt.Errorf("reading proposal_type: %w", err)
+			return nil, fmt.Errorf("reading proposals: %w", err)
 		}
-		proposals = append(proposals, p)
+		propBuf := tls.NewReader(propBytes)
+		for propBuf.Remaining() > 0 {
+			p, err := propBuf.ReadUint16()
+			if err != nil {
+				return nil, fmt.Errorf("reading proposal_type: %w", err)
+			}
+			proposals = append(proposals, p)
+		}
 	}
 
-	// credentials<V>
-	credBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, fmt.Errorf("reading credentials: %w", err)
-	}
-
-	credBuf := tls.NewReader(credBytes)
+	// credentials<V> — optional trailing field; older implementations may omit it.
 	var creds []credentials.CredentialType
-	for credBuf.Remaining() > 0 {
-		c, err := credBuf.ReadUint16()
+	if buf.Remaining() > 0 {
+		credBytes, err := buf.ReadVLBytes()
 		if err != nil {
-			return nil, fmt.Errorf("reading credential_type: %w", err)
+			return nil, fmt.Errorf("reading credentials: %w", err)
 		}
-		creds = append(creds, credentials.CredentialType(c))
+		credBuf := tls.NewReader(credBytes)
+		for credBuf.Remaining() > 0 {
+			c, err := credBuf.ReadUint16()
+			if err != nil {
+				return nil, fmt.Errorf("reading credential_type: %w", err)
+			}
+			creds = append(creds, credentials.CredentialType(c))
+		}
 	}
 
 	return &RequiredCapabilitiesExtension{

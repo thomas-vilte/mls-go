@@ -184,5 +184,26 @@ func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error 
 		return fmt.Errorf("signature validation failed: %w", err)
 	}
 
+	// RFC §7.3: every extension type in LeafNode.extensions MUST appear in capabilities.extensions.
+	if leafData.Capabilities != nil {
+		capExts := leafData.Capabilities.Extensions
+		for _, extBytes := range leafData.Extensions {
+			if len(extBytes) < 2 {
+				return fmt.Errorf("extension entry too short (%d bytes)", len(extBytes))
+			}
+			extType := uint16(extBytes[0])<<8 | uint16(extBytes[1])
+			found := false
+			for _, capExt := range capExts {
+				if capExt == extType {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("extension type 0x%04x not declared in capabilities.extensions (RFC §7.3)", extType)
+			}
+		}
+	}
+
 	return nil
 }

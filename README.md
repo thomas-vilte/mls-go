@@ -35,18 +35,28 @@ Main packages:
 - Welcome creation and join-from-Welcome
 - External Join (join without Welcome via GroupInfo)
 - ReInit (group migration to new cipher suite or parameters)
-- PSK proposals and pre-shared key bootstrapping
+- PSK proposals and pre-shared key bootstrapping (External, Resumption, Branch)
 - Branch (group fork from existing state)
 - PrivateMessage protection for application data (with configurable padding)
 - PublicMessage handling for handshake messages
 - MLS-Exporter (`group.Export`) and EpochAuthenticator
 - External Senders extension (RFC 9420 §12.1.8.1)
 - Proposal revocation by ProposalRef (`Group.RevokeProposal`)
-- RFC 9420 §12.4 enforcement: application data blocked while proposals are pending
-- RFC 9420 §2.1.2 varint canonical encoding: non-minimal encodings rejected
-- RFC 9420 §7.9.2 parent-hash verification during Welcome join
-- RFC 9420 §12.4.3.3 ratchet_tree extension: trailing blank nodes rejected
-- RFC 9420 §12.1.8 external sender proposal type restrictions enforced
+- RFC 9420 §2.1.2: MLS varint non-minimal encodings rejected
+- RFC 9420 §7.3: LeafNode extensions must be declared in capabilities; validated on receive
+- RFC 9420 §7.3 / §8.4: full LeafNode validation (lifetime, capabilities, signature) for Add/Update proposals
+- RFC 9420 §7.4.1 / §12.4.3.3: ratchet_tree trailing blank nodes rejected
+- RFC 9420 §7.9.2: parent-hash chain verified when an UpdatePath is committed
+- RFC 9420 §9.2: old HPKE leaf key zeroed when an Update proposal replaces it
+- RFC 9420 §11.1: required_capabilities extension validated for cross-member compatibility
+- RFC 9420 §11.3: Resumption PSK usage=reinit requires a ReInit proposal in the same commit
+- RFC 9420 §12.1.8: external sender proposal type restrictions enforced
+- RFC 9420 §12.4: application data blocked while valid proposals are pending
+- RFC 9420 §12.4.2: received UpdatePath public keys verified against derived path secrets
+- RFC 9420 §12.4.3.1: credential type of Add/Update proposals checked against all members' capabilities
+- RFC 9420 §15.2: AEAD nonce counter limit enforced per sender per epoch
+- Welcome join: ratchet_tree LeafNodes validated; unmerged_leaves references verified
+- Welcome join: PSK store checked before processing; missing PSKs return explicit errors
 - State serialization with SecretTree generation counters (no nonce reuse on restore)
 - Thread-safe `Client` with per-group mutex striping
 - Cipher suites:
@@ -62,7 +72,7 @@ Verified by Docker-based test suite:
 |---------------|---------|----------------------------------------------------------|
 | mls-go self   | 1, 2, 3 | 21/21 PASS                                               |
 | mlspp cross   | 1, 2, 3 | 21/21 PASS                                               |
-| OpenMLS cross | 1, 2, 3 | ⚠️ subset only; upstream drift may break results (see below) |
+| OpenMLS cross | 1, 2, 3 | 12/12 PASS (subset; sequential mode required — see below) |
 
 Scenarios covered: `welcome_join`, `application`, `commit`, `external_join`, `external_proposals`, `reinit`, `branch`.
 
