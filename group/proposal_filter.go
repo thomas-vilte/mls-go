@@ -8,6 +8,7 @@ import (
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
@@ -238,6 +239,30 @@ func (pf *ProposalFilter) validateProposalCombinations(proposals []FilteredPropo
 	// RFC §12.2: ReInit is incompatible with other types (except PreSharedKey)
 	if hasReInit && hasOther {
 		return fmt.Errorf("reinit incompatible with other proposal types: %w", ErrInvalidProposal)
+	}
+
+	// RFC §11.2 / §11.3: validate Resumption PSK usage context.
+	//   - usage == reinit: MUST only appear when there is exactly one ReInit proposal.
+	//   - usage == branch: MUST NOT appear in a normal commit (only valid in the
+	//     first commit of a branched group, which is handled at the Branch call site).
+	for _, fp := range proposals {
+		if fp.Proposal.Type != ProposalTypePreSharedKey || fp.Proposal.PreSharedKey == nil {
+			continue
+		}
+		pid := fp.Proposal.PreSharedKey.PskID
+		if schedule.PskType(pid.PskType) != schedule.PskTypeResumption {
+			continue
+		}
+		switch schedule.ResumptionPSKUsage(pid.Usage) {
+		case schedule.ResumptionUsageReinit:
+			if !hasReInit {
+				return fmt.Errorf("resumption PSK with usage=reinit requires a ReInit proposal in the same commit: %w", ErrInvalidProposal)
+			}
+		case schedule.ResumptionUsageBranch:
+			// Branch PSKs are only valid in the initial commit of a branched group,
+			// not in regular commits. Reject them here to prevent misuse.
+			return fmt.Errorf("resumption PSK with usage=branch is not valid in a regular commit: %w", ErrInvalidProposal)
+		}
 	}
 
 	return nil

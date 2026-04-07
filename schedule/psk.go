@@ -47,6 +47,27 @@ const (
 	PskTypeBranch PskType = 0x03
 )
 
+// ResumptionPSKUsage identifies the context in which a Resumption PSK is used (RFC 9420 §11.2).
+//
+//	enum {
+//	    application(1),
+//	    reinit(2),
+//	    branch(3),
+//	    (255)
+//	} ResumptionPSKUsage;
+type ResumptionPSKUsage uint8
+
+const (
+	// ResumptionUsageApplication is used in normal epoch advancement.
+	ResumptionUsageApplication ResumptionPSKUsage = 0x01
+	// ResumptionUsageReinit is used when restarting a group (ReInit).
+	// MUST only appear alongside a ReInit proposal in the same commit.
+	ResumptionUsageReinit ResumptionPSKUsage = 0x02
+	// ResumptionUsageBranch is used when branching a sub-group.
+	// MUST only appear in a branching context (not in normal commits).
+	ResumptionUsageBranch ResumptionPSKUsage = 0x03
+)
+
 // Psk represents a Pre-Shared Key as defined in RFC 9420 §8.4.
 //
 // PSKs can be:
