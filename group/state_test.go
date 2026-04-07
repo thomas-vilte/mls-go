@@ -212,6 +212,93 @@ func TestUnmarshalGroupState_FailsOnTreeHashMismatch(t *testing.T) {
 	}
 }
 
+// TestUnmarshalGroupState_RebuildsProposalByRef is a regression test for a bug
+// where UnmarshalGroupState restored stored proposals into g.proposals (the slice)
+// but not into g.proposalByRef (the lookup map). Any commit received after a
+// state restore would fail with "unknown proposal reference in commit" because
+// the by-ref index was always initialized empty.
+func TestUnmarshalGroupState_RebuildsProposalByRef(t *testing.T) {
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+
+	// Add a third member (Carol) so we have a pending proposal to store.
+	carolCred, _, err := credentials.GenerateCredentialWithKey([]byte("Carol"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Carol): %v", err)
+	}
+	carolKP, carolPriv, err := keypackages.Generate(carolCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Carol): %v", err)
+	}
+
+	// Add Carol as a pending proposal (but do NOT commit yet).
+	if _, err := aliceGroup.AddMember(carolKP); err != nil {
+		t.Fatalf("AddMember(Carol): %v", err)
+	}
+
+	// Verify a proposal is stored before serialization.
+	if len(aliceGroup.proposals.Proposals) == 0 {
+		t.Fatal("expected at least 1 stored proposal before serialization")
+	}
+
+	// AddMember stores proposals inline without a ProposalRef hash (only the
+	// network-receive path via ProcessPublicMessage → StoreProposal →
+	// ComputeProposalRef populates Ref). Assign a synthetic ref to simulate
+	// that path so we can verify that UnmarshalGroupState rebuilds the
+	// proposalByRef lookup index from the serialized proposals.
+	fakeRef := make([]byte, 32)
+	copy(fakeRef, []byte("regression-proposalbyref-rebuild"))
+	aliceGroup.proposals.Proposals[0].Ref = fakeRef
+	aliceGroup.proposalByRef[string(fakeRef)] = aliceGroup.proposals.Proposals[0].Proposal
+	ref := fakeRef
+
+	// Serialize.
+	data, err := aliceGroup.MarshalState()
+	if err != nil {
+		t.Fatalf("MarshalState: %v", err)
+	}
+
+	// Deserialize.
+	restored, err := UnmarshalGroupState(data)
+	if err != nil {
+		t.Fatalf("UnmarshalGroupState: %v", err)
+	}
+
+	// The proposalByRef index must have been rebuilt.
+	if _, ok := restored.proposalByRef[string(ref)]; !ok {
+		t.Fatalf("proposalByRef does not contain the restored proposal ref — regression: UnmarshalGroupState does not rebuild proposalByRef index")
+	}
+
+	// The restored group must be able to create a commit that references the
+	// stored proposal by hash (the operation that was failing in production).
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	aliceSigPub := aliceSigPriv.PublicKey()
+	sc, err := restored.Commit(aliceSigPriv, aliceSigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit on restored group failed: %v — proposalByRef index may not be rebuilt correctly", err)
+	}
+	if err := restored.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit on restored group: %v", err)
+	}
+
+	// Verify Carol can join using the Welcome produced from the restored group.
+	joinerSecret := sc.JoinerSecret()
+	welcome, err := restored.CreateWelcomeWithOptions([]*keypackages.KeyPackage{carolKP}, CreateWelcomeOptions{
+		JoinerSecret:  joinerSecret,
+		SignerPrivKey: aliceSigPriv,
+		StagedCommit:  sc,
+	})
+	if err != nil {
+		t.Fatalf("CreateWelcomeWithOptions: %v", err)
+	}
+	carolGroup, err := JoinFromWelcome(welcome, carolKP, carolPriv, nil)
+	if err != nil {
+		t.Fatalf("JoinFromWelcome(Carol): %v", err)
+	}
+	if carolGroup.epoch.AsUint64() != restored.epoch.AsUint64() {
+		t.Errorf("epoch mismatch: carol=%d alice=%d", carolGroup.epoch.AsUint64(), restored.epoch.AsUint64())
+	}
+}
+
 func TestUnmarshalGroupState_FailsOnOwnLeafOutOfBounds(t *testing.T) {
 	credAlice, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
 	kpAlice, privAlice, _ := keypackages.Generate(credAlice, keypackages.MLS128DHKEMP256)
