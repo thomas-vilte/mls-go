@@ -139,10 +139,16 @@ func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading tree hash: %w", err)
 	}
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(treeHash) > 0 && len(treeHash) != nh {
+		return nil, fmt.Errorf("tree_hash length %d != Nh (%d) for cipher suite %d (RFC §7.8)", len(treeHash), nh, cipherSuite)
+	}
 
 	confirmedTranscriptHash, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading confirmed transcript hash: %w", err)
+	}
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(confirmedTranscriptHash) > 0 && len(confirmedTranscriptHash) != nh {
+		return nil, fmt.Errorf("confirmed_transcript_hash length %d != Nh (%d) for cipher suite %d (RFC §8.2)", len(confirmedTranscriptHash), nh, cipherSuite)
 	}
 
 	extensionsData, err := r.ReadVLBytes()

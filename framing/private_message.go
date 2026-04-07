@@ -213,7 +213,7 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 
 	// XOR nonce[:4] with ReuseGuard (RFC §6.3.1)
 	guard := rg.AsSlice()
-	for i := 0; i < ciphersuite.ReuseGuardBytes; i++ {
+	for i := range ciphersuite.ReuseGuardBytes {
 		contentNonce[i] ^= guard[i]
 	}
 
@@ -360,7 +360,7 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 			}
 		}
 
-		for i := 0; i < ciphersuite.ReuseGuardBytes; i++ {
+		for i := range ciphersuite.ReuseGuardBytes {
 			nonce[i] ^= senderData.ReuseGuard[i]
 		}
 
@@ -386,6 +386,11 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: content: %v", ErrDecryptionFailed, err)
+	}
+
+	// RFC 9420 §9.2: mark generation as consumed to reject replays.
+	if replayErr := leaf.MarkGenerationUsed(senderData.Generation); replayErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, replayErr)
 	}
 
 	// Parse body + auth from PrivateMessageContent

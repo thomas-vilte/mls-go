@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	mlsext "github.com/thomas-vilte/mls-go/extensions"
@@ -236,9 +237,15 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(treeHash) > 0 && len(treeHash) != nh {
+		return nil, fmt.Errorf("tree_hash length %d != Nh (%d) (RFC §7.8)", len(treeHash), nh)
+	}
 	confirmedTranscriptHash, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(confirmedTranscriptHash) > 0 && len(confirmedTranscriptHash) != nh {
+		return nil, fmt.Errorf("confirmed_transcript_hash length %d != Nh (%d) (RFC §8.2)", len(confirmedTranscriptHash), nh)
 	}
 	gcExtensionsData, err := r.ReadVLBytes()
 	if err != nil {
@@ -271,6 +278,9 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	confirmationTag, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(confirmationTag) > 0 && len(confirmationTag) != nh {
+		return nil, fmt.Errorf("confirmation_tag length %d != Nh (%d) (RFC §8.2)", len(confirmationTag), nh)
 	}
 
 	signer, err := r.ReadUint32()
@@ -699,7 +709,6 @@ func JoinFromWelcomeWithContext(
 	}
 	var psks []schedule.Psk
 	for _, pskRef := range groupSecrets.Psks {
-
 		var pskBytes []byte
 		var ok bool
 
@@ -878,6 +887,18 @@ func JoinFromWelcomeWithContext(
 
 	// Initialize GroupContext from GroupInfo
 	groupContext := groupInfo.GroupContext
+
+	// RFC §13.4: a joiner MUST verify that it supports every extension in the GroupContext.
+	// We check against the library's implemented extension types (not the leaf node's
+	// declared capabilities), because capabilities.Extensions reflects what the application
+	// chooses to advertise — not what the library can process. Decoupling these lets
+	// protocol-specific clients (e.g., Discord DAVE) keep minimal capabilities while still
+	// benefiting from proper join-time extension validation.
+	for _, ext := range groupContext.Extensions {
+		if !slices.Contains(keypackages.SupportedExtensionTypes(), uint16(ext.Type)) {
+			return nil, fmt.Errorf("joiner does not support GroupContext extension type 0x%04x (RFC §13.4)", uint16(ext.Type))
+		}
+	}
 
 	// Advance key schedule from joiner_secret provided by Welcome.
 	keySchedule := schedule.NewKeySchedule(

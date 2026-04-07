@@ -113,6 +113,10 @@ type LeafSecret struct {
 	// out-of-order decryption. Entries are evicted when the cache exceeds
 	// maxCachedGenerations to bound memory usage.
 	secretCache map[uint32]*cachedGenSecret
+	// usedGenerations tracks which generations have already been decrypted.
+	// RFC 9420 §9.2: "A receiver MUST NOT accept a message with a generation
+	// that it has already processed."
+	usedGenerations map[uint32]struct{}
 }
 
 // NewTree creates a new secret tree from an encryption secret and cipher suite.
@@ -589,6 +593,21 @@ func (ls *LeafSecret) NextSequenceNumber() uint64 {
 	seq := ls.sequenceNumber
 	ls.sequenceNumber++
 	return seq
+}
+
+// MarkGenerationUsed records that generation gen has been consumed for decryption.
+// Returns an error if the generation was already used (replay detected).
+// RFC 9420 §9.2: receivers MUST NOT accept a message with a generation that was
+// already processed.
+func (ls *LeafSecret) MarkGenerationUsed(gen uint32) error {
+	if ls.usedGenerations == nil {
+		ls.usedGenerations = make(map[uint32]struct{})
+	}
+	if _, already := ls.usedGenerations[gen]; already {
+		return fmt.Errorf("replay detected: generation %d already processed for leaf %d", gen, ls.leafIndex)
+	}
+	ls.usedGenerations[gen] = struct{}{}
+	return nil
 }
 
 // SetSequenceNumber sets the sequence number.

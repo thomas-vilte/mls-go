@@ -74,17 +74,10 @@ type PskID struct {
 // This allows changing the group's protocol version, cipher suite, or extensions
 // while preserving the group's membership through resumption secrets.
 type ReInitProposal struct {
-	GroupID       []byte
-	Version       keypackages.ProtocolVersion
-	CipherSuite   keypackages.CipherSuite
-	Extensions    []Extension
-	Confirmations []Confirmation
-}
-
-// Confirmation contains a member's confirmation tag for ReInit per RFC 9420 §12.1.5.
-type Confirmation struct {
-	LeafIndex LeafNodeIndex
-	Tag       []byte
+	GroupID     []byte
+	Version     keypackages.ProtocolVersion
+	CipherSuite keypackages.CipherSuite
+	Extensions  []Extension
 }
 
 // ExternalInitProposal allows external joiners to enter per RFC 9420 §12.1.6.
