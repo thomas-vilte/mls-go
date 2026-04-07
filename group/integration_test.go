@@ -53,27 +53,19 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 	if _, err = aliceGroup.AddMember(bob.kp); err != nil {
 		t.Fatalf("AddMember(bob): %v", err)
 	}
-	// Capture key schedule material before merge.
-	initSecret := aliceGroup.epochSecrets.InitSecret.Clone()
 	sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	pathSecret := []byte(nil)
-	if sc.rootPathSecret != nil {
-		pathSecret = append([]byte(nil), sc.rootPathSecret.AsSlice()...)
-	}
-	joinerSecret, err := initSecret.HKDFExtract(ciphersuite.NewSecret(pathSecret))
-	if err != nil {
-		t.Fatalf("computing joiner secret: %v", err)
-	}
+	// Use the real joiner_secret from the StagedCommit (RFC 9420 §8).
+	joinerSecret := sc.JoinerSecret()
 	if err = aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit: %v", err)
 	}
 	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bob.kp}, CreateWelcomeOptions{
 		JoinerSecret:  joinerSecret,
-		PathSecret:    pathSecret,
 		SignerPrivKey: alice.sigPriv,
+		StagedCommit:  sc,
 	})
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)

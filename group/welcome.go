@@ -706,26 +706,30 @@ func JoinFromWelcomeWithContext(
 		case 2: // Resumption PSK: lookup by compound key (group_id, epoch)
 			resumptionKey := ResumptionPskCacheKey(pskRef.PskGroupID, pskRef.PskEpoch)
 			pskBytes, ok = externalPsks[resumptionKey]
-			if ok {
-				psks = append(psks, schedule.Psk{
-					PskType:    schedule.PskType(pskRef.PskType),
-					PskNonce:   pskRef.Nonce,
-					Psk:        pskBytes,
-					Usage:      pskRef.Usage,
-					PskGroupID: pskRef.PskGroupID,
-					PskEpoch:   pskRef.PskEpoch,
-				})
+			if !ok {
+				// RFC §12.4.3.1: if any required PSK is unavailable, return an error
+				return nil, fmt.Errorf("missing resumption PSK for group=%x epoch=%d", pskRef.PskGroupID, pskRef.PskEpoch)
 			}
+			psks = append(psks, schedule.Psk{
+				PskType:    schedule.PskType(pskRef.PskType),
+				PskNonce:   pskRef.Nonce,
+				Psk:        pskBytes,
+				Usage:      pskRef.Usage,
+				PskGroupID: pskRef.PskGroupID,
+				PskEpoch:   pskRef.PskEpoch,
+			})
 		default: // External (1) or Branch (3) PSK: lookup by ID
 			pskBytes, ok = externalPsks[string(pskRef.ID)]
-			if ok {
-				psks = append(psks, schedule.Psk{
-					PskType:  schedule.PskType(pskRef.PskType),
-					PskID:    pskRef.ID,
-					PskNonce: pskRef.Nonce,
-					Psk:      pskBytes,
-				})
+			if !ok {
+				// RFC §12.4.3.1: if any required PSK is unavailable, return an error
+				return nil, fmt.Errorf("missing PSK with ID=%x", pskRef.ID)
 			}
+			psks = append(psks, schedule.Psk{
+				PskType:  schedule.PskType(pskRef.PskType),
+				PskID:    pskRef.ID,
+				PskNonce: pskRef.Nonce,
+				Psk:      pskBytes,
+			})
 		}
 	}
 
@@ -781,8 +785,11 @@ func JoinFromWelcomeWithContext(
 	welcome.GroupInfo = groupInfo
 
 	// Reconstruct ratchet tree: first look for ratchet_tree extension,
-	// otherwise use the tree in memory (for tests), otherwise create empty tree
+	// otherwise use the tree in memory (for tests), otherwise create empty tree.
+	// treeFromExtension tracks whether we obtained the tree from the GroupInfo extension,
+	// which is required for the RFC §12.4.3.1 tree_hash verification.
 	ratchetTree := groupInfo.RatchetTree
+	treeFromExtension := ratchetTree != nil
 	var ratchetTreeParseErr error
 	for _, ext := range groupInfo.Extensions {
 		if ext.Type == mlsext.ExtensionTypeRatchetTree {
@@ -793,6 +800,7 @@ func JoinFromWelcomeWithContext(
 				// indexing. Expand unconditionally; TreeHashMinimal stays unchanged.
 				parsed = parsed.ExpandToPowerOf2()
 				ratchetTree = parsed
+				treeFromExtension = true
 				break
 			}
 			ratchetTreeParseErr = parseErr
@@ -805,27 +813,25 @@ func JoinFromWelcomeWithContext(
 		ratchetTree = treesync.NewRatchetTree(1, groupInfo.GroupContext.CipherSuite)
 	}
 	groupInfo.RatchetTree = ratchetTree
-	// RFC 9420 §7.9.2 / §12.4.3.1 requires a joiner to validate the parent-hash
-	// chain for the committer represented by GroupInfo.signer.
-	if signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer)); signerLeaf != nil && signerLeaf.State == treesync.NodeStatePresent {
-		if err := ratchetTree.VerifyParentHashes(treesync.LeafIndex(groupInfo.Signer)); err != nil {
-			return nil, fmt.Errorf("welcome parent hash verification failed for signer leaf %d: %w", groupInfo.Signer, err)
+
+	// RFC §12.4.3.1: verify that the tree_hash of the ratchet tree matches GroupInfo.
+	// Only checked when the tree was provided (via extension or pre-populated); if the
+	// caller did not supply a tree, they are responsible for fetching and verifying it.
+	if treeFromExtension {
+		computedTreeHash := ratchetTree.TreeHash()
+		if !bytes.Equal(computedTreeHash, groupInfo.GroupContext.TreeHash) {
+			return nil, fmt.Errorf("ratchet tree hash mismatch: computed=%x want=%x",
+				computedTreeHash, groupInfo.GroupContext.TreeHash)
 		}
 	}
 
-	// Verify GroupInfo signature when the signer leaf is available in the tree.
-	// Use SigKeyBytes() to support both ECDSA (stored in SignatureKey) and Ed25519 (stored in SignatureKeyRaw).
-	// Use the cipher suite's SignatureScheme() to select the correct algorithm.
-	signerLeaf := ratchetTree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
-	if signerLeaf != nil && signerLeaf.LeafData != nil {
-		rawKey := signerLeaf.LeafData.SigKeyBytes()
-		if len(rawKey) > 0 {
-			cs := groupInfo.GroupContext.CipherSuite
-			pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
-			sig := ciphersuite.NewSignature(groupInfo.Signature)
-			if verifyErr := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); verifyErr != nil {
-				return nil, fmt.Errorf("invalid group info signature: %w", verifyErr)
-			}
+	// RFC §12.4.3.1: verify GroupInfo signature using the signer's leaf from the tree.
+	// Only verifiable when the ratchet tree was provided (via extension or pre-populated);
+	// if the caller supplied no tree, they are responsible for verifying the signature
+	// using an externally fetched ratchet tree.
+	if treeFromExtension {
+		if err := verifyGroupInfoSignature(groupInfo, ratchetTree); err != nil {
+			return nil, err
 		}
 	}
 
@@ -855,6 +861,16 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
+	// RFC §12.4.3.1: verify the confirmation_tag using the derived confirmation_key.
+	expectedConfTag := schedule.ComputeConfirmationTag(
+		welcome.CipherSuite,
+		epochSecrets.ConfirmationKey.AsSlice(),
+		groupContext.ConfirmedTranscriptHash,
+	)
+	if !ciphersuite.EqualCT(expectedConfTag, groupInfo.ConfirmationTag) {
+		return nil, fmt.Errorf("welcome confirmation_tag mismatch: derived key does not match GroupInfo")
+	}
+
 	// Determine OwnLeafIndex by looking for our key in the tree.
 	// It searches by LeafNode.EncryptionKey (TreeKEM key of the leaf), which may differ
 	// from the InitKey of the KeyPackage (HPKE key for the Welcome).
@@ -863,14 +879,22 @@ func JoinFromWelcomeWithContext(
 	if len(leafEncKey) == 0 {
 		leafEncKey = myKeyPackage.InitKey
 	}
+	ownLeafFound := false
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil {
 			if bytes.Equal(leaf.LeafData.EncryptionKey, leafEncKey) {
 				ownLeafIndex = LeafNodeIndex(i)
+				ownLeafFound = true
 				break
 			}
 		}
+	}
+	// RFC §12.4.3.1: must find a leaf matching our KeyPackage; error if the tree was
+	// provided but our leaf is absent. When no tree was provided (fallback), the
+	// joiner must validate via the external ratchet tree they supply later.
+	if treeFromExtension && !ownLeafFound {
+		return nil, fmt.Errorf("own leaf not found in ratchet tree: KeyPackage not present in Welcome")
 	}
 	// Create Group
 	group := &Group{
@@ -960,6 +984,16 @@ func JoinFromWelcomeWithContext(
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
+			// RFC §12.4.3.1: validate every non-blank LeafNode per §7.3 when the real
+			// ratchet tree was provided. Use context-aware signature check (group_id +
+			// leaf_index) for update/commit leaves. Lifetime is not checked here since
+			// existing group members' leaves may have been issued in a past epoch.
+			if treeFromExtension {
+				if err := treesync.ValidateLeafNodeStructureWithContext(leaf.LeafData, welcome.CipherSuite,
+					groupContext.GroupID.AsSlice(), uint32(i)); err != nil {
+					return nil, fmt.Errorf("invalid leaf node at index %d: %w", i, err)
+				}
+			}
 			leafIdx := LeafNodeIndex(i)
 			group.members[leafIdx] = &Member{
 				LeafIndex:  leafIdx,

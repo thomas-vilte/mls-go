@@ -38,7 +38,7 @@ func (r *PSKResolver) ResolvePSK(pskID *PskID) ([]byte, error) {
 			resumptionKey[len(pskID.PskGroupID)+i] = byte(pskID.PskEpoch >> (8 * (7 - i)))
 		}
 		return r.store.GetPSK(resumptionKey)
-	case 3: // Branch PSK
+	case 3: // Branch PSK (schedule.PskTypeBranch)
 		return r.store.GetPSK(pskID.ID)
 	default:
 		return nil, fmt.Errorf("unsupported PSK type: %d", pskID.PskType)

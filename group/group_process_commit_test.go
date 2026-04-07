@@ -67,22 +67,13 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("MergeCommit: %v", err)
 	}
 
-	// Create Welcome for Bob
-	initSecret := aliceGroup.epochSecrets.InitSecret.Clone()
-	var pathSecret []byte
-	if stagedCommit.rootPathSecret != nil {
-		pathSecret = stagedCommit.rootPathSecret.AsSlice()
-	}
-
-	joinerSecret, err := initSecret.HKDFExtract(ciphersuite.NewSecret(pathSecret))
-	if err != nil {
-		t.Fatalf("HKDFExtract joiner secret: %v", err)
-	}
+	// Create Welcome for Bob using the real joiner_secret from the StagedCommit (RFC 9420 §8).
+	joinerSecret := stagedCommit.JoinerSecret()
 
 	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
 		JoinerSecret:  joinerSecret,
-		PathSecret:    pathSecret,
 		SignerPrivKey: aliceSigPriv,
+		StagedCommit:  stagedCommit,
 	})
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
@@ -120,14 +111,25 @@ func TestCreateWelcomeWithOptions(t *testing.T) {
 	}
 
 	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
-	joinerSecret, err := ciphersuite.NewSecretRandomCS(aliceGroup.cipherSuite)
+	aliceSigPub := aliceSigPriv.PublicKey()
+
+	// Add Bob and commit so we have a real joiner_secret for the Welcome.
+	if _, err := aliceGroup.AddMember(bobKP); err != nil {
+		t.Fatalf("AddMember(Bob2): %v", err)
+	}
+	sc, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
 	if err != nil {
-		t.Fatalf("NewSecretRandomCS: %v", err)
+		t.Fatalf("Commit: %v", err)
+	}
+	joinerSecret := sc.JoinerSecret()
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit: %v", err)
 	}
 
 	welcomeFromOptions, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
 		JoinerSecret:  joinerSecret,
 		SignerPrivKey: aliceSigPriv,
+		StagedCommit:  sc,
 	})
 	if err != nil {
 		t.Fatalf("CreateWelcomeWithOptions: %v", err)

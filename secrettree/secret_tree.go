@@ -573,6 +573,17 @@ func (ls *LeafSecret) Nonce(seqNum uint64) ([]byte, error) {
 	return ls.ApplicationNonce(uint32(seqNum))
 }
 
+// maxAEADSequence is the maximum AEAD nonce counter for AES-GCM (2^32 − 1).
+// Exceeding this risks nonce reuse per NIST SP 800-38D and RFC 9420 §15.2.
+const maxAEADSequence uint64 = (1 << 32) - 1
+
+// IsSequenceExhausted reports whether the next send would exceed the AEAD
+// nonce limit, which would cause nonce reuse and break security guarantees.
+// Callers must advance the epoch (commit) before sending if this returns true.
+func (ls *LeafSecret) IsSequenceExhausted() bool {
+	return ls.sequenceNumber > maxAEADSequence
+}
+
 // NextSequenceNumber returns the current sequence number and increments it.
 func (ls *LeafSecret) NextSequenceNumber() uint64 {
 	seq := ls.sequenceNumber

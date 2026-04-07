@@ -183,6 +183,10 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("framing: getting leaf secret: %w", err)
 	}
+	// RFC §15.2: refuse to send if the AEAD nonce counter is exhausted
+	if leaf.IsSequenceExhausted() {
+		return nil, fmt.Errorf("framing: AEAD sequence number exhausted — must advance epoch before sending")
+	}
 	seqNum := leaf.NextSequenceNumber()
 
 	var contentKey []byte

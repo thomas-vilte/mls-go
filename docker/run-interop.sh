@@ -11,6 +11,13 @@ SUITES="${SUITES:-1 2 3}"
 RUN_STRESS="${RUN_STRESS:-}"
 WAIT_SECS="${WAIT_SECS:-8}"
 CROSS_TARGET="${CROSS_TARGET:-mlspp}"
+# SEQUENTIAL=1 runs one cipher suite at a time instead of all in parallel.
+# Required for targets that don't handle concurrent gRPC connections well (e.g. OpenMLS).
+# Automatically enabled when CROSS_TARGET=openmls.
+SEQUENTIAL="${SEQUENTIAL:-}"
+if [ "$CROSS_TARGET" = "openmls" ]; then
+    SEQUENTIAL=1
+fi
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -92,33 +99,44 @@ run_mode() {
         -e CLIENT_A="$client_a" \
         -e CLIENT_B="$client_b" \
         -e KIND="$kind" \
+        -e SEQUENTIAL="$SEQUENTIAL" \
         --entrypoint /bin/sh test-runner -c '
 set -eu
 
-# One parallel worker per suite; configs run sequentially inside each worker.
-for suite in $SUITES; do
-  (
-    for cfg in $CONFIGS; do
-      log="/tmp/${KIND}-s${suite}-${cfg}.log"
-      res="/tmp/${KIND}-s${suite}-${cfg}.result"
-      if /test-runner \
-          -client "$CLIENT_A" \
-          -client "$CLIENT_B" \
-          -suite  "$suite" \
-          -fail-fast \
-          -config "/configs/${cfg}.json" \
-          >"$log" 2>&1
-      then
-        printf PASS > "$res"
-      else
-        printf FAIL > "$res"
-      fi
-    done
-  ) &
-done
+run_suite() {
+  suite="$1"
+  for cfg in $CONFIGS; do
+    log="/tmp/${KIND}-s${suite}-${cfg}.log"
+    res="/tmp/${KIND}-s${suite}-${cfg}.result"
+    if /test-runner \
+        -client "$CLIENT_A" \
+        -client "$CLIENT_B" \
+        -suite  "$suite" \
+        -fail-fast \
+        -config "/configs/${cfg}.json" \
+        >"$log" 2>&1
+    then
+      printf PASS > "$res"
+    else
+      printf FAIL > "$res"
+    fi
+  done
+}
 
-# Wait for all suite workers to finish.
-wait
+if [ -n "$SEQUENTIAL" ]; then
+  # Sequential mode: one suite at a time. Required for targets that do not
+  # handle concurrent gRPC connections well (e.g. OpenMLS).
+  for suite in $SUITES; do
+    run_suite "$suite"
+  done
+else
+  # Parallel mode: one background worker per suite. ~3x faster for targets
+  # that support concurrent connections (e.g. mlspp, mls-go self).
+  for suite in $SUITES; do
+    run_suite "$suite" &
+  done
+  wait
+fi
 
 # Print results in deterministic order and tally.
 passed=0

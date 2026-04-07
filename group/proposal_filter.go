@@ -174,6 +174,12 @@ func (pf *ProposalFilter) validateSingleProposal(
 				return fmt.Errorf("removing non-existent member at index %d: %w",
 					proposal.Remove.Removed, ErrInvalidProposal)
 			}
+			// RFC §12.1.3: Remove is invalid if the removed field is a blank leaf
+			leaf := pf.tree.GetLeaf(treesync.LeafIndex(proposal.Remove.Removed))
+			if leaf == nil || leaf.State != treesync.NodeStatePresent {
+				return fmt.Errorf("remove proposal targets blank or missing leaf %d: %w",
+					proposal.Remove.Removed, ErrInvalidProposal)
+			}
 		}
 
 	case ProposalTypePreSharedKey:
@@ -183,6 +189,15 @@ func (pf *ProposalFilter) validateSingleProposal(
 			if len(proposal.PreSharedKey.PskID.Nonce) != nh {
 				return fmt.Errorf("PSK nonce length %d, want %d (KDF.Nh): %w",
 					len(proposal.PreSharedKey.PskID.Nonce), nh, ErrInvalidProposal)
+			}
+		}
+
+	case ProposalTypeReInit:
+		// RFC §12.1.5: ReInit version MUST NOT be less than the current group version
+		if proposal.ReInit != nil && pf.groupContext != nil {
+			if proposal.ReInit.Version < pf.groupContext.Version {
+				return fmt.Errorf("reinit version %d is less than current group version %d: %w",
+					proposal.ReInit.Version, pf.groupContext.Version, ErrInvalidProposal)
 			}
 		}
 

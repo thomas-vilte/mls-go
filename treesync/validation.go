@@ -85,6 +85,69 @@ func ValidateLeafNodeCapabilities(caps *LeafNodeCapabilities) error {
 	return nil
 }
 
+// ValidateLeafNodeStructureWithContext validates the structural properties of a
+// LeafNode (key presence, credential, capabilities, signature) with group context,
+// but does NOT check the leaf lifetime. Use this when validating existing group
+// members' leaves (e.g. during Welcome processing), where expired lifetimes cannot
+// be rejected since the joiner cannot choose group membership.
+func ValidateLeafNodeStructureWithContext(leafData *LeafNodeData, cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
+	if leafData == nil {
+		return errors.New("leaf node is nil")
+	}
+	if len(leafData.EncryptionKey) == 0 {
+		return errors.New("encryption_key is empty")
+	}
+	if len(leafData.SigKeyBytes()) == 0 {
+		return errors.New("signature_key is empty")
+	}
+	if leafData.Credential == nil {
+		return errors.New("credential is nil")
+	}
+	if err := leafData.Credential.Validate(); err != nil {
+		return fmt.Errorf("credential validation failed: %w", err)
+	}
+	if err := ValidateLeafNodeCapabilities(leafData.Capabilities); err != nil {
+		return fmt.Errorf("capabilities validation failed: %w", err)
+	}
+	if err := leafData.VerifyWithContext(cs, groupID, leafIndex); err != nil {
+		return fmt.Errorf("signature validation failed: %w", err)
+	}
+	return nil
+}
+
+// ValidateLeafNodeWithContext performs comprehensive validation of a LeafNode
+// including a context-aware signature check. Use this for leaves with
+// leaf_node_source == update (2) or commit (3), which include group_id and
+// leaf_index in the signed TBS per RFC 9420 §7.2.
+// For key_package leaves (source == 1), pass (nil, 0) or use ValidateLeafNode.
+func ValidateLeafNodeWithContext(leafData *LeafNodeData, cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
+	if leafData == nil {
+		return errors.New("leaf node is nil")
+	}
+	if len(leafData.EncryptionKey) == 0 {
+		return errors.New("encryption_key is empty")
+	}
+	if len(leafData.SigKeyBytes()) == 0 {
+		return errors.New("signature_key is empty")
+	}
+	if leafData.Credential == nil {
+		return errors.New("credential is nil")
+	}
+	if err := leafData.Credential.Validate(); err != nil {
+		return fmt.Errorf("credential validation failed: %w", err)
+	}
+	if err := ValidateLeafNodeCapabilities(leafData.Capabilities); err != nil {
+		return fmt.Errorf("capabilities validation failed: %w", err)
+	}
+	if err := ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
+		return fmt.Errorf("lifetime validation failed: %w", err)
+	}
+	if err := leafData.VerifyWithContext(cs, groupID, leafIndex); err != nil {
+		return fmt.Errorf("signature validation failed: %w", err)
+	}
+	return nil
+}
+
 // ValidateLeafNode performs comprehensive validation of a LeafNode.
 func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error {
 	if leafData == nil {
@@ -95,8 +158,10 @@ func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error 
 		return errors.New("encryption_key is empty")
 	}
 
-	if leafData.SignatureKey == nil {
-		return errors.New("signature_key is nil")
+	// RFC §7.3: signature_key must be present. Use SigKeyBytes() to support both
+	// ECDSA (SignatureKey parsed) and Ed25519 (SignatureKeyRaw only).
+	if len(leafData.SigKeyBytes()) == 0 {
+		return errors.New("signature_key is empty")
 	}
 
 	if leafData.Credential == nil {
