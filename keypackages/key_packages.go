@@ -122,7 +122,7 @@ func DefaultCapabilities() *Capabilities {
 		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20},
 		Extensions:       []uint16{grease},
 		Proposals:        []uint16{grease},
-		Credentials:      []uint16{0x0001, 0x0002}, // BasicCredential, X509Credential
+		Credentials:      []uint16{0x0001}, // BasicCredential
 	}
 }
 
@@ -201,9 +201,14 @@ func Generate(
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating encryption HPKE keys: %w", err)
 	}
-	// Create LeafNode with capabilities that advertise the actual cipher suite.
+	// Create LeafNode with capabilities that advertise the actual cipher suite
+	// and credential type in use (RFC §7.2: capabilities must reflect full client capabilities).
 	caps := DefaultCapabilities()
 	caps.CipherSuites = []CipherSuite{cipherSuite}
+	if credWithKey.Credential != nil && uint16(credWithKey.Credential.CredentialType) != 0x0001 {
+		// Append the actual credential type if it differs from BasicCredential, which is already listed.
+		caps.Credentials = append(caps.Credentials, uint16(credWithKey.Credential.CredentialType))
+	}
 	leafNode := &LeafNode{
 		EncryptionKey:     encPubKey.Bytes(),
 		SignatureKey:      credWithKey.SignatureKey,

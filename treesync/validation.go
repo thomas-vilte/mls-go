@@ -86,10 +86,18 @@ func ValidateLeafNodeCapabilities(caps *LeafNodeCapabilities) error {
 }
 
 // ValidateLeafNodeStructureWithContext validates the structural properties of a
-// LeafNode (key presence, credential, capabilities, signature) with group context,
-// but does NOT check the leaf lifetime. Use this when validating existing group
-// members' leaves (e.g. during Welcome processing), where expired lifetimes cannot
-// be rejected since the joiner cannot choose group membership.
+// LeafNode (key presence, credential, signature) with group context,
+// but does NOT check the leaf lifetime or enforce capabilities constraints.
+//
+// Use this when validating existing group members' leaves (e.g. during Welcome
+// processing), where:
+//   - Expired lifetimes cannot be rejected (joiner cannot choose group membership)
+//   - Capabilities constraints are already guaranteed by the tree hash check
+//     (RFC §8.4.1 does not require capabilities re-validation during Welcome join)
+//
+// This function intentionally skips ValidateLeafNodeCapabilities to preserve
+// interoperability with implementations that omit or leave empty non-mandatory
+// capability fields (e.g. protocol_versions, cipher_suites).
 func ValidateLeafNodeStructureWithContext(leafData *LeafNodeData, cs ciphersuite.CipherSuite, groupID []byte, leafIndex uint32) error {
 	if leafData == nil {
 		return errors.New("leaf node is nil")
@@ -105,9 +113,6 @@ func ValidateLeafNodeStructureWithContext(leafData *LeafNodeData, cs ciphersuite
 	}
 	if err := leafData.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
-	}
-	if err := ValidateLeafNodeCapabilities(leafData.Capabilities); err != nil {
-		return fmt.Errorf("capabilities validation failed: %w", err)
 	}
 	if err := leafData.VerifyWithContext(cs, groupID, leafIndex); err != nil {
 		return fmt.Errorf("signature validation failed: %w", err)
