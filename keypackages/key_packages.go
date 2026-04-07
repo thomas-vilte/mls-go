@@ -92,16 +92,36 @@ type LeafNodeLifetime = Lifetime
 // Extension re-exports the canonical MLS extension type.
 type Extension = mlsext.Extension
 
+// greaseValues lists the 16 GREASE values defined in RFC 9420 §13.5 for
+// extension and proposal type spaces. A client SHOULD include one randomly
+// selected value in its capabilities to probe peers for proper unknown-type
+// tolerance.
+var greaseValues = [16]uint16{
+	0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A,
+	0x4A4A, 0x5A5A, 0x6A6A, 0x7A7A,
+	0x8A8A, 0x9A9A, 0xAAAA, 0xBABA,
+	0xCACA, 0xDADA, 0xEAEA, 0xFAFA,
+}
+
+// randomGREASEValue returns a randomly selected GREASE value per RFC 9420 §13.5.
+func randomGREASEValue() uint16 {
+	var b [1]byte
+	_, _ = rand.Read(b[:])
+	return greaseValues[b[0]&0x0F]
+}
+
 // DefaultCapabilities returns the default capabilities per RFC 9420 §11.1.
 // The CipherSuites field is overridden at generation time to advertise only
-// the cipher suite actually in use; extensions and proposals are left empty
-// so callers can opt in to only what their group requires.
+// the cipher suite actually in use. One randomly-selected GREASE value is
+// included in Extensions and Proposals per RFC §13.5 to probe peers for
+// correct unknown-type handling.
 func DefaultCapabilities() *Capabilities {
+	grease := randomGREASEValue()
 	return &Capabilities{
 		ProtocolVersions: []ProtocolVersion{MLS10},
 		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20},
-		Extensions:       []uint16{},
-		Proposals:        []uint16{},
+		Extensions:       []uint16{grease},
+		Proposals:        []uint16{grease},
 		Credentials:      []uint16{0x0001}, // BasicCredential
 	}
 }

@@ -431,7 +431,7 @@ func NewGroup(
 		Epoch:       NewGroupEpoch(0),
 		CipherSuite: cipherSuite,
 		Extensions:  []Extension{},
-		TreeHash:    ratchetTree.TreeHashMinimal(),
+		TreeHash:    ratchetTree.TreeHash(),
 	}
 
 	// Initialize key schedule with zeros for first epoch
@@ -1434,6 +1434,17 @@ func (g *Group) ProcessReceivedCommit(
 		}
 	}
 
+	isExternalCommit := ac.Content.Sender.Type == framing.SenderTypeNewMemberCommit
+
+	// RFC §12.4.3.2: external commits MUST NOT include proposals by reference.
+	if isExternalCommit {
+		for _, por := range commit.Proposals {
+			if len(por.ProposalRef) > 0 {
+				return fmt.Errorf("external commit must not include proposals by reference: %w", ErrInvalidProposal)
+			}
+		}
+	}
+
 	// Resolver proposals: inline o por referencia hash.
 	// Also collect per-proposal sender so we can apply them correctly to the tree.
 	proposals := make([]*Proposal, 0, len(commit.Proposals))
@@ -1474,6 +1485,55 @@ func (g *Group) ProcessReceivedCommit(
 			} else {
 				return fmt.Errorf("unknown proposal reference in commit")
 			}
+		}
+	}
+
+	// RFC §12.4.3.2: an external commit MUST contain exactly one ExternalInit proposal.
+	if isExternalCommit {
+		extInitCount := 0
+		for _, p := range proposals {
+			if p.Type == ProposalTypeExternalInit {
+				extInitCount++
+			}
+		}
+		if extInitCount != 1 {
+			return fmt.Errorf("external commit must contain exactly one ExternalInit proposal, got %d: %w",
+				extInitCount, ErrInvalidProposal)
+		}
+	}
+
+	// RFC §12.4.2: validate proposals. Build FilteredProposals for validation.
+	// For member commits, all proposals are from internal senders (IsExternal=false).
+	// External commit proposals are not filtered here — they are validated inline above.
+	if !isExternalCommit {
+		filteredForValidation := make([]FilteredProposal, len(proposals))
+		for i, p := range proposals {
+			filteredForValidation[i] = FilteredProposal{
+				Proposal: p,
+				Sender:   proposalSenders[i],
+			}
+		}
+		pf := NewProposalFilter(g.groupContext, LeafNodeIndex(senderLeafIdx), g.members, g.cipherSuite, g.ratchetTree)
+		if _, err := pf.FilterAndValidateProposals(filteredForValidation, nil); err != nil {
+			return fmt.Errorf("commit contains invalid proposals: %w", err)
+		}
+	}
+
+	// RFC §12.4.2: a commit MUST include a path if it covers a full commit
+	// (no proposals), or contains at least one Update or Remove proposal.
+	{
+		hasUpdate, hasRemove := false, false
+		for _, p := range proposals {
+			switch p.Type {
+			case ProposalTypeUpdate:
+				hasUpdate = true
+			case ProposalTypeRemove:
+				hasRemove = true
+			}
+		}
+		pathRequired := len(proposals) == 0 || hasUpdate || hasRemove
+		if pathRequired && commit.Path == nil && !isExternalCommit {
+			return fmt.Errorf("commit requires UpdatePath (no proposals or has Update/Remove) but path is absent: %w", ErrInvalidProposal)
 		}
 	}
 
@@ -1545,6 +1605,13 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
+		// RFC §12.4.2: the UpdatePath.LeafNode.EncryptionKey MUST differ from the
+		// sender's current leaf key (forward secrecy — the old key must be retired).
+		if senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx); senderLeaf != nil && senderLeaf.LeafData != nil {
+			if commit.Path.LeafNode != nil && bytes.Equal(commit.Path.LeafNode.EncryptionKey, senderLeaf.LeafData.EncryptionKey) {
+				return fmt.Errorf("UpdatePath.LeafNode.EncryptionKey must differ from current leaf key: %w", ErrInvalidProposal)
+			}
+		}
 		treeAfterProposals = treeAfterProposals.ExpandToPowerOf2()
 		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, g.cipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
@@ -1580,6 +1647,51 @@ func (g *Group) decryptPathSecret(
 	directPath, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	F := len(levels)
 	myNodeIdx := treesync.LeafIndexToNodeIndex(treesync.LeafIndex(g.ownLeafIndex))
+
+	// RFC §12.4.1: len(UpdatePath.Nodes) must equal the number of filtered direct path levels.
+	if len(updatePath.Nodes) != F {
+		return nil, fmt.Errorf("UpdatePath.Nodes length %d does not match filtered path length %d: %w",
+			len(updatePath.Nodes), F, ErrInvalidProposal)
+	}
+
+	// RFC §12.4.1: for each filtered level m, len(EncryptedPathSecrets) must equal
+	// the number of nodes in Resolution(copath[level]) \ excluded.
+	for m, level := range levels {
+		expectedCount := len(tree.ResolutionWithExclusions(copath[level], excluded))
+		actualCount := len(updatePath.Nodes[m].EncryptedPathSecrets)
+		if actualCount != expectedCount {
+			return nil, fmt.Errorf("UpdatePath.Nodes[%d].EncryptedPathSecrets length %d, expected %d (resolution size): %w",
+				m, actualCount, expectedCount, ErrInvalidProposal)
+		}
+	}
+
+	// RFC §12.4.2: all EncryptionKeys in the UpdatePath MUST be unique (no duplicates
+	// within the path itself and no collision with existing tree leaf keys).
+	{
+		pathKeys := make(map[string]bool, F+1)
+		if updatePath.LeafNode != nil {
+			pathKeys[string(updatePath.LeafNode.EncryptionKey)] = true
+		}
+		for m, node := range updatePath.Nodes {
+			key := string(node.EncryptionKey)
+			if pathKeys[key] {
+				return nil, fmt.Errorf("UpdatePath.Nodes[%d].EncryptionKey duplicates another path key: %w",
+					m, ErrInvalidProposal)
+			}
+			pathKeys[key] = true
+		}
+		// Check leaf keys in the tree for duplicates.
+		for i := treesync.LeafIndex(0); i < treesync.LeafIndex(tree.NumLeaves); i++ {
+			if leaf := tree.GetLeaf(i); leaf != nil && leaf.LeafData != nil && leaf.State == treesync.NodeStatePresent {
+				if treesync.LeafIndexToNodeIndex(i) == treesync.LeafIndexToNodeIndex(senderLeafIdx) {
+					continue // sender's own leaf is being replaced
+				}
+				if pathKeys[string(leaf.LeafData.EncryptionKey)] {
+					return nil, fmt.Errorf("UpdatePath key duplicates existing tree leaf key: %w", ErrInvalidProposal)
+				}
+			}
+		}
+	}
 
 	for m, level := range levels {
 		res := tree.ResolutionWithExclusions(copath[level], excluded)
@@ -1622,6 +1734,8 @@ func (g *Group) decryptPathSecret(
 			// While deriving, store private keys for all filtered direct path nodes
 			// above m (RFC §12.4.2): these let us decrypt future commits where a
 			// sender's ancestor node appears in the copath resolution.
+			// RFC §12.4.2: also verify each derived public key matches the published
+			// UpdatePathNode.EncryptionKey (Gap 13).
 			pathSecret := ciphersuite.NewSecret(psBytes)
 			if g.pathNodePrivKeys == nil {
 				g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
@@ -1634,6 +1748,11 @@ func (g *Group) decryptPathSecret(
 					nodeIdx := directPath[levels[k]+1]
 					privKey, pkErr := ciphersuite.DeriveKeyPair(g.cipherSuite, nodeSecret.AsSlice())
 					if pkErr == nil {
+						// RFC §12.4.2: verify derived public key matches published EncryptionKey.
+						if !bytes.Equal(privKey.PublicKey().Bytes(), updatePath.Nodes[k].EncryptionKey) {
+							return nil, fmt.Errorf("derived public key at path level %d does not match UpdatePath.Nodes[%d].EncryptionKey: %w",
+								k, k, ErrInvalidProposal)
+						}
 						g.pathNodePrivKeys[nodeIdx] = privKey.Bytes()
 					}
 				}
@@ -1743,6 +1862,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if proposal.Type == ProposalTypeUpdate && g.pendingUpdatePrivKey != nil && proposal.Update != nil && proposal.Update.LeafNode != nil {
 			ownLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
 			if ownLeaf != nil && ownLeaf.LeafData != nil && bytes.Equal(proposal.Update.LeafNode.SignatureKeyBytes, ownLeaf.LeafData.SigKeyBytes()) {
+				// RFC §9.2: zero the old HPKE private key before replacing with the new one
+				for i := range g.myLeafEncryptionKey {
+					g.myLeafEncryptionKey[i] = 0
+				}
 				g.myLeafEncryptionKey = g.pendingUpdatePrivKey
 				g.pendingUpdatePrivKey = nil
 			}
@@ -1838,6 +1961,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				// Filtered-level nodes have fresh keys stored by createUpdatePath / decryptPathSecret.
 				if nodeIdx < treesync.NodeIndex(len(g.ratchetTree.Nodes)) &&
 					g.ratchetTree.Nodes[nodeIdx].State != treesync.NodeStatePresent {
+					// RFC §9.2: zero key bytes before removing from map (forward secrecy)
+					for i := range g.pathNodePrivKeys[nodeIdx] {
+						g.pathNodePrivKeys[nodeIdx][i] = 0
+					}
 					delete(g.pathNodePrivKeys, nodeIdx)
 				}
 			}
@@ -1872,15 +1999,15 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				g.ratchetTree.Nodes[nodeIdx].ParentHash = ph
 			}
 
-			// Verify parent hashes for regular member commits.
-			// NOTE: For external commits we skip verification because the external sender
-			// computed parent hashes over their own provisional tree (which already has their
-			// leaf added), while here we compute over the final post-commit tree. The values
-			// are equivalent but the signing context differs, so verification is not meaningful.
-			if stagedCommit.authenticatedContent.Content.Sender.Type != framing.SenderTypeNewMemberCommit {
-				if err := g.ratchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
-					return fmt.Errorf("parent hash verification failed: %w", err)
-				}
+			// RFC §7.9.2: verify the sender's signed LeafData.ParentHash against
+			// what we derive from the (potentially untrusted) UpdatePath keys.
+			// This catches corruption of UpdatePath.Nodes[*].EncryptionKey because
+			// the sender's LeafNode is signed with the original keys.
+			// Only run when there was an UpdatePath (commit.Path != nil, i.e. we are
+			// inside this block). Do NOT run when force_path=false (no path) since
+			// parent_hash fields of blank nodes carry prior-epoch values.
+			if err := g.ratchetTree.VerifyParentHashes(senderLeafIdx); err != nil {
+				return fmt.Errorf("parent hash verification failed after UpdatePath merge: %w", err)
 			}
 		}
 	}
@@ -2262,16 +2389,19 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := g.validateAddKeyPackageUniqueness(proposal.Add.KeyPackage); err != nil {
 				return err
 			}
-			leafData := keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
-			if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
-				return fmt.Errorf("invalid add proposal lifetime: %w", err)
-			}
-			if err := validateCapabilitiesCompatible(g.cipherSuite, leafData.Capabilities, nil); err != nil {
-				return fmt.Errorf("invalid add proposal capabilities: %w", err)
-			}
 			// RFC §12.2: Verify KeyPackage signature
 			if err := proposal.Add.KeyPackage.Verify(g.cipherSuite); err != nil {
 				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
+			}
+			// RFC §7.3, §12.2: full LeafNode validation (key_package source, lifetime,
+			// capabilities, credential, signature). Use ValidateLeafNode since Add
+			// proposals carry source=key_package (no group context in TBS).
+			leafData := keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
+			if err := treesync.ValidateLeafNode(leafData, g.cipherSuite); err != nil {
+				return fmt.Errorf("invalid add proposal leaf node: %w", err)
+			}
+			if err := validateCapabilitiesCompatible(g.cipherSuite, leafData.Capabilities, nil); err != nil {
+				return fmt.Errorf("invalid add proposal capabilities: %w", err)
 			}
 		}
 	case ProposalTypeUpdate:
@@ -2281,16 +2411,13 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			return fmt.Errorf("update proposal sender %d is not an active member", sender)
 		}
 		if proposal.Update != nil && proposal.Update.LeafNode != nil {
+			// RFC §7.3, §12.2: full LeafNode validation with group context (source=update).
 			leafData := keyPackageLeafToTreeSync(proposal.Update.LeafNode)
-			if err := treesync.ValidateLeafNodeLifetime(leafData.Lifetime); err != nil {
-				return fmt.Errorf("invalid update proposal lifetime: %w", err)
+			if err := treesync.ValidateLeafNodeWithContext(leafData, g.cipherSuite, g.groupContext.GroupID.AsSlice(), uint32(sender)); err != nil {
+				return fmt.Errorf("invalid update proposal leaf node: %w", err)
 			}
 			if err := validateCapabilitiesCompatible(g.cipherSuite, leafData.Capabilities, nil); err != nil {
 				return fmt.Errorf("invalid update proposal capabilities: %w", err)
-			}
-			// RFC §12.2, §7.3: Verify LeafNode signature with context
-			if err := leafData.VerifyWithContext(g.cipherSuite, g.groupContext.GroupID.AsSlice(), uint32(sender)); err != nil {
-				return fmt.Errorf("update leaf node signature invalid: %w", err)
 			}
 		}
 	}

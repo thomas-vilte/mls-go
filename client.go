@@ -341,19 +341,41 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 		clientIdentity = credentialIdentityBytes(credWithKey.Credential)
 	}
 
+	// default credential validator — if the caller did not provide one,
+	// install a minimal validator that checks structural well-formedness per
+	// RFC 9420 §5.3.1 (non-empty identity for Basic, parseable DER for X.509).
+	validator := cfg.credentialValidator
+	if validator == nil {
+		validator = defaultCredentialValidator{}
+	}
+
 	return &Client{
 		identity:      clientIdentity,
 		cs:            cs,
 		credWithKey:   credWithKey,
 		sigKey:        sigKey,
 		store:         cfg.storage,
-		validator:     cfg.credentialValidator,
+		validator:     validator,
 		events:        cfg.eventHandler,
 		paddingSize:   cfg.paddingSize,
 		cacheStrategy: cfg.cacheStrategy,
 		pendingKPs:    make(map[string]*pendingEntry),
 		groupEntries:  make(map[string]*groupEntry),
 	}, nil
+}
+
+// defaultCredentialValidator is the built-in fallback validator used when the
+// caller does not supply a WithCredentialValidator option. It validates structural
+// well-formedness per RFC 9420 §5.3.1: known type, non-empty identity (Basic),
+// parseable DER (X.509). Full PKI chain validation is application-specific and
+// must be provided via WithCredentialValidator.
+type defaultCredentialValidator struct{}
+
+func (defaultCredentialValidator) ValidateCredential(_ context.Context, cred *credentials.Credential) error {
+	if cred == nil {
+		return fmt.Errorf("credential is nil")
+	}
+	return cred.Validate()
 }
 
 // FreshKeyPackageBytes generates a fresh single-use KeyPackage for invitations.

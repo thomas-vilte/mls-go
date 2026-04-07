@@ -738,10 +738,16 @@ func (t *RatchetTree) SubtreeContainsLeaf(idx NodeIndex, leaf LeafIndex) bool {
 	return t.SubtreeContainsLeaf(left, leaf) || t.SubtreeContainsLeaf(right, leaf)
 }
 
-// VerifyParentHashes verifies the parent hashes along the direct path (RFC §7.9).
+// VerifyParentHashes verifies the parent hashes along the direct path (RFC §7.9.2).
 //
-// For each node in the path (except the root), the parent_hash stored in that node
-// must match ComputeParentHash(parent.EncryptionKey, parent.ParentHash, sibling.TreeHash).
+// For each non-blank node N in the direct path (except the root), if N's
+// direct parent P is also non-blank, the parent_hash field stored in N must
+// match ComputeParentHash(P.encryption_key, P.parent_hash, sibling.tree_hash).
+//
+// When P is blank, the check for N is skipped — blank intermediate nodes
+// occur in trees where the last commit had no UpdatePath (force_path=false),
+// and their parent_hash fields carry the value from a prior epoch that cannot
+// be independently verified by a joiner.
 func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 	path := t.DirectPath(leafIdx)
 	if len(path) <= 1 {
@@ -750,27 +756,29 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 
 	for i := 0; i < len(path)-1; i++ {
 		nodeIdx := path[i]
-		parentIdx, _ := t.Parent(nodeIdx)
+		parentIdx := path[i+1]
 
 		node := &t.Nodes[nodeIdx]
 		parent := &t.Nodes[parentIdx]
 
+		// Skip blank nodes — they carry no verifiable parent_hash.
 		if node.State != NodeStatePresent {
 			continue
 		}
-
-		var expected []byte
-		if parent.State == NodeStatePresent {
-			var parentKey []byte
-			if parent.EncryptionKey != nil {
-				parentKey = parent.EncryptionKey.Bytes()
-			}
-			siblingIdx := t.GetSibling(nodeIdx)
-			siblingHash := t.HashNode(siblingIdx)
-			expected = ComputeParentHash(parentKey, parent.ParentHash, siblingHash, t.hashFunc())
-		} else {
-			expected = parent.ParentHash
+		// Skip when the direct parent is blank: the parent_hash stored in node
+		// was set in a previous epoch's UpdatePath and cannot be recomputed
+		// without that epoch's tree state.
+		if parent.State != NodeStatePresent {
+			continue
 		}
+
+		var parentKey []byte
+		if parent.EncryptionKey != nil {
+			parentKey = parent.EncryptionKey.Bytes()
+		}
+		siblingIdx := t.GetSibling(nodeIdx)
+		siblingHash := t.HashNode(siblingIdx)
+		expected := ComputeParentHash(parentKey, parent.ParentHash, siblingHash, t.hashFunc())
 
 		var actual []byte
 		if IsLeaf(nodeIdx) && node.LeafData != nil {

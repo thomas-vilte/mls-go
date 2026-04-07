@@ -144,8 +144,11 @@ func UnmarshalPublicMessage(data []byte) (*PublicMessage, error) {
 
 	pm := &PublicMessage{Content: *content, Auth: auth}
 
-	// membership_tag present only for member sender
-	if content.Sender.Type == SenderTypeMember && r.Remaining() > 0 {
+	// RFC §6.2: membership_tag MUST be present for member senders
+	if content.Sender.Type == SenderTypeMember {
+		if r.Remaining() == 0 {
+			return nil, fmt.Errorf("framing: missing membership_tag for member sender")
+		}
 		tag, err := r.ReadVLBytes()
 		if err != nil {
 			return nil, fmt.Errorf("framing: reading membership_tag: %w", err)
