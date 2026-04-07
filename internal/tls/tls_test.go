@@ -156,6 +156,14 @@ func TestReader_ReadMLSVarint(t *testing.T) {
 		{"4byte_16384", []byte{0x80, 0x00, 0x40, 0x00}, 16384, false},
 		{"4byte_max", []byte{0xBF, 0xFF, 0xFF, 0xFF}, 1073741823, false},
 
+		// Non-minimal encodings (RFC §2.1.2: MUST reject)
+		{"nonminimal_2byte_zero", []byte{0x40, 0x00}, 0, true},              // 0 encoded in 2 bytes
+		{"nonminimal_2byte_37", []byte{0x40, 0x25}, 0, true},                // 37 encoded in 2 bytes
+		{"nonminimal_2byte_63", []byte{0x40, 0x3F}, 0, true},                // 63 encoded in 2 bytes
+		{"nonminimal_4byte_zero", []byte{0x80, 0x00, 0x00, 0x00}, 0, true},  // 0 in 4 bytes
+		{"nonminimal_4byte_100", []byte{0x80, 0x00, 0x00, 0x64}, 0, true},   // 100 in 4 bytes
+		{"nonminimal_4byte_16383", []byte{0x80, 0x00, 0x3F, 0xFF}, 0, true}, // 16383 in 4 bytes
+
 		// Invalid prefix (11 = 3)
 		{"invalid_prefix", []byte{0xC0, 0x00, 0x00, 0x00}, 0, true},
 

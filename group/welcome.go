@@ -693,11 +693,12 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("unmarshaling group secrets: %w", err)
 	}
 
+	// RFC §12.4.3.1: if any required PSK is unavailable, return an error.
+	if len(groupSecrets.Psks) > 0 && externalPsks == nil {
+		return nil, fmt.Errorf("Welcome requires %d PSK(s) but no PSK store was provided", len(groupSecrets.Psks))
+	}
 	var psks []schedule.Psk
 	for _, pskRef := range groupSecrets.Psks {
-		if externalPsks == nil {
-			continue
-		}
 
 		var pskBytes []byte
 		var ok bool
@@ -832,6 +833,46 @@ func JoinFromWelcomeWithContext(
 	if treeFromExtension {
 		if err := verifyGroupInfoSignature(groupInfo, ratchetTree); err != nil {
 			return nil, err
+		}
+	}
+
+	// RFC §12.4.3.1: validate all non-blank LeafNodes in the ratchet tree.
+	// Existing members' leaves may have source=commit(3) or source=update(2) — their
+	// TBS includes group_id and leaf_index. Newly-added leaves have source=key_package(1).
+	// We skip lifetime checks (ValidateLeafNodeStructureWithContext) because existing
+	// members cannot renew their credential just because a joiner arrives late.
+	if treeFromExtension {
+		groupID := groupInfo.GroupContext.GroupID.AsSlice()
+		for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
+			leaf := ratchetTree.GetLeaf(i)
+			if leaf == nil || leaf.State != treesync.NodeStatePresent || leaf.LeafData == nil {
+				continue
+			}
+			if err := treesync.ValidateLeafNodeStructureWithContext(
+				leaf.LeafData, welcome.CipherSuite, groupID, uint32(i),
+			); err != nil {
+				return nil, fmt.Errorf("invalid leaf node at index %d in ratchet tree: %w", i, err)
+			}
+		}
+
+		// RFC §12.4.3.1: validate unmerged_leaves entries for each parent node.
+		// Each entry must reference a valid, non-blank leaf that is a descendant of the node.
+		for nodeIdx := range ratchetTree.Nodes {
+			node := &ratchetTree.Nodes[nodeIdx]
+			if node.State != treesync.NodeStatePresent || treesync.IsLeaf(treesync.NodeIndex(nodeIdx)) {
+				continue
+			}
+			for _, unmergedLeafIdx := range node.UnmergedLeaves {
+				leafNode := ratchetTree.GetLeaf(treesync.LeafIndex(unmergedLeafIdx))
+				if leafNode == nil || leafNode.State != treesync.NodeStatePresent {
+					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d references a blank or missing leaf",
+						unmergedLeafIdx, nodeIdx)
+				}
+				if !ratchetTree.SubtreeContainsLeaf(treesync.NodeIndex(nodeIdx), treesync.LeafIndex(unmergedLeafIdx)) {
+					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d is not a descendant of that node",
+						unmergedLeafIdx, nodeIdx)
+				}
+			}
 		}
 	}
 
