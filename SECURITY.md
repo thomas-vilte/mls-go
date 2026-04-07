@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.1.x   | ✅        |
+| 1.2.x   | ✅        |
+| 1.1.x   | ❌        |
 | 1.0.x   | ❌        |
 | < 1.0.0 | ❌        |
 
@@ -46,6 +47,8 @@ Recent fixes:
 - **RFC 9420 §12.4.3.3**: `UnmarshalTreeFromExtension` rejects ratchet_tree extensions whose last serialized node is blank
 - **RFC 9420 §15.2**: AEAD nonce counter limit (2³²−1) is enforced per sender per epoch; `SendMessage` returns an error if the limit is reached
 - **Welcome join**: every non-blank LeafNode in the received ratchet_tree is structurally validated; `unmerged_leaves` entries are checked for validity and subtree containment; missing PSK store or missing PSK entry returns an explicit error instead of silently failing
+- **RFC 9420 §9.2 / §15.2**: per-generation replay protection — `MarkGenerationUsed` tracks processed generations per sender; duplicate generation numbers are rejected with an explicit error
+- **RFC 9420 §13.4**: joining a group via Welcome now verifies that mls-go supports every extension present in the GroupContext; unsupported extensions cause the join to fail rather than silently proceeding with unknown group semantics
 
 These limitations do not break the normal encrypted group flow, but they do reduce assurance on specific edge cases.
 

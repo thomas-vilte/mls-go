@@ -6,7 +6,7 @@
 
 Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420).
 
-**Current status:** `v1.1.0` — stable, interop-verified.
+**Current status:** `v1.2.0` — stable, interop-verified.
 
 ## Overview
 
@@ -55,6 +55,9 @@ Main packages:
 - RFC 9420 §12.4.2: received UpdatePath public keys verified against derived path secrets
 - RFC 9420 §12.4.3.1: credential type of Add/Update proposals checked against all members' capabilities
 - RFC 9420 §15.2: AEAD nonce counter limit enforced per sender per epoch
+- RFC 9420 §9.2 / §15.2: per-generation replay protection — duplicate generation numbers rejected per sender per epoch
+- RFC 9420 §13.4: joiner verifies support for every active GroupContext extension before completing Welcome join
+- RFC 9420 §14: staged commit API — `CommitPendingProposalsStaged` / `ConfirmPendingCommit` / `DiscardPendingCommit` for DS-based conflict resolution without premature state mutation
 - Welcome join: ratchet_tree LeafNodes validated; unmerged_leaves references verified
 - Welcome join: PSK store checked before processing; missing PSKs return explicit errors
 - State serialization with SecretTree generation counters (no nonce reuse on restore)
@@ -147,8 +150,13 @@ client.LeaveGroup(ctx, groupID)                         // local-only state clea
 // Proposals (batch flow)
 client.ProposeAddMember(ctx, groupID, memberKPBytes)    // → signed PublicMessage
 client.ProposeRemoveMember(ctx, groupID, memberIdentity)
-client.CommitPendingProposals(ctx, groupID)             // → commit, welcome
+client.CommitPendingProposals(ctx, groupID)             // → commit, welcome (auto-merge)
 client.CancelPendingProposals(ctx, groupID)             // discard without committing
+
+// RFC §14 staged commit (DS conflict-safe)
+handle, _  := client.CommitPendingProposalsStaged(ctx, groupID) // generate only, no state change
+welcome, _ := client.ConfirmPendingCommit(ctx, handle)          // DS accepted → merge + welcome
+_           = client.DiscardPendingCommit(ctx, handle)          // DS rejected → rollback
 
 // Maintenance
 client.SelfUpdate(ctx, groupID)                         // rotate leaf encryption key
