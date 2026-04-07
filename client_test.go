@@ -1259,3 +1259,351 @@ func TestClientEventHandlerSelfUpdateAndRemove(t *testing.T) {
 		t.Fatalf("remove identity = %q, want bob", removeEvent.MemberIdentity)
 	}
 }
+
+// TestClientStagedCommit_Confirm verifies the happy path of the staged commit API:
+// CommitPendingProposalsStaged → ConfirmPendingCommit → new member can join.
+func TestClientStagedCommit_Confirm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(alice): %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(bob): %v", err)
+	}
+	carol, err := NewClient([]byte("carol"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(carol): %v", err)
+	}
+
+	// Alice creates group and invites Bob → epoch 1.
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(bob): %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("InviteMember(bob): %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, bobWelcome)
+	if err != nil {
+		t.Fatalf("JoinGroup(bob): %v", err)
+	}
+
+	// Propose adding Carol; Bob receives the proposal (simulating DS fan-out).
+	carolKP, err := carol.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(carol): %v", err)
+	}
+	aliceProposalBytes, err := alice.ProposeAddMember(ctx, groupID, carolKP)
+	if err != nil {
+		t.Fatalf("ProposeAddMember(carol): %v", err)
+	}
+	if err := bob.ProcessPublicMessage(ctx, bobGroupID, aliceProposalBytes); err != nil {
+		t.Fatalf("bob ProcessPublicMessage(proposal): %v", err)
+	}
+
+	// Stage the commit — epoch must NOT advance yet.
+	handle, err := alice.CommitPendingProposalsStaged(ctx, groupID)
+	if err != nil {
+		t.Fatalf("CommitPendingProposalsStaged: %v", err)
+	}
+	epochAfterStage, err := alice.Epoch(ctx, groupID)
+	if err != nil {
+		t.Fatalf("Epoch after stage: %v", err)
+	}
+	if epochAfterStage != 1 {
+		t.Fatalf("epoch after stage = %d, want 1 (staged commit must not advance epoch)", epochAfterStage)
+	}
+
+	// Confirm — epoch advances to 2 and welcome for Carol is produced.
+	welcomeBytes, err := alice.ConfirmPendingCommit(ctx, handle)
+	if err != nil {
+		t.Fatalf("ConfirmPendingCommit: %v", err)
+	}
+	if len(welcomeBytes) == 0 {
+		t.Fatal("ConfirmPendingCommit returned empty welcome for Add proposal")
+	}
+
+	// Bob processes the commit.
+	if err := bob.ProcessCommit(ctx, bobGroupID, handle.CommitBytes()); err != nil {
+		t.Fatalf("bob ProcessCommit: %v", err)
+	}
+
+	// Carol joins.
+	carolGroupID, err := carol.JoinGroup(ctx, welcomeBytes)
+	if err != nil {
+		t.Fatalf("carol JoinGroup: %v", err)
+	}
+	if !bytes.Equal(carolGroupID, groupID) {
+		t.Fatalf("carol group ID mismatch")
+	}
+
+	// All three members must be present.
+	members, err := alice.ListMembers(ctx, groupID)
+	if err != nil {
+		t.Fatalf("ListMembers: %v", err)
+	}
+	if len(members) != 3 {
+		t.Fatalf("member count = %d, want 3 (alice, bob, carol)", len(members))
+	}
+
+	// Alice and Carol must share the same epoch.
+	aliceEpoch, _ := alice.Epoch(ctx, groupID)
+	carolEpoch, _ := carol.Epoch(ctx, carolGroupID)
+	if aliceEpoch != carolEpoch {
+		t.Fatalf("epoch mismatch: alice=%d carol=%d", aliceEpoch, carolEpoch)
+	}
+}
+
+// TestClientStagedCommit_Discard verifies that DiscardPendingCommit rolls back
+// the group to StateOperational with proposals preserved, and the group can then
+// commit normally.
+func TestClientStagedCommit_Discard(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(alice): %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(bob): %v", err)
+	}
+	carol, err := NewClient([]byte("carol"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(carol): %v", err)
+	}
+
+	// Alice creates group and invites Bob.
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(bob): %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("InviteMember(bob): %v", err)
+	}
+	if _, err := bob.JoinGroup(ctx, bobWelcome); err != nil {
+		t.Fatalf("JoinGroup(bob): %v", err)
+	}
+
+	// Propose adding Carol.
+	carolKP, err := carol.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(carol): %v", err)
+	}
+	if _, err := alice.ProposeAddMember(ctx, groupID, carolKP); err != nil {
+		t.Fatalf("ProposeAddMember(carol): %v", err)
+	}
+
+	// Stage a commit.
+	handle, err := alice.CommitPendingProposalsStaged(ctx, groupID)
+	if err != nil {
+		t.Fatalf("CommitPendingProposalsStaged: %v", err)
+	}
+
+	// Discard it (simulating DS rejecting our commit).
+	if err := alice.DiscardPendingCommit(ctx, handle); err != nil {
+		t.Fatalf("DiscardPendingCommit: %v", err)
+	}
+
+	// Epoch must still be 1.
+	epoch, err := alice.Epoch(ctx, groupID)
+	if err != nil {
+		t.Fatalf("Epoch after discard: %v", err)
+	}
+	if epoch != 1 {
+		t.Fatalf("epoch after discard = %d, want 1", epoch)
+	}
+
+	// Proposals must still be stored so Alice can re-commit.
+	aliceGroup := loadGroupForTest(t, alice, groupID)
+	if len(aliceGroup.StoredProposals()) == 0 {
+		t.Fatal("proposals were lost after DiscardPendingCommit")
+	}
+
+	// Alice can commit normally after discarding.
+	commit, welcome, err := alice.CommitPendingProposals(ctx, groupID)
+	if err != nil {
+		t.Fatalf("CommitPendingProposals after discard: %v", err)
+	}
+	if len(welcome) == 0 {
+		t.Fatal("expected welcome after re-commit")
+	}
+	_ = commit
+
+	// Epoch must now be 2.
+	epoch, err = alice.Epoch(ctx, groupID)
+	if err != nil {
+		t.Fatalf("Epoch after commit: %v", err)
+	}
+	if epoch != 2 {
+		t.Fatalf("epoch after commit = %d, want 2", epoch)
+	}
+
+	// Carol can join with the welcome from the re-commit.
+	if _, err := carol.JoinGroup(ctx, welcome); err != nil {
+		t.Fatalf("carol JoinGroup after re-commit: %v", err)
+	}
+}
+
+// TestClientStagedCommit_ConcurrentCommitConflict is a regression test for the
+// two bugs found in the DAVE Discord bot:
+//  1. CacheAlways poisoned rollback: loadGroupEntry returned the in-memory
+//     post-commit group instead of the store-restored pre-commit state.
+//  2. proposalByRef not rebuilt after UnmarshalGroupState: any commit by-reference
+//     after state restore failed with "unknown proposal reference in commit".
+//
+// The test simulates the DS picking Bob's commit over Alice's while both have the
+// same pending Add proposal for Carol, using CacheAlways (the mode that triggers #1).
+func TestClientStagedCommit_ConcurrentCommitConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+
+	// Use CacheAlways to trigger the cache-poisoning bug (#1).
+	alice, err := NewClient([]byte("alice"), cs, WithCacheStrategy(CacheAlways))
+	if err != nil {
+		t.Fatalf("NewClient(alice): %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs, WithCacheStrategy(CacheAlways))
+	if err != nil {
+		t.Fatalf("NewClient(bob): %v", err)
+	}
+	carol, err := NewClient([]byte("carol"), cs)
+	if err != nil {
+		t.Fatalf("NewClient(carol): %v", err)
+	}
+
+	// Alice creates group and invites Bob → epoch 1.
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(bob): %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	_, bobWelcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("InviteMember(bob): %v", err)
+	}
+	bobGroupID, err := bob.JoinGroup(ctx, bobWelcome)
+	if err != nil {
+		t.Fatalf("JoinGroup(bob): %v", err)
+	}
+
+	// Alice proposes adding Carol; Bob receives the proposal.
+	carolKP, err := carol.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes(carol): %v", err)
+	}
+	aliceProposalBytes, err := alice.ProposeAddMember(ctx, groupID, carolKP)
+	if err != nil {
+		t.Fatalf("ProposeAddMember(carol): %v", err)
+	}
+	if err := bob.ProcessPublicMessage(ctx, bobGroupID, aliceProposalBytes); err != nil {
+		t.Fatalf("bob ProcessPublicMessage(proposal): %v", err)
+	}
+
+	// Both stage a commit for the same Add proposal (concurrent commit scenario).
+	handleAlice, err := alice.CommitPendingProposalsStaged(ctx, groupID)
+	if err != nil {
+		t.Fatalf("alice CommitPendingProposalsStaged: %v", err)
+	}
+	handleBob, err := bob.CommitPendingProposalsStaged(ctx, bobGroupID)
+	if err != nil {
+		t.Fatalf("bob CommitPendingProposalsStaged: %v", err)
+	}
+
+	// DS picks Bob's commit. Alice discards hers and processes Bob's.
+	if err := alice.DiscardPendingCommit(ctx, handleAlice); err != nil {
+		t.Fatalf("alice DiscardPendingCommit: %v", err)
+	}
+	// Bug #1: with CacheAlways, alice's in-memory group was still at epoch N+1
+	// (post-commit) after DiscardPendingCommit. ProcessCommit would then fail with
+	// "invalid membership tag" because it tried to apply Bob's commit on top of
+	// a group that was already at epoch N+1.
+	if err := alice.ProcessCommit(ctx, groupID, handleBob.CommitBytes()); err != nil {
+		t.Fatalf("alice ProcessCommit(bob's commit): %v — CacheAlways rollback bug may be present", err)
+	}
+
+	// Bob confirms his commit and produces the Welcome for Carol.
+	welcomeBytes, err := bob.ConfirmPendingCommit(ctx, handleBob)
+	if err != nil {
+		t.Fatalf("bob ConfirmPendingCommit: %v", err)
+	}
+	if len(welcomeBytes) == 0 {
+		t.Fatal("expected welcome bytes for Carol")
+	}
+
+	// Carol joins.
+	carolGroupID, err := carol.JoinGroup(ctx, welcomeBytes)
+	if err != nil {
+		t.Fatalf("carol JoinGroup: %v", err)
+	}
+	if !bytes.Equal(carolGroupID, groupID) {
+		t.Fatalf("carol group ID mismatch")
+	}
+
+	// Critical assertions: all three members must converge on epoch 2 with
+	// identical export secrets (proving they share the same epoch key material).
+	aliceEpoch, err := alice.Epoch(ctx, groupID)
+	if err != nil {
+		t.Fatalf("alice Epoch: %v", err)
+	}
+	bobEpoch, err := bob.Epoch(ctx, bobGroupID)
+	if err != nil {
+		t.Fatalf("bob Epoch: %v", err)
+	}
+	carolEpoch, err := carol.Epoch(ctx, carolGroupID)
+	if err != nil {
+		t.Fatalf("carol Epoch: %v", err)
+	}
+	if aliceEpoch != 2 || bobEpoch != 2 || carolEpoch != 2 {
+		t.Fatalf("epoch mismatch: alice=%d bob=%d carol=%d, want all 2", aliceEpoch, bobEpoch, carolEpoch)
+	}
+
+	aliceExport, err := alice.Export(ctx, groupID, "test", []byte("ctx"), 32)
+	if err != nil {
+		t.Fatalf("alice Export: %v", err)
+	}
+	bobExport, err := bob.Export(ctx, bobGroupID, "test", []byte("ctx"), 32)
+	if err != nil {
+		t.Fatalf("bob Export: %v", err)
+	}
+	carolExport, err := carol.Export(ctx, carolGroupID, "test", []byte("ctx"), 32)
+	if err != nil {
+		t.Fatalf("carol Export: %v", err)
+	}
+	if !bytes.Equal(aliceExport, bobExport) {
+		t.Error("alice and bob export secrets differ — epoch key material diverged")
+	}
+	if !bytes.Equal(aliceExport, carolExport) {
+		t.Error("alice and carol export secrets differ — epoch key material diverged")
+	}
+
+	// All three must be listed as members.
+	members, err := alice.ListMembers(ctx, groupID)
+	if err != nil {
+		t.Fatalf("alice ListMembers: %v", err)
+	}
+	if len(members) != 3 {
+		t.Fatalf("alice sees %d members, want 3", len(members))
+	}
+}

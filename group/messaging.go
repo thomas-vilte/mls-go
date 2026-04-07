@@ -128,6 +128,26 @@ func (g *Group) SignProposalAsPublicMessage(
 	if err != nil {
 		return nil, fmt.Errorf("signing proposal: %w", err)
 	}
+
+	// RFC 9420 §12.4: index the ProposalRef in the lookup map so this sender can
+	// resolve the proposal when another member's commit references it by hash.
+	// Without this, a competing commit that references the proposal by-ref would
+	// fail with "unknown proposal reference" when processed by the original proposer.
+	//
+	// We update ONLY proposalByRef (not StoredProposal.Ref) so that the committer's
+	// own commits continue to include locally-created proposals inline — receivers
+	// may not have received the proposal message separately and cannot resolve by-ref.
+	acForRef := &framing.AuthenticatedContent{
+		WireFormat: framing.WireFormatPublicMessage,
+		Content:    pm.Content,
+		Auth:       pm.Auth,
+	}
+	ref := ComputeProposalRef(acForRef.Marshal(), g.cipherSuite)
+	if g.proposalByRef == nil {
+		g.proposalByRef = make(map[string]*Proposal)
+	}
+	g.proposalByRef[string(ref)] = proposal
+
 	return framing.NewMLSMessagePublic(pm).Marshal(), nil
 }
 
