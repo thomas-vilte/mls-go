@@ -1467,6 +1467,203 @@ type CommitPendingProposalsOptions struct {
 	GroupInfoOpts group.GroupInfoOptions
 }
 
+// PendingCommitHandle represents a commit that has been generated but not yet
+// applied to local group state, per RFC 9420 §14.
+//
+// The handle is in-memory only and is not persisted across process restarts.
+// The application MUST call either ConfirmPendingCommit or DiscardPendingCommit
+// exactly once to release the group from StatePendingCommit.
+type PendingCommitHandle struct {
+	g                *group.Group
+	entry            *groupEntry
+	staged           *group.StagedCommit
+	commitBytes      []byte
+	newMemberKPs     []*keypackages.KeyPackage
+	opts             CommitPendingProposalsOptions
+	joinIdentities   [][]byte
+	removeIdentities [][]byte
+}
+
+// CommitBytes returns the serialized MLS Commit message to send to the Delivery Service.
+func (h *PendingCommitHandle) CommitBytes() []byte { return h.commitBytes }
+
+// CommitPendingProposalsStaged generates a commit per RFC 9420 §14 WITHOUT applying
+// it to local state. This is the RFC-compliant alternative to CommitPendingProposals.
+//
+// The returned handle must be passed to ConfirmPendingCommit after the Delivery
+// Service accepts the commit, or to DiscardPendingCommit if it is rejected.
+// While a handle is pending, the group cannot send messages or create new proposals.
+//
+// The Welcome message (if any) is not generated until ConfirmPendingCommit is called,
+// ensuring it is never delivered before the commit is accepted.
+//
+// WARNING: The handle is in-memory only. If the process restarts before Confirm or
+// Discard is called, the pending state is lost and the group must be re-loaded.
+func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byte) (*PendingCommitHandle, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect identities for events emitted on confirmation.
+	joinIdentities := make([][]byte, 0)
+	removeIdentities := make([][]byte, 0)
+	for _, stored := range g.StoredProposals() {
+		if stored.Proposal == nil {
+			continue
+		}
+		switch stored.Proposal.Type {
+		case group.ProposalTypeAdd:
+			if stored.Proposal.Add != nil && stored.Proposal.Add.KeyPackage != nil && stored.Proposal.Add.KeyPackage.LeafNode != nil {
+				joinIdentities = append(joinIdentities, credentialIdentityBytes(stored.Proposal.Add.KeyPackage.LeafNode.Credential))
+			}
+		case group.ProposalTypeRemove:
+			if stored.Proposal.Remove != nil {
+				if member, ok := g.GetMember(stored.Proposal.Remove.Removed); ok && member != nil {
+					removeIdentities = append(removeIdentities, credentialIdentityBytes(member.Credential))
+				}
+			}
+		}
+	}
+
+	// Generate the commit — does NOT modify the group's epoch or key material.
+	// Group transitions to StatePendingCommit.
+	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating staged commit: %w", err)
+	}
+
+	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
+		Content:       staged.AuthenticatedContent().Content,
+		Auth:          staged.AuthenticatedContent().Auth,
+		MembershipTag: staged.MembershipTag(),
+	})
+
+	var newMemberKPs []*keypackages.KeyPackage
+	for _, prop := range staged.Proposals() {
+		if prop.Type == group.ProposalTypeAdd && prop.Add != nil {
+			newMemberKPs = append(newMemberKPs, prop.Add.KeyPackage)
+		}
+	}
+
+	// Pin the in-memory group in the entry so Confirm/Discard can find it
+	// without re-loading from storage (which only stores StateOperational state).
+	entry.group = g
+
+	return &PendingCommitHandle{
+		g:                g,
+		entry:            entry,
+		staged:           staged,
+		commitBytes:      commitMsg.Marshal(),
+		newMemberKPs:     newMemberKPs,
+		joinIdentities:   joinIdentities,
+		removeIdentities: removeIdentities,
+	}, nil
+}
+
+// ConfirmPendingCommit applies a staged commit after the Delivery Service has
+// accepted it. This merges the commit into local group state, generates the
+// Welcome message for any new members, persists the group, and emits events.
+//
+// Returns the serialized Welcome message (nil if the commit has no Add proposals).
+func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommitHandle) ([]byte, error) {
+	if handle == nil {
+		return nil, fmt.Errorf("nil pending commit handle")
+	}
+
+	handle.entry.mu.Lock()
+	defer handle.entry.mu.Unlock()
+
+	g := handle.g
+
+	if err := g.MergeCommit(handle.staged); err != nil {
+		return nil, fmt.Errorf("merging staged commit: %w", err)
+	}
+
+	var welcomeBytes []byte
+	if len(handle.newMemberKPs) > 0 {
+		welcomeObj, err := g.CreateWelcomeWithOptions(handle.newMemberKPs, group.CreateWelcomeOptions{
+			JoinerSecret:  handle.staged.JoinerSecret(),
+			SignerPrivKey: c.sigKey,
+			PskIDs:        handle.staged.PskIDs(),
+			PskSecret:     handle.staged.RawPskSecret(),
+			StagedCommit:  handle.staged,
+			GroupInfoOpts: handle.opts.GroupInfoOpts,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("creating welcome: %w", err)
+		}
+		msg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
+		welcomeBytes = msg.Marshal()
+	}
+
+	if err := c.persistGroup(ctx, g, handle.entry); err != nil {
+		return nil, err
+	}
+
+	for _, identity := range handle.joinIdentities {
+		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+	}
+	for _, identity := range handle.removeIdentities {
+		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+	}
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+
+	// For CacheNone strategy, clear the pinned group so subsequent loads use storage.
+	if c.cacheStrategy != CacheAlways {
+		handle.entry.group = nil
+	}
+
+	return welcomeBytes, nil
+}
+
+// DiscardPendingCommit rolls back a staged commit after the Delivery Service
+// rejects it or a conflicting commit wins the epoch.
+//
+// The group returns to StateOperational. Stored proposals are preserved so the
+// application can re-commit (possibly after applying the winning commit first).
+func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommitHandle) error {
+	if handle == nil {
+		return fmt.Errorf("nil pending commit handle")
+	}
+
+	handle.entry.mu.Lock()
+	defer handle.entry.mu.Unlock()
+
+	g := handle.g
+
+	if err := g.DiscardPendingCommit(); err != nil {
+		return fmt.Errorf("discarding pending commit: %w", err)
+	}
+
+	// Persist the group back in StateOperational so subsequent loads see the
+	// pre-commit state with proposals still intact.
+	if err := c.persistGroup(ctx, g, handle.entry); err != nil {
+		return err
+	}
+
+	if c.cacheStrategy != CacheAlways {
+		handle.entry.group = nil
+	}
+
+	return nil
+}
+
 // CommitPendingProposalsWithOptions commits pending proposals with fine-grained control.
 // Use this when you need to customize the Welcome message (e.g., omit extensions not needed by your protocol).
 func (c *Client) CommitPendingProposalsWithOptions(ctx context.Context, groupID []byte, opts CommitPendingProposalsOptions) (commit, welcome []byte, err error) {
