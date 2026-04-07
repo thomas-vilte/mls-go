@@ -277,7 +277,13 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshaling stored proposal %d: %w", i, err)
 		}
-		g.proposals.AddProposalWithRef(proposal, LeafNodeIndex(pData.Sender), append([]byte(nil), pData.Ref...))
+		ref := append([]byte(nil), pData.Ref...)
+		g.proposals.AddProposalWithRef(proposal, LeafNodeIndex(pData.Sender), ref)
+		// Rebuild the by-ref index so that commits referencing proposals by hash
+		// can resolve them after a state restore (UnmarshalGroupState).
+		if len(ref) > 0 {
+			g.proposalByRef[string(ref)] = proposal
+		}
 	}
 
 	if err := g.ValidateRestoredState(); err != nil {
