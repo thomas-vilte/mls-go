@@ -65,7 +65,7 @@ func TestMergeCommit_InvalidSignature(t *testing.T) {
 
 // TestMergeCommit_WrongSigner verifies that MergeCommit rejects commits signed by the wrong member.
 func TestMergeCommit_WrongSigner(t *testing.T) {
-	// Create group con Alice
+	// Create group with Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
 	if err != nil {
 		t.Fatalf("generating alice credential: %v", err)

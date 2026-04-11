@@ -1,7 +1,3 @@
-// Copyright 2024 MLS-Go Authors. All rights reserved.
-// Use of this source code is governed by a MIT-style license
-// that can be found in the LICENSE file.
-
 // Package ciphersuite implements Cipher Suite 1: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519.
 //
 // Cipher Suite 1 combines:

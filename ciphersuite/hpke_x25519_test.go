@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// TestX25519_HPKE_RoundTrip verifica HPKE con X25519
+// TestX25519_HPKE_RoundTrip verifies HPKE with X25519.
 func TestX25519_HPKE_RoundTrip(t *testing.T) {
 	cs := MLS128DHKEMX25519 // CS1: X25519 + AES-GCM
 
-	// Generar key pair
+	// Generate key pair
 	curve := ecdh.X25519()
 	privKey, err := curve.GenerateKey(nil)
 	if err != nil {
@@ -46,11 +46,11 @@ func TestX25519_HPKE_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestP256_HPKE_RoundTrip verifica HPKE con P256
+// TestP256_HPKE_RoundTrip verifies HPKE with P256.
 func TestP256_HPKE_RoundTrip(t *testing.T) {
 	cs := MLS128DHKEMP256 // CS2: P256 + AES-GCM
 
-	// Generar key pair
+	// Generate key pair
 	curve := ecdh.P256()
 	privKey, err := curve.GenerateKey(nil)
 	if err != nil {
@@ -86,11 +86,11 @@ func TestP256_HPKE_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestCS3_HPKE_RoundTrip verifica HPKE con X25519 + ChaCha20
+// TestCS3_HPKE_RoundTrip verifies HPKE with X25519 + ChaCha20.
 func TestCS3_HPKE_RoundTrip(t *testing.T) {
 	cs := MLS128DHKEMX25519ChaCha20 // CS3: X25519 + ChaCha20
 
-	// Generar key pair
+	// Generate key pair
 	curve := ecdh.X25519()
 	privKey, err := curve.GenerateKey(nil)
 	if err != nil {

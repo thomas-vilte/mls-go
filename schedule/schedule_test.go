@@ -398,7 +398,7 @@ func TestComputePskSecret_WithPSKs(t *testing.T) {
 		{PskType: PskTypeExternal, PskID: []byte("psk2"), PskNonce: nonce, Psk: []byte("secret2")},
 	}
 
-	// ComputePskSecret con PSKs
+	// ComputePskSecret with PSKs
 	pskSecret, err := ks.ComputePskSecret(psks)
 	if err != nil {
 		t.Fatalf("ComputePskSecret: %v", err)

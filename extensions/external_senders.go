@@ -1,6 +1,3 @@
-// Use of this source code is governed by a MIT-style license
-// that can be found in the LICENSE file.
-
 // Package extensions - External Senders Extension (RFC 9420 §12.1.8.1)
 package extensions
 

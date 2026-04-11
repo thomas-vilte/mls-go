@@ -6,26 +6,26 @@ import (
 )
 
 // FuzzAEAD fuzzes the AEAD encryption/decryption roundtrip.
-// Ejecutar: go test -fuzz=FuzzAEAD -fuzztime=1m
+// Run: go test -fuzz=FuzzAEAD -fuzztime=1m
 func FuzzAEAD(f *testing.F) {
-	// Seed corpus con casos válidos
+	// Seed corpus with valid cases
 	f.Add([]byte("0123456789abcdef"), []byte("0123456789ab"), []byte("plaintext"))
 	f.Add([]byte("0123456789abcdef"), []byte("0123456789ab"), []byte(""))
 	f.Add([]byte("0123456789abcdef"), []byte("0123456789ab"), []byte("large plaintext with more data to test"))
 
 	f.Fuzz(func(t *testing.T, key, nonce, plaintext []byte) {
-		// Validar longitudes
+		// Validate lengths
 		if len(key) != 16 {
-			return // Solo probamos AES-128
+			return // Only test AES-128
 		}
 		if len(nonce) != 12 {
-			return // Solo probamos nonces de 12 bytes
+			return // Only test 12-byte nonces
 		}
 
 		// Encrypt
 		ciphertext, err := AESEncrypt(key, nonce, plaintext, nil)
 		if err != nil {
-			return // Errores de cifrado son OK, solo retornamos
+			return // Encryption errors are OK, just return
 		}
 
 		// Decrypt
@@ -34,7 +34,7 @@ func FuzzAEAD(f *testing.F) {
 			t.Fatalf("AESDecrypt failed: %v", err)
 		}
 
-		// Verificar roundtrip
+		// Verify roundtrip
 		if !bytes.Equal(plaintext, decrypted) {
 			t.Errorf("Decryption mismatch:\ngot  %v\nwant %v", decrypted, plaintext)
 		}
@@ -42,7 +42,7 @@ func FuzzAEAD(f *testing.F) {
 }
 
 // FuzzHKDF fuzzes HKDF Extract-Expand roundtrip.
-// Ejecutar: go test -fuzz=FuzzHKDF -fuzztime=1m
+// Run: go test -fuzz=FuzzHKDF -fuzztime=1m
 func FuzzHKDF(f *testing.F) {
 	// Seed corpus
 	f.Add([]byte("salt"), []byte("ikm"), []byte("info"), 32)
@@ -50,7 +50,7 @@ func FuzzHKDF(f *testing.F) {
 	f.Add([]byte("long salt value"), []byte("long ikm value"), []byte("context"), 64)
 
 	f.Fuzz(func(t *testing.T, salt, ikm, info []byte, length int) {
-		// Limitar length para evitar tests muy lentos
+		// Limit length to avoid slow tests
 		if length <= 0 || length > 1024 {
 			return
 		}
@@ -66,15 +66,15 @@ func FuzzHKDF(f *testing.F) {
 		// Expand
 		okm, err := hkdf.Expand(prk, info, length)
 		if err != nil {
-			return // Errores de expand son OK para inputs inválidos
+			return // Expand errors are OK for invalid inputs
 		}
 
-		// Verificar length
+		// Verify length
 		if len(okm) != length {
 			t.Errorf("HKDF Expand returned wrong length: got %d, want %d", len(okm), length)
 		}
 
-		// Verificar determinismo
+		// Verify determinism
 		okm2, err := hkdf.Expand(prk, info, length)
 		if err != nil {
 			t.Fatalf("HKDF Expand failed on second call: %v", err)
@@ -86,7 +86,7 @@ func FuzzHKDF(f *testing.F) {
 }
 
 // FuzzSecret fuzzes Secret operations.
-// Ejecutar: go test -fuzz=FuzzSecret -fuzztime=1m
+// Run: go test -fuzz=FuzzSecret -fuzztime=1m
 func FuzzSecret(f *testing.F) {
 	// Seed corpus
 	f.Add([]byte("secret value"))
@@ -94,32 +94,32 @@ func FuzzSecret(f *testing.F) {
 	f.Add([]byte("long secret value for testing"))
 
 	f.Fuzz(func(t *testing.T, value []byte) {
-		// Create secret.
+		// Create secret
 		secret := NewSecret(value)
 
-		// Verificar AsSlice
+		// Verify AsSlice
 		slice := secret.AsSlice()
 		if !bytes.Equal(slice, value) {
 			t.Errorf("Secret.AsSlice() mismatch")
 		}
 
-		// Verificar Len
+		// Verify Len
 		if secret.Len() != len(value) {
 			t.Errorf("Secret.Len() mismatch: got %d, want %d", secret.Len(), len(value))
 		}
 
-		// Verificar Clone
+		// Verify Clone
 		clone := secret.Clone()
 		if !clone.Equal(secret) {
 			t.Errorf("Secret.Clone() is not equal to original")
 		}
 
-		// Verificar Equal
+		// Verify Equal
 		if !secret.Equal(NewSecret(value)) {
 			t.Errorf("Secret.Equal() should return true for same value")
 		}
 
-		// Verificar que no es igual a otro valor
+		// Verify not equal to different value
 		if secret.Equal(NewSecret([]byte("different"))) {
 			t.Errorf("Secret.Equal() should return false for different value")
 		}
@@ -150,7 +150,7 @@ func TestAEAD_Roundtrip(t *testing.T) {
 		t.Fatalf("AESDecrypt() error = %v", err)
 	}
 
-	// Verificar
+	// Verify
 	if !bytes.Equal(plaintext, decrypted) {
 		t.Errorf("Decryption mismatch:\ngot  %s\nwant %s", decrypted, plaintext)
 	}
@@ -208,10 +208,10 @@ func TestAEAD_TamperedData(t *testing.T) {
 		t.Fatalf("AESEncrypt() error = %v", err)
 	}
 
-	// Tamper con el ciphertext
+	// Tamper the ciphertext
 	tampered := make([]byte, len(ciphertext))
 	copy(tampered, ciphertext)
-	tampered[0] ^= 0xFF // Modificar primer byte
+	tampered[0] ^= 0xFF // Modify first byte
 
 	// Decryption of tampered data must fail.
 	_, err = AESDecrypt(key, nonce, tampered, nil)

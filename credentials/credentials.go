@@ -1,7 +1,3 @@
-// Copyright 2024 MLS-Go Authors. All rights reserved.
-// Use of this source code is governed by a MIT-style license
-// that can be found in the LICENSE file.
-
 // Package credentials implements MLS credential types per RFC 9420 §5.3.
 //
 // # Overview

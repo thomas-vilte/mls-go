@@ -18,7 +18,7 @@ func makeReInitProposal(groupID []byte) *ReInitProposal {
 	}
 }
 
-// makeSingleKP genera un KeyPackage + privKeys para usar en tests de ReInit.
+// makeSingleKP generates a KeyPackage + privKeys for ReInit tests.
 func makeSingleKP(t *testing.T) (*keypackages.KeyPackage, *keypackages.KeyPackagePrivateKeys) {
 	t.Helper()
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("reinit-member"))

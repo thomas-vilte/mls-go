@@ -898,7 +898,7 @@ func (g *Group) CommitWithContext(
 		GroupContext: groupContextBytes,
 	}
 
-	// Sign the TBS con label (RFC §6.1 / §5.1.2)
+	// Sign the TBS with label (RFC §6.1 / §5.1.2)
 	sig, err := ciphersuite.SignWithLabel(sigPrivKey, "FramedContentTBS", ac.MarshalTBS())
 	if err != nil {
 		return nil, fmt.Errorf("signing commit: %w", err)

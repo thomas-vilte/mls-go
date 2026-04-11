@@ -37,7 +37,7 @@ func TestMakeKeyPackageRef(t *testing.T) {
 		t.Fatal("MakeKeyPackageRef() returned nil")
 	}
 
-	// Verificar que el hash es correcto
+	// Check that the hash is correct
 	slice := keyPackageRef.AsSlice()
 	if len(slice) != 32 {
 		t.Errorf("KeyPackageRef should be 32 bytes, got %d", len(slice))
@@ -53,7 +53,7 @@ func TestMakeProposalRef(t *testing.T) {
 		t.Fatal("MakeProposalRef() returned nil")
 	}
 
-	// Verificar que el hash es correcto
+	// Check that the hash is correct
 	slice := proposalRef.AsSlice()
 	if len(slice) != 32 {
 		t.Errorf("ProposalRef should be 32 bytes, got %d", len(slice))
@@ -62,7 +62,7 @@ func TestMakeProposalRef(t *testing.T) {
 
 // TestHashReferenceMarshal verifies HashReference marshaling.
 func TestHashReferenceMarshal(t *testing.T) {
-	// Usar datos de 32 bytes para simular un hash real
+	// Use 32 bytes to simulate a real hash
 	data := make([]byte, 32)
 	for i := range data {
 		data[i] = byte(i)
@@ -76,7 +76,7 @@ func TestHashReferenceMarshal(t *testing.T) {
 		t.Error("AsSlice() returned empty data")
 	}
 
-	// Debería mantener los 32 bytes original
+	// Should preserve the original 32 bytes
 	if len(marshaled) != 32 {
 		t.Errorf("AsSlice() should return 32 bytes, got %d", len(marshaled))
 	}
@@ -92,7 +92,7 @@ func TestMakeHashReference(t *testing.T) {
 		t.Fatal("makeHashReference() returned nil")
 	}
 
-	// Debería ser SHA-256 (32 bytes)
+	// Should be SHA-256 (32 bytes)
 	if len(hash.Value) != 32 {
 		t.Errorf("makeHashReference() should return 32 bytes, got %d", len(hash.Value))
 	}
@@ -120,7 +120,7 @@ func TestMac(t *testing.T) {
 		t.Error("Equal() should return true for same values")
 	}
 
-	// Equal con diferente valor
+	// Equal with different value
 	mac3 := NewMac([]byte("different"))
 	if mac.Equal(mac3) {
 		t.Error("Equal() should return false for different values")
@@ -168,7 +168,7 @@ func TestReuseGuard(t *testing.T) {
 		t.Error("NewReuseGuardFromBytes() returned different bytes")
 	}
 
-	// NewReuseGuardFromBytes con longitud inválida
+	// NewReuseGuardFromBytes with invalid length
 	_, err = NewReuseGuardFromBytes([]byte{0x01, 0x02})
 	if err == nil {
 		t.Error("NewReuseGuardFromBytes() should fail with invalid length")
@@ -247,17 +247,28 @@ func TestSignatureError(t *testing.T) {
 	}
 }
 
-// TestCryptoError verifies CryptoError.
-func TestCryptoError(t *testing.T) {
-	// Los errores modernos son variables, no tipos
-	// Verificamos que los errores estándar existen y funcionan
-	err := ErrCryptoLibraryError
-	if err == nil {
-		t.Error("ErrCryptoLibraryError should not be nil")
-	}
-	str := err.Error()
-	if str == "" {
-		t.Error("Error() returned empty string")
+// TestSentinelErrors verifies that sentinel errors are non-nil and have messages.
+func TestSentinelErrors(t *testing.T) {
+	for _, err := range []error{
+		ErrAeadDecryption,
+		ErrInvalidKeyLength,
+		ErrInvalidNonceLength,
+		ErrInsufficientRandom,
+		ErrInvalidSignature,
+		ErrSigningError,
+		ErrVerificationError,
+		ErrInvalidLength,
+		ErrKdfLabelTooLarge,
+		ErrUnsupportedSuite,
+	} {
+		t.Run(err.Error(), func(t *testing.T) {
+			if err == nil {
+				t.Fatal("error should not be nil")
+			}
+			if err.Error() == "" {
+				t.Error("Error() returned empty string")
+			}
+		})
 	}
 }
 
@@ -316,7 +327,7 @@ func TestSignAndVerify(_ *testing.T) {
 	_ = SignWithLabel
 }
 
-// BenchmarkHashReference mide el performance de HashReference.
+// BenchmarkHashReference measures HashReference performance.
 func BenchmarkHashReference(b *testing.B) {
 	data := []byte("test data")
 	b.ResetTimer()
@@ -325,7 +336,7 @@ func BenchmarkHashReference(b *testing.B) {
 	}
 }
 
-// BenchmarkMac mide el performance de MAC.
+// BenchmarkMac measures MAC performance.
 func BenchmarkMac(b *testing.B) {
 	key, _ := NewSecretRandom(32)
 	message := []byte("message")
@@ -337,7 +348,7 @@ func BenchmarkMac(b *testing.B) {
 	}
 }
 
-// BenchmarkReuseGuard mide el performance de ReuseGuard.
+// BenchmarkReuseGuard measures ReuseGuard generation performance.
 func BenchmarkReuseGuard(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

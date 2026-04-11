@@ -207,7 +207,7 @@ func TestSecret_Random(t *testing.T) {
 		t.Fatalf("NewSecretRandom() error = %v", err)
 	}
 
-	// Deberían ser diferentes
+	// Should be different
 	if secret1.Equal(secret2) {
 		t.Error("Random secrets should be different")
 	}
@@ -223,12 +223,12 @@ func TestSecret_Clone(t *testing.T) {
 	original := NewSecret([]byte("secret value"))
 	clone := original.Clone()
 
-	// Deberían ser iguales
+	// Should be equal
 	if !original.Equal(clone) {
 		t.Error("Clone should be equal to original")
 	}
 
-	// Modificar el original no debería afectar el clone
+	// Modifying original should not affect clone
 	original.Value[0] = 0xFF
 	if original.Equal(clone) {
 		t.Error("Modifying original should not affect clone")
@@ -289,7 +289,7 @@ func TestSecret_HKDFExpand(t *testing.T) {
 		t.Fatalf("HKDFExpand() error = %v", err)
 	}
 
-	// OKM debería tener la longitud correcta
+	// OKM should have correct length
 	if okm.Len() != length {
 		t.Errorf("OKM length should be %d, got %d", length, okm.Len())
 	}
@@ -363,7 +363,7 @@ func TestSecretRandomCS(t *testing.T) {
 		t.Fatalf("NewSecretRandomCS() error = %v", err)
 	}
 
-	// Debería tener la longitud del hash del ciphersuite
+	// Should have hash length of the cipher suite
 	if secret.Len() != cs.HashLength() {
 		t.Errorf("Secret length should be %d, got %d", cs.HashLength(), secret.Len())
 	}
@@ -392,7 +392,7 @@ func TestZeroSecretCS(t *testing.T) {
 	cs := MLS128DHKEMP256
 	secret := ZeroSecretCS(cs)
 
-	// Debería tener la longitud del hash
+	// Should have hash length
 	if secret.Len() != cs.HashLength() {
 		t.Errorf("ZeroSecretCS length should be %d, got %d", cs.HashLength(), secret.Len())
 	}
@@ -471,17 +471,17 @@ func TestEd25519_SignVerifyWithLabel(t *testing.T) {
 		t.Errorf("Ed25519 signature should be 64 bytes, got %d", len(sig.AsSlice()))
 	}
 
-	// Verificar con label correcto
+	// Verify with correct label
 	if err := pubKey.VerifyWithLabel("test_label", data, sig); err != nil {
 		t.Errorf("VerifyWithLabel should succeed: %v", err)
 	}
 
-	// Verificar con label incorrecto debería fallar
+	// Verify with wrong label should fail
 	if err := pubKey.VerifyWithLabel("wrong_label", data, sig); err == nil {
 		t.Error("VerifyWithLabel should fail with wrong label")
 	}
 
-	// Verificar con data modificada debería fallar
+	// Verify with tampered data should fail
 	badData := []byte("tampered message")
 	if err := pubKey.VerifyWithLabel("test_label", badData, sig); err == nil {
 		t.Error("VerifyWithLabel should fail with tampered data")

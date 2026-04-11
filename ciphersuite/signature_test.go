@@ -7,7 +7,7 @@ import (
 
 // TestSignature_GenerateVerify verifies signature generation and verification.
 func TestSignature_GenerateVerify(t *testing.T) {
-	// Generar key pair
+	// Generate key pair
 	privKey, err := GenerateSignaturePrivateKey()
 	if err != nil {
 		t.Fatalf("GenerateSignaturePrivateKey() error = %v", err)
@@ -21,7 +21,7 @@ func TestSignature_GenerateVerify(t *testing.T) {
 		t.Fatalf("Sign() error = %v", err)
 	}
 
-	// Verificar que la signature no está vacía
+	// Verify signature is not empty
 	if len(signature.AsSlice()) == 0 {
 		t.Error("Signature should not be empty")
 	}
@@ -70,10 +70,10 @@ func TestSignature_TamperedSignature(t *testing.T) {
 	pubKey := privKey.PublicKey()
 	mlsPubKey := NewMLSSignaturePublicKey(pubKey.AsSlice(), ECDSA_SECP256R1_SHA256)
 
-	// Tamper con la signature
+	// Tamper the signature
 	tamperedSig := make([]byte, len(signature.AsSlice()))
 	copy(tamperedSig, signature.AsSlice())
-	tamperedSig[5] ^= 0xFF // Modificar byte
+	tamperedSig[5] ^= 0xFF // Modify byte
 
 	tamperedSignature := NewSignature(tamperedSig)
 
@@ -137,7 +137,7 @@ func TestSignature_PublicKeyFormat(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	pubKey := privKey.PublicKey()
 
-	// Verificar formato uncompressed (0x04 || X || Y = 65 bytes)
+	// Verify uncompressed format (0x04 || X || Y = 65 bytes)
 	pubKeyBytes := pubKey.AsSlice()
 	if len(pubKeyBytes) != 65 {
 		t.Errorf("Public key should be 65 bytes, got %d", len(pubKeyBytes))
@@ -146,7 +146,7 @@ func TestSignature_PublicKeyFormat(t *testing.T) {
 		t.Errorf("Public key should start with 0x04, got 0x%02x", pubKeyBytes[0])
 	}
 
-	// Convertir a ECDSA y verificar
+	// Convert to ECDSA and verify
 	ecdsaPubKey, err := NewSignaturePublicKey(pubKeyBytes).ToECDSA()
 	if err != nil {
 		t.Fatalf("ToECDSA() error = %v", err)
@@ -165,9 +165,9 @@ func TestSignature_InvalidPublicKeyFormat(t *testing.T) {
 		t.Error("ToECDSA() should fail with short key")
 	}
 
-	// Formato inválido (no empieza con 0x04)
+	// Invalid format (doesn't start with 0x04)
 	invalidKey2 := make([]byte, 65)
-	invalidKey2[0] = 0x02 // compressed format, no soportado
+	invalidKey2[0] = 0x02 // compressed format, not supported
 	_, err = NewSignaturePublicKey(invalidKey2).ToECDSA()
 	if err == nil {
 		t.Error("ToECDSA() should fail with invalid format")
@@ -181,18 +181,18 @@ func TestSignContent(t *testing.T) {
 
 	signContent := NewSignContent(label, content)
 
-	// Verificar que el label tiene el prefijo MLS
+	// Verify label has MLS prefix
 	expectedLabel := LabelPrefix + label
 	if !bytes.Equal(signContent.Label, []byte(expectedLabel)) {
 		t.Errorf("Label mismatch:\ngot  %s\nwant %s", signContent.Label, expectedLabel)
 	}
 
-	// Verificar contenido
+	// Verify content
 	if !bytes.Equal(signContent.Content, content) {
 		t.Errorf("Content mismatch:\ngot  %v\nwant %v", signContent.Content, content)
 	}
 
-	// Verificar marshaling
+	// Verify marshaling
 	marshaled := signContent.Marshal()
 	if len(marshaled) == 0 {
 		t.Error("Marshaled sign content should not be empty")
@@ -256,13 +256,13 @@ func TestSignature_KeyConsistency(t *testing.T) {
 	pubKey1 := privKey.PublicKey()
 	pubKey2 := privKey.PublicKey()
 
-	// Deberían ser iguales
+	// Should be equal
 	if !bytes.Equal(pubKey1.AsSlice(), pubKey2.AsSlice()) {
 		t.Error("PublicKey() should return consistent results")
 	}
 }
 
-// BenchmarkSignature_Sign mide el performance de signing.
+// BenchmarkSignature_Sign measures signing performance.
 func BenchmarkSignature_Sign(b *testing.B) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	data := []byte("Message to sign")
@@ -275,7 +275,7 @@ func BenchmarkSignature_Sign(b *testing.B) {
 	}
 }
 
-// BenchmarkSignature_Verify mide el performance de verification.
+// BenchmarkSignature_Verify measures verification performance.
 func BenchmarkSignature_Verify(b *testing.B) {
 	privKey, _ := GenerateSignaturePrivateKey()
 	data := []byte("Message to sign")

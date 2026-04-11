@@ -12,20 +12,20 @@ import (
 // secrets are moved into EpochHistory (not discarded) and that the group
 // advances to a fresh set of EpochSecrets.
 func TestMemoryZeroing_AfterCommit(t *testing.T) {
-	// Crear grupo con Alice
+	// Create group with Alice
 	cred1, _, _ := credentials.GenerateCredentialWithKey([]byte("alice"))
 	kp1, priv1, _ := keypackages.Generate(cred1, keypackages.MLS128DHKEMP256)
 	groupID, _ := NewGroupIDRandom()
 	aliceGroup, _ := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp1, priv1)
 
-	// Crear KeyPackage para Bob
+	// Create KeyPackage for Bob
 	cred2, _, _ := credentials.GenerateCredentialWithKey([]byte("bob"))
 	kp2, _, _ := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
 
-	// Guardar una referencia a los secrets del epoch 0
+	// Keep a reference to epoch 0 secrets
 	oldSecrets := aliceGroup.epochSecrets
 
-	// Alice agrega a Bob y hace commit
+	// Alice adds Bob and commits
 	_, _ = aliceGroup.AddMember(kp2)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(priv1.SignatureKey)
 	sigPub := sigPriv.PublicKey()
@@ -34,7 +34,7 @@ func TestMemoryZeroing_AfterCommit(t *testing.T) {
 		t.Fatalf("creating commit: %v", err)
 	}
 
-	// Al hacer MergeCommit, los oldSecrets se mueven a EpochHistory.
+	// On MergeCommit, old secrets are moved to EpochHistory.
 	if err := aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("merging commit: %v", err)
 	}

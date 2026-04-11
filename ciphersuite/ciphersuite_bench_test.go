@@ -37,7 +37,7 @@ func BenchmarkHPKE_Decap(b *testing.B) {
 func BenchmarkSign(b *testing.B) {
 	priv, _ := GenerateSignaturePrivateKey()
 	data := make([]byte, 1024)
-	rand.Read(data)
+	_, _ = rand.Read(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -49,7 +49,7 @@ func BenchmarkVerify(b *testing.B) {
 	priv, _ := GenerateSignaturePrivateKey()
 	pub := priv.PublicKey()
 	data := make([]byte, 1024)
-	rand.Read(data)
+	_, _ = rand.Read(data)
 	sig, _ := priv.Sign(data)
 
 	// Create MLSSignaturePublicKey for verify
@@ -64,7 +64,7 @@ func BenchmarkVerify(b *testing.B) {
 func BenchmarkKDFExpandLabel(b *testing.B) {
 	secret, _ := NewSecretRandomCS(MLS128DHKEMP256)
 	context := make([]byte, 32)
-	rand.Read(context)
+	_, _ = rand.Read(context)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

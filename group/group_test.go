@@ -633,7 +633,7 @@ func TestProcessPrivateMessage_Commit(t *testing.T) {
 	}
 }
 
-// TestProcessPrivateMessage_WrongEpoch verifies that mensajes de otra época son rechazados.
+// TestProcessPrivateMessage_WrongEpoch verifies that messages from another epoch are rejected.
 func TestProcessPrivateMessage_WrongEpoch(t *testing.T) {
 	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
 

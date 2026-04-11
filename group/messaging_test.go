@@ -65,7 +65,7 @@ func TestSendMessage_EmptyPayload(t *testing.T) {
 	// Full secret synchronization between Alice and Bob is covered in integration_test.go.
 }
 
-// TestSendMessage_NilSignKey verifies that SendMessage fails con sigKey nil
+// TestSendMessage_NilSignKey verifies that SendMessage fails with nil sigKey.
 func TestSendMessage_NilSignKey(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
@@ -100,7 +100,7 @@ func TestSendMessage_FailsWithPendingProposals(t *testing.T) {
 	}
 }
 
-// TestReceiveMessage_WrongSender verifies that ReceiveMessage fails con sender inválido
+// TestReceiveMessage_WrongSender verifies that ReceiveMessage fails with invalid sender.
 func TestReceiveMessage_WrongSender(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
 
@@ -112,14 +112,14 @@ func TestReceiveMessage_WrongSender(t *testing.T) {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	// Bob intenta recibir con un sender index que no existe
+	// Bob tries to receive with a non-existent sender index
 	_, err = bobGroup.ReceiveMessage(pm, 9999)
 	if err == nil {
 		t.Error("ReceiveMessage should fail with out-of-bounds sender index")
 	}
 }
 
-// TestSendMessage_WrongState verifies that SendMessage fails si el grupo no está operational
+// TestSendMessage_WrongState verifies that SendMessage fails when the group is not operational.
 func TestSendMessage_WrongState(t *testing.T) {
 	// Create a group and force a non-operational state for the test.
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("User"))

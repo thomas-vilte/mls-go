@@ -2,6 +2,7 @@ package ciphersuite
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"runtime"
 )
@@ -108,10 +109,10 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 
 	okm, err := hkdfExpand(s.Value, info, length)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("hkdf expand failed: %w", err)
 	}
 	if len(okm) == 0 {
-		return nil, ErrCryptoLibraryError
+		return nil, errors.New("ciphersuite: hkdf produced empty output")
 	}
 
 	// CRITICAL: Keep alive until hkdfExpand completes

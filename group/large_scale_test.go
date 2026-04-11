@@ -11,8 +11,8 @@ import (
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
-// TestGroup_1024Members prueba el comportamiento del grupo a gran escala.
-// No debería fallar ni ser excesivamente lento.
+// TestGroup_1024Members tests group behavior at large scale.
+// Should not fail or be excessively slow.
 func TestGroup_1024Members(t *testing.T) {
 	// Skip this test in short mode as it can take a while
 	if testing.Short() {

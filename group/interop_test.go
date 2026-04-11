@@ -47,8 +47,8 @@ func TestKeyScheduleVectors(t *testing.T) {
 	// Test vectors oficiales de MLSWG:
 	// https://github.com/mlswg/mls-implementations/blob/main/test-vectors/key-schedule.json
 	//
-	// psk_secret es un INPUT del key schedule, no un output.
-	// Se usa para incorporar PSKs externos o resumption PSKs.
+	// psk_secret is an INPUT to the key schedule, not an output.
+	// Used to incorporate external or resumption PSKs.
 
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/key-schedule.json")
 	if err != nil {
@@ -70,16 +70,16 @@ func TestKeyScheduleVectors(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				cs := ciphersuite.CipherSuite(v.CipherSuite)
 
-				// Skip cipher suites no soportadas (CS4-7 son placeholders)
+				// Skip unsupported cipher suites (CS4-7 are placeholders)
 				if !cs.IsSupported() {
-					t.Skipf("cipher suite %d no está implementada", v.CipherSuite)
+					t.Skipf("cipher suite %d not implemented", v.CipherSuite)
 				}
 
 				initSecret := ciphersuite.NewSecret(currentInitSecret)
 				commitSecret := ciphersuite.NewSecret(mustHex(t, epoch.CommitSecret))
 				groupContext := mustHex(t, epoch.GroupContext)
 
-				// psk_secret es un INPUT del test vector
+				// psk_secret is an INPUT from the test vector
 				pskSecretInput := mustHex(t, epoch.PskSecret)
 
 				ks := schedule.NewKeySchedule(cs, initSecret)
@@ -93,8 +93,8 @@ func TestKeyScheduleVectors(t *testing.T) {
 					t.Fatalf("joiner_secret sametch")
 				}
 
-				// Usar el psk_secret del test vector como input directo
-				// En lugar de calcularlo con ComputePskSecret(nil)
+				// Use the psk_secret from test vector as direct input
+				// Use the input directly instead of computing with ComputePskSecret(nil)
 				err = ks.SetPskSecretFromInput(ciphersuite.NewSecret(pskSecretInput))
 				if err != nil {
 					t.Fatalf("SetPskSecretFromInput: %v", err)

@@ -8,9 +8,15 @@ Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://
 
 **Current status:** `v1.2.0` — stable, interop-verified.
 
+## Why This Exists
+
+I needed an RFC 9420-compliant MLS library in Go with no CGO dependency. The existing options either required C bindings or were incomplete. So I built this from scratch, testing interoperability against [mlspp](https://github.com/cisco/mlspp) and [OpenMLS](https://github.com/openmls/openmls) to make sure the implementation is correct.
+
+Use it if you need group key exchange in Go: encrypted messaging, E2EE group chats, audio/video call encryption (DAVE protocol), or any protocol that needs a standard group ratchet.
+
 ## Overview
 
-mls-go is a native Go MLS library with no CGO dependency. It targets applications that need RFC 9420-compliant group key exchange: encrypted messaging, audio/video call encryption (DAVE protocol), collaborative tools, and any E2EE system that needs a standard group ratchet.
+The library is organized around the RFC 9420 spec:
 
 Main packages:
 
@@ -31,53 +37,33 @@ Main packages:
 
 ## What Works
 
-- RFC 9420 compliant group creation, Add/Update/Remove proposals, commits
-- Welcome creation and join-from-Welcome
-- External Join (join without Welcome via GroupInfo)
-- ReInit (group migration to new cipher suite or parameters)
-- PSK proposals and pre-shared key bootstrapping (External, Resumption, Branch)
-- Branch (group fork from existing state)
-- PrivateMessage protection for application data (with configurable padding)
-- PublicMessage handling for handshake messages
-- MLS-Exporter (`group.Export`) and EpochAuthenticator
-- External Senders extension (RFC 9420 §12.1.8.1)
-- Proposal revocation by ProposalRef (`Group.RevokeProposal`)
-- RFC 9420 §2.1.2: MLS varint non-minimal encodings rejected
-- RFC 9420 §7.3: LeafNode extensions must be declared in capabilities; validated on receive
-- RFC 9420 §7.3 / §8.4: full LeafNode validation (lifetime, capabilities, signature) for Add/Update proposals
-- RFC 9420 §7.4.1 / §12.4.3.3: ratchet_tree trailing blank nodes rejected
-- RFC 9420 §7.9.2: parent-hash chain verified when an UpdatePath is committed
-- RFC 9420 §9.2: old HPKE leaf key zeroed when an Update proposal replaces it
-- RFC 9420 §11.1: required_capabilities extension validated for cross-member compatibility
-- RFC 9420 §11.3: Resumption PSK usage=reinit requires a ReInit proposal in the same commit
-- RFC 9420 §12.1.8: external sender proposal type restrictions enforced
-- RFC 9420 §12.4: application data blocked while valid proposals are pending
-- RFC 9420 §12.4.2: received UpdatePath public keys verified against derived path secrets
-- RFC 9420 §12.4.3.1: credential type of Add/Update proposals checked against all members' capabilities
-- RFC 9420 §15.2: AEAD nonce counter limit enforced per sender per epoch
-- RFC 9420 §9.2 / §15.2: per-generation replay protection — duplicate generation numbers rejected per sender per epoch
-- RFC 9420 §13.4: joiner verifies support for every active GroupContext extension before completing Welcome join
-- RFC 9420 §14: staged commit API — `CommitPendingProposalsStaged` / `ConfirmPendingCommit` / `DiscardPendingCommit` for DS-based conflict resolution without premature state mutation
-- Welcome join: ratchet_tree LeafNodes validated; unmerged_leaves references verified
-- Welcome join: PSK store checked before processing; missing PSKs return explicit errors
-- State serialization with SecretTree generation counters (no nonce reuse on restore)
-- Thread-safe `Client` with per-group mutex striping
-- Cipher suites:
-  - `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (CS 1)
-  - `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` (CS 2)
-  - `MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519` (CS 3)
+Core RFC 9420 protocol:
+
+- Group lifecycle: create, join (Welcome + External Join), leave
+- Proposals: Add, Update, Remove, PSK, ReInit — with commit and Welcome
+- Message protection: PrivateMessage (encrypted) and PublicMessage (signed)
+- Post-compromise security: UpdatePath with parent-hash verification
+- External Senders (RFC §12.1.8.1)
+- Staged commits via `CommitPendingProposalsStaged` / `ConfirmPendingCommit` (RFC §14)
+- State serialization with nonce-safe SecretTree counters
+- Full LeafNode validation: lifetime, capabilities, extensions, credential types
+- Per-generation replay protection — duplicate generation numbers rejected
+- AEAD nonce counter limit enforced (2³²−1 per sender per epoch)
+- Welcome join validates ratchet_tree structure and PSK availability
+
+All the boring validation stuff from the RFC is implemented too (varint encodings, required_capabilities checks, parent-hash chain verification, etc.). The interop tests verify correctness against mlspp and OpenMLS.
 
 ## Interoperability
 
-Verified by Docker-based test suite:
+Tested against other MLS implementations via Docker:
 
 | Target        | Suites  | Result                                                   |
 |---------------|---------|----------------------------------------------------------|
 | mls-go self   | 1, 2, 3 | 21/21 PASS                                               |
 | mlspp cross   | 1, 2, 3 | 21/21 PASS                                               |
-| OpenMLS cross | 1, 2, 3 | 12/12 PASS (subset; sequential mode required — see below) |
+| OpenMLS cross | 1, 2, 3 | 12/12 PASS (subset; sequential mode required)            |
 
-Scenarios covered: `welcome_join`, `application`, `commit`, `external_join`, `external_proposals`, `reinit`, `branch`.
+Scenarios: `welcome_join`, `application`, `commit`, `external_join`, `external_proposals`, `reinit`, `branch`.
 
 ### OpenMLS Note
 

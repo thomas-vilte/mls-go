@@ -89,10 +89,10 @@ func TestCryptoBasicsVectors(t *testing.T) {
 			testExpandWithLabel(t, cs, v)
 			testRefHash(t, cs, v)
 
-			// SignWithLabel test para todas las cipher suites
+			// SignWithLabel tests for all cipher suites
 			testSignWithLabel(t, v)
 
-			// HPKE EncryptWithLabel test para todas las cipher suites
+			// HPKE EncryptWithLabel tests for all cipher suites
 			testEncryptWithLabel(t, cs, v)
 		})
 	}

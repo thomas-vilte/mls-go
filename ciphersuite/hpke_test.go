@@ -57,7 +57,7 @@ func TestHPKE_WrongKey(t *testing.T) {
 	publicKey1 := privKey1.PublicKey().Bytes()
 	plaintext := []byte("Secret message")
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Encrypt with key 1
@@ -81,7 +81,7 @@ func TestHPKE_TamperedCiphertext(t *testing.T) {
 
 	plaintext := []byte("Secret message")
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Encrypt
@@ -112,9 +112,9 @@ func TestHPKE_EmptyPlaintext(t *testing.T) {
 	privKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	publicKey := privKey.PublicKey().Bytes()
 
-	plaintext := []byte{}
+	var plaintext []byte
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Encrypt empty plaintext
@@ -130,7 +130,7 @@ func TestHPKE_EmptyPlaintext(t *testing.T) {
 		t.Fatalf("DecryptWithLabel() error = %v", err)
 	}
 
-	// Verificar
+	// Check
 	if len(decrypted) != 0 {
 		t.Errorf("Expected empty decrypted data, got %d bytes", len(decrypted))
 	}
@@ -148,7 +148,7 @@ func TestHPKE_LargePlaintext(t *testing.T) {
 	}
 
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Encrypt
@@ -164,7 +164,7 @@ func TestHPKE_LargePlaintext(t *testing.T) {
 		t.Fatalf("DecryptWithLabel() error = %v", err)
 	}
 
-	// Verificar
+	// Verify
 	if !bytes.Equal(plaintext, decrypted) {
 		t.Errorf("Decryption mismatch for large plaintext")
 	}
@@ -176,10 +176,10 @@ func TestHPKE_DifferentLabels(t *testing.T) {
 	publicKey := privKey.PublicKey().Bytes()
 
 	plaintext := []byte("Same plaintext")
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
-	// Encrypt con diferentes labels
+	// Encrypt with different labels
 	ciphertext1, err := EncryptWithLabel(publicKey, "label1", context, plaintext, cs)
 	if err != nil {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
@@ -190,7 +190,7 @@ func TestHPKE_DifferentLabels(t *testing.T) {
 		t.Fatalf("EncryptWithLabel() error = %v", err)
 	}
 
-	// Los ciphertexts deberían ser diferentes (diferente KEMOutput por ephemeral key)
+	// Ciphertexts should be different (different KEMOutput due to different ephemeral key)
 	if bytes.Equal(ciphertext1.KEMOutput, ciphertext2.KEMOutput) {
 		t.Error("Different labels should produce different KEMOutputs")
 	}
@@ -201,7 +201,7 @@ func TestHPKE_InvalidPublicKey(t *testing.T) {
 	invalidPublicKey := []byte("invalid key")
 	plaintext := []byte("test")
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	_, err := EncryptWithLabel(invalidPublicKey, label, context, plaintext, cs)
@@ -217,7 +217,7 @@ func TestHPKE_InvalidPrivateKey(t *testing.T) {
 
 	plaintext := []byte("test")
 	label := "test"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Encrypt
@@ -265,7 +265,7 @@ func BenchmarkHPKE_Encrypt(b *testing.B) {
 	publicKey := privKey.PublicKey().Bytes()
 	plaintext := []byte("Hello, MLS!")
 	label := "benchmark"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	b.ResetTimer()
@@ -282,7 +282,7 @@ func BenchmarkHPKE_Decrypt(b *testing.B) {
 	publicKey := privKey.PublicKey().Bytes()
 	plaintext := []byte("Hello, MLS!")
 	label := "benchmark"
-	context := []byte{}
+	var context []byte
 	cs := MLS128DHKEMP256
 
 	// Pre-encrypt

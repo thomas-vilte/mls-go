@@ -73,8 +73,7 @@ func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
 	}
 }
 
-// TestTreeTruncation_CommitWithRemove verifica el flujo completo de
-// RemoveMember → Commit → MergeCommit y que el árbol queda con 1 leaf.
+// TestTreeTruncation_CommitWithRemove verifies the full flow of RemoveMember → Commit → MergeCommit and that the tree has 1 leaf.
 func TestTreeTruncation_CommitWithRemove(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 

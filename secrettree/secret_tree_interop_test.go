@@ -11,7 +11,7 @@ import (
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
-// Estructuras para parsear el JSON de test vectors
+// Structures for parsing test vector JSON.
 type secretTreeSenderData struct {
 	SenderDataSecret string `json:"sender_data_secret"`
 	Ciphertext       string `json:"ciphertext"`
@@ -43,15 +43,15 @@ func mustDecodeHex(t *testing.T, s string) []byte {
 	return b
 }
 
-// TestSecretTreeVectors ejecuta los test vectors de interoperabilidad del Secret Tree
-// según RFC 9420 §9.
+// TestSecretTreeVectors runs Secret Tree interoperability test vectors
+// according to RFC 9420 §9.
 //
-// Los test vectors verifican que:
-//  1. La derivación de leaf secrets desde encryption_secret es correcta
-//  2. La derivación de handshake y application ratchet roots es correcta
-//  3. El ratchet forward genera las keys/nonces esperadas para cada generación
+// The test vectors verify that:
+//  1. Leaf secret derivation from encryption_secret is correct
+//  2. Handshake and application ratchet root derivation is correct
+//  3. Forward ratchet generates the expected keys/nonces for each generation
 //
-// Fuente: testdata/mls-interop-testvectors/test-vectors/secret-tree.json
+// Source: testdata/mls-interop-testvectors/test-vectors/secret-tree.json
 func TestSecretTreeVectors(t *testing.T) {
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/secret-tree.json")
 	if err != nil {
@@ -90,7 +90,7 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 	// Crear Secret Tree
 	leafCount := uint32(len(v.Leaves))
 
-	// Verificar cada leaf
+	// Verify each leaf
 	for leafIndex, leafGens := range v.Leaves {
 		t.Run(fmt.Sprintf("leaf%d", leafIndex), func(t *testing.T) {
 			// For each leaf, we need a NEW tree because ratchet forward is destructive
@@ -106,18 +106,18 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 				t.Fatalf("LeafForIndex(%d) failed: %v", leafIndex, err)
 			}
 
-			// Verificar cada generación en el test vector
-			// IMPORTANTE: Los test vectors asumen ratchet forward secuencial
-			// No podés saltar a gen 15 sin pasar por 0-14
+			// Verify each generation in the test vector
+			// IMPORTANT: Test vectors assume sequential forward ratchet
+			// You cannot skip to gen 15 without going through 0-14
 			for _, expected := range leafGens {
 				genName := fmt.Sprintf("gen%d", expected.Generation)
 				t.Run(genName, func(t *testing.T) {
-					// Ratchet forward hasta la generación esperada (RFC 9420 §9.1)
+					// Ratchet forward to the expected generation (RFC 9420 §9.1)
 					if err := leaf.ratchetTo(expected.Generation); err != nil {
 						t.Fatalf("ratchetTo(%d): %v", expected.Generation, err)
 					}
 
-					// Derivar key/nonce para la generación actual
+					// Derive key/nonce for the current generation
 					appKey, err := leaf.ApplicationKey(expected.Generation)
 					if err != nil {
 						t.Fatalf("ApplicationKey(%s) failed: %v", genName, err)
@@ -138,7 +138,7 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 						t.Fatalf("HandshakeNonce(%s) failed: %v", genName, err)
 					}
 
-					// Comparar con valores esperados
+					// Compare with expected values
 					expectedAppKey := mustDecodeHex(t, expected.ApplicationKey)
 					expectedAppNonce := mustDecodeHex(t, expected.ApplicationNonce)
 					expectedHsKey := mustDecodeHex(t, expected.HandshakeKey)
@@ -189,7 +189,7 @@ func TestSecretTreeDerivation(t *testing.T) {
 		t.Fatalf("LeafForIndex(0) failed: %v", err)
 	}
 
-	// Verificar que puede derivar keys para generación 0
+	// Verify it can derive keys for generation 0
 	appKey, err := leaf.ApplicationKey(0)
 	if err != nil {
 		t.Fatalf("ApplicationKey(0) failed: %v", err)
@@ -208,7 +208,7 @@ func TestSecretTreeDerivation(t *testing.T) {
 		t.Errorf("application_nonce length should be 12, got %d", len(appNonce))
 	}
 
-	// Verificar que generaciones diferentes dan keys diferentes
+	// Verify different generations give different keys
 	appKey1, _ := leaf.ApplicationKey(1)
 	if bytes.Equal(appKey, appKey1) {
 		t.Error("application_key should be different for different generations")
@@ -250,7 +250,7 @@ func TestSecretTreeGeneration(t *testing.T) {
 	tree, _ := NewTree(encSecret, 1, ciphersuite.MLS128DHKEMP256)
 	leaf, _ := tree.LeafForIndex(0)
 
-	// Verificar que generación 0 y 15 dan resultados diferentes
+	// Verify generations 0 and 15 give different results
 	appKey0, _ := leaf.ApplicationKey(0)
 	appKey15, _ := leaf.ApplicationKey(15)
 

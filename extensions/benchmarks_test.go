@@ -6,7 +6,7 @@ import (
 	"github.com/thomas-vilte/mls-go/extensions"
 )
 
-// Benchmarks para ApplicationIDExtension
+// Benchmarks for ApplicationIDExtension.
 
 func BenchmarkApplicationIDExtension_New(b *testing.B) {
 	appID := []byte("com.example.chat.application.identifier")
@@ -58,7 +58,7 @@ func BenchmarkApplicationIDExtension_ToExtension(b *testing.B) {
 	}
 }
 
-// Benchmarks para ExternalPubExtension
+// Benchmarks for ExternalPubExtension.
 
 func BenchmarkExternalPubExtension_New_P256(b *testing.B) {
 	pubKey := make([]byte, 65)
@@ -127,7 +127,7 @@ func BenchmarkExternalPubExtension_IsX25519(b *testing.B) {
 	}
 }
 
-// Benchmarks para LastResortExtension
+// Benchmarks for LastResortExtension.
 
 func BenchmarkLastResortExtension_New(b *testing.B) {
 	b.ResetTimer()
@@ -178,7 +178,7 @@ func BenchmarkLastResortExtension_ToExtension(b *testing.B) {
 	}
 }
 
-// Benchmarks para RequiredCapabilitiesExtension
+// Benchmarks for RequiredCapabilitiesExtension.
 
 func BenchmarkRequiredCapabilitiesExtension_New(b *testing.B) {
 	b.ResetTimer()
@@ -248,7 +248,7 @@ func BenchmarkRequiredCapabilitiesExtension_SupportsAll(b *testing.B) {
 	}
 }
 
-// Benchmarks para Extensions collection
+// Benchmarks for Extensions collection.
 
 func BenchmarkExtensions_New(b *testing.B) {
 	b.ResetTimer()
@@ -345,7 +345,7 @@ func BenchmarkExtensions_Len(b *testing.B) {
 	}
 }
 
-// Benchmarks para Extension genérica
+// Benchmarks for generic Extension.
 
 func BenchmarkExtension_Marshal(b *testing.B) {
 	ext := extensions.Extension{Type: extensions.ExtensionTypeApplicationID, Data: []byte("test-data")}

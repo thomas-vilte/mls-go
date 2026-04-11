@@ -20,9 +20,9 @@ type welcomeVector struct {
 }
 
 func TestWelcomeVectors(t *testing.T) {
-	// Nota: Estos tests usan vectors de other implementation que pueden to have diferencias
-	// en el HPKE key schedule. Si failsn, es por incompatibilidad de implementations.
-	// Nuestra implementación de HPKE pasa tests round-trip propios.
+	// Note: These vectors are from another implementation and may have HPKE
+	// key schedule differences. Failures likely indicate implementation incompatibility.
+	// Our own HPKE implementation passes its own round-trip tests.
 
 	data, err := os.ReadFile("../testdata/mls-interop-testvectors/test-vectors/welcome.json")
 	if err != nil {

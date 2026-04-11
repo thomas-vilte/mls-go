@@ -10,7 +10,7 @@ import (
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
-// mapPSKStore es una implementación trivial de PSKStore para tests.
+// mapPSKStore is a trivial PSKStore implementation for tests.
 type mapPSKStore struct {
 	m map[string][]byte
 }
