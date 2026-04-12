@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v1.2.1] - 2026-04-12
+
+[v1.2.1]: https://github.com/thomas-vilte/mls-go/compare/v1.2.0...v1.2.1
+
+In this patch release, we focused on improving the stability of state restoration and commit management. We also enhanced the developer experience by cleaning up the codebase and standardizing documentation.
+
+### 🛡️ Stability & Reliability
+
+- We fixed an issue where the proposal by-reference index was not correctly rebuilt during state restoration.
+- We resolved bugs affecting staged commit rollbacks and proposal references to ensure consistent state management.
+
+### 🔧 Developer Experience
+
+- We improved codebase maintainability by translating all comments to English and removing unnecessary boilerplate.
+
 ## [v1.2.0] - 2026-04-07
 
 [v1.2.0]: https://github.com/thomas-vilte/mls-go/compare/v1.1.0...v1.2.0
