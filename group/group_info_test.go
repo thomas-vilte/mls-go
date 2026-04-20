@@ -6,8 +6,18 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/keypackages"
 )
+
+func hasGroupInfoExtension(extensions []Extension, extType mlsext.ExtensionType) bool {
+	for _, ext := range extensions {
+		if ext.Type == extType {
+			return true
+		}
+	}
+	return false
+}
 
 func TestUnmarshalGroupInfo_RoundTrip(t *testing.T) {
 	cred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -98,5 +108,45 @@ func TestGetGroupInfo_NotOperational(t *testing.T) {
 	_, err = g.GetGroupInfo(sigPriv)
 	if err == nil {
 		t.Error("GetGroupInfo should fail when group is not in operational state")
+	}
+}
+
+func TestGetGroupInfoWithOptions_OmitsOptionalExtensions(t *testing.T) {
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp, priv, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	gid, _ := NewGroupIDRandom()
+	g, err := NewGroup(gid, ciphersuite.MLS128DHKEMP256, kp, priv)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+
+	sigPriv := ciphersuite.NewSignaturePrivateKey(priv.SignatureKey)
+
+	defaultInfo, err := g.GetGroupInfo(sigPriv)
+	if err != nil {
+		t.Fatalf("GetGroupInfo: %v", err)
+	}
+	if !hasGroupInfoExtension(defaultInfo.Extensions, mlsext.ExtensionTypeRatchetTree) {
+		t.Fatal("default GroupInfo should include ratchet_tree extension")
+	}
+	if !hasGroupInfoExtension(defaultInfo.Extensions, mlsext.ExtensionTypeExternalPub) {
+		t.Fatal("default GroupInfo should include external_pub extension")
+	}
+
+	customInfo, err := g.GetGroupInfoWithOptions(sigPriv, WithRatchetTree(false), WithExternalPub(false))
+	if err != nil {
+		t.Fatalf("GetGroupInfoWithOptions: %v", err)
+	}
+	if hasGroupInfoExtension(customInfo.Extensions, mlsext.ExtensionTypeRatchetTree) {
+		t.Fatal("ratchet_tree extension should be omitted")
+	}
+	if hasGroupInfoExtension(customInfo.Extensions, mlsext.ExtensionTypeExternalPub) {
+		t.Fatal("external_pub extension should be omitted")
 	}
 }

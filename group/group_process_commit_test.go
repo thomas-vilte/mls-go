@@ -148,6 +148,57 @@ func TestCreateWelcomeWithOptions(t *testing.T) {
 	}
 }
 
+func TestCreateWelcomeWithOpts(t *testing.T) {
+	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
+	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("Bob3"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(Bob3): %v", err)
+	}
+	bobKP, bobPriv, err := keypackages.Generate(bobCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(Bob3): %v", err)
+	}
+
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alicePriv.SignatureKey)
+	aliceSigPub := aliceSigPriv.PublicKey()
+
+	if _, err := aliceGroup.AddMember(bobKP); err != nil {
+		t.Fatalf("AddMember(Bob3): %v", err)
+	}
+	sc, err := aliceGroup.Commit(aliceSigPriv, aliceSigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	joinerSecret := sc.JoinerSecret()
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit: %v", err)
+	}
+
+	welcome, err := aliceGroup.CreateWelcomeWithOpts(
+		[]*keypackages.KeyPackage{bobKP},
+		aliceSigPriv,
+		WithJoinerSecret(joinerSecret),
+		WithPSKIDs(sc.PskIDs()),
+		WithPSKSecret(sc.RawPskSecret()),
+		WithStagedCommit(sc),
+		WithGroupInfoOptions(WithExternalPub(false)),
+	)
+	if err != nil {
+		t.Fatalf("CreateWelcomeWithOpts: %v", err)
+	}
+	if len(welcome.Marshal()) == 0 {
+		t.Fatal("CreateWelcomeWithOpts() returned an empty Welcome")
+	}
+
+	joinedGroup, err := JoinFromWelcome(welcome, bobKP, bobPriv, nil)
+	if err != nil {
+		t.Fatalf("JoinFromWelcome(CreateWelcomeWithOpts): %v", err)
+	}
+	if joinedGroup == nil {
+		t.Fatal("JoinFromWelcome(CreateWelcomeWithOpts) returned nil group")
+	}
+}
+
 // TestProcessCommit_Valid verifies that a valid commit is processed correctly
 func TestProcessCommit_Valid(t *testing.T) {
 	aliceGroup, bobGroup, alicePriv, _ := setupTwoMemberGroup(t)
