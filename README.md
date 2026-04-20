@@ -197,7 +197,7 @@ kp, priv, err := keypackages.Generate(credWithKey, cs,
 For advanced use cases (custom wire protocol, external commits, group inspection) use `group.Group` directly:
 
 ```go
-g, err := group.NewGroupWithExtensions(groupID, cs, kp, kpPriv, extensions)
+g, err := group.NewGroup(groupID, cs, kp, kpPriv, group.WithExtensions(extensions))
 g.Export("My App v1", senderIDBytes, 16)         // derive sender key
 g.EpochAuthenticator()                           // authentication tag
 g.RevokeProposal(ref)                            // remove in-flight proposal

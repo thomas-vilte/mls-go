@@ -462,31 +462,138 @@ type CreateWelcomeOptions struct {
 	PskIDs        []PskID
 	PskSecret     *ciphersuite.Secret
 	StagedCommit  *StagedCommit
+	// GroupInfoOption values to customize GroupInfo extension inclusion.
+	GroupInfoOptions []GroupInfoOption
 	// GroupInfo controls which extensions are included in the GroupInfo.
 	// By default, all RFC 9420 extensions are included.
+	//
+	// Deprecated: use GroupInfoOptions.
 	GroupInfoOpts GroupInfoOptions
 }
 
+type createWelcomeConfig struct {
+	joinerSecret  *ciphersuite.Secret
+	pathSecret    []byte
+	pskIDs        []PskID
+	pskSecret     *ciphersuite.Secret
+	stagedCommit  *StagedCommit
+	groupInfoOpts []GroupInfoOption
+	signerPrivKey *ciphersuite.SignaturePrivateKey
+}
+
+// CreateWelcomeOption configures Welcome message creation.
+type CreateWelcomeOption func(*createWelcomeConfig)
+
+// WithJoinerSecret sets the joiner_secret included in GroupSecrets.
+func WithJoinerSecret(secret *ciphersuite.Secret) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.joinerSecret = secret
+	}
+}
+
+// WithPathSecret sets an explicit path_secret for all joiners.
+func WithPathSecret(pathSecret []byte) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.pathSecret = append([]byte(nil), pathSecret...)
+	}
+}
+
+// WithPSKIDs sets the PSK references included in GroupSecrets.
+func WithPSKIDs(pskIDs []PskID) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.pskIDs = append([]PskID(nil), pskIDs...)
+	}
+}
+
+// WithPSKSecret sets the psk_secret used to derive welcome_secret.
+func WithPSKSecret(secret *ciphersuite.Secret) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.pskSecret = secret
+	}
+}
+
+// WithStagedCommit sets a staged commit so per-joiner path_secret values are derived automatically.
+func WithStagedCommit(staged *StagedCommit) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.stagedCommit = staged
+	}
+}
+
+// WithGroupInfoOptions sets GroupInfo serialization options for the Welcome.
+func WithGroupInfoOptions(opts ...GroupInfoOption) CreateWelcomeOption {
+	return func(cfg *createWelcomeConfig) {
+		cfg.groupInfoOpts = append([]GroupInfoOption(nil), opts...)
+	}
+}
+
+func defaultCreateWelcomeConfig(signerPrivKey *ciphersuite.SignaturePrivateKey) createWelcomeConfig {
+	return createWelcomeConfig{signerPrivKey: signerPrivKey}
+}
+
+func createWelcomeConfigFromLegacy(opts CreateWelcomeOptions) createWelcomeConfig {
+	cfg := defaultCreateWelcomeConfig(opts.SignerPrivKey)
+	cfg.joinerSecret = opts.JoinerSecret
+	cfg.pathSecret = append([]byte(nil), opts.PathSecret...)
+	cfg.pskIDs = append([]PskID(nil), opts.PskIDs...)
+	cfg.pskSecret = opts.PskSecret
+	cfg.stagedCommit = opts.StagedCommit
+	cfg.groupInfoOpts = legacyGroupInfoOptions(opts.GroupInfoOpts)
+	cfg.groupInfoOpts = append(cfg.groupInfoOpts, opts.GroupInfoOptions...)
+	return cfg
+}
+
+func applyCreateWelcomeOptions(cfg *createWelcomeConfig, opts ...CreateWelcomeOption) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+}
+
+// CreateWelcomeWithOpts creates a Welcome message using functional options.
+func (g *Group) CreateWelcomeWithOpts(
+	newMemberKeyPackages []*keypackages.KeyPackage,
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+	opts ...CreateWelcomeOption,
+) (*Welcome, error) {
+	cfg := defaultCreateWelcomeConfig(signerPrivKey)
+	applyCreateWelcomeOptions(&cfg, opts...)
+
+	return g.createWelcome(
+		newMemberKeyPackages,
+		cfg.joinerSecret,
+		cfg.pathSecret,
+		cfg.signerPrivKey,
+		cfg.pskIDs,
+		cfg.pskSecret,
+		cfg.stagedCommit,
+		cfg.groupInfoOpts...,
+	)
+}
+
 // CreateWelcomeWithOptions creates a Welcome message using an options struct.
+//
+// Deprecated: prefer CreateWelcomeWithOpts.
 func (g *Group) CreateWelcomeWithOptions(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	opts CreateWelcomeOptions,
 ) (*Welcome, error) {
+	legacy := createWelcomeConfigFromLegacy(opts)
 	return g.createWelcome(
 		newMemberKeyPackages,
-		opts.JoinerSecret,
-		opts.PathSecret,
-		opts.SignerPrivKey,
-		opts.PskIDs,
-		opts.PskSecret,
-		opts.StagedCommit,
-		opts.GroupInfoOpts,
+		legacy.joinerSecret,
+		legacy.pathSecret,
+		legacy.signerPrivKey,
+		legacy.pskIDs,
+		legacy.pskSecret,
+		legacy.stagedCommit,
+		legacy.groupInfoOpts...,
 	)
 }
 
 // CreateWelcome creates a Welcome message.
 //
-// Deprecated: prefer CreateWelcomeWithOptions for new code.
+// Deprecated: prefer CreateWelcomeWithOpts for new code.
 func (g *Group) CreateWelcome(
 	newMemberKeyPackages []*keypackages.KeyPackage,
 	joinerSecret *ciphersuite.Secret,
@@ -501,14 +608,14 @@ func (g *Group) CreateWelcome(
 		stagedCommit = staged[0]
 	}
 
-	return g.createWelcome(
+	return g.CreateWelcomeWithOpts(
 		newMemberKeyPackages,
-		joinerSecret,
-		pathSecret,
 		signerPrivKey,
-		pskIDs,
-		pskSecret,
-		stagedCommit,
+		WithJoinerSecret(joinerSecret),
+		WithPathSecret(pathSecret),
+		WithPSKIDs(pskIDs),
+		WithPSKSecret(pskSecret),
+		WithStagedCommit(stagedCommit),
 	)
 }
 
@@ -520,10 +627,13 @@ func (g *Group) createWelcome(
 	pskIDs []PskID,
 	pskSecret *ciphersuite.Secret,
 	staged *StagedCommit,
-	groupInfoOpts ...GroupInfoOptions,
+	groupInfoOpts ...GroupInfoOption,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
+	}
+	if joinerSecret == nil {
+		return nil, fmt.Errorf("joiner secret is nil")
 	}
 
 	// Compute welcome_secret per RFC 9420 §8, §12.4.3.1:
@@ -544,12 +654,7 @@ func (g *Group) createWelcome(
 		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
-	var opt GroupInfoOptions
-	if len(groupInfoOpts) > 0 {
-		opt = groupInfoOpts[0]
-	}
-
-	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey, opt)
+	groupInfo, err := g.buildSignedGroupInfo(signerPrivKey, groupInfoOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -683,7 +788,7 @@ func JoinFromWelcomeWithContext(
 	}
 
 	if myEncryptedSecrets == nil {
-		return nil, fmt.Errorf("no encrypted secrets found for this key package")
+		return nil, ErrWelcomeNoEncryptedSecrets
 	}
 
 	// Decrypt GroupSecrets with my HPKE private key
@@ -701,12 +806,12 @@ func JoinFromWelcomeWithContext(
 
 	groupSecrets, err := UnmarshalGroupSecrets(secretsData)
 	if err != nil {
-		return nil, fmt.Errorf("unmarshaling group secrets: %w", err)
+		return nil, fmt.Errorf("unmarshaling group secrets: %w", ErrWelcomeInvalidGroupSecrets)
 	}
 
 	// RFC §12.4.3.1: if any required PSK is unavailable, return an error.
 	if len(groupSecrets.Psks) > 0 && externalPsks == nil {
-		return nil, fmt.Errorf("Welcome requires %d PSK(s) but no PSK store was provided", len(groupSecrets.Psks))
+		return nil, fmt.Errorf("welcome requires %d PSK(s) but no PSK store was provided: %w", len(groupSecrets.Psks), ErrWelcomeMissingPSK)
 	}
 	var psks []schedule.Psk
 	for _, pskRef := range groupSecrets.Psks {
@@ -718,8 +823,7 @@ func JoinFromWelcomeWithContext(
 			resumptionKey := ResumptionPskCacheKey(pskRef.PskGroupID, pskRef.PskEpoch)
 			pskBytes, ok = externalPsks[resumptionKey]
 			if !ok {
-				// RFC §12.4.3.1: if any required PSK is unavailable, return an error
-				return nil, fmt.Errorf("missing resumption PSK for group=%x epoch=%d", pskRef.PskGroupID, pskRef.PskEpoch)
+				return nil, fmt.Errorf("missing resumption PSK for group=%x epoch=%d: %w", pskRef.PskGroupID, pskRef.PskEpoch, ErrWelcomePSKNotFound)
 			}
 			psks = append(psks, schedule.Psk{
 				PskType:    schedule.PskType(pskRef.PskType),
@@ -732,8 +836,7 @@ func JoinFromWelcomeWithContext(
 		default: // External (1) or Branch (3) PSK: lookup by ID
 			pskBytes, ok = externalPsks[string(pskRef.ID)]
 			if !ok {
-				// RFC §12.4.3.1: if any required PSK is unavailable, return an error
-				return nil, fmt.Errorf("missing PSK with ID=%x", pskRef.ID)
+				return nil, fmt.Errorf("missing PSK with ID=%x: %w", pskRef.ID, ErrWelcomePSKNotFound)
 			}
 			psks = append(psks, schedule.Psk{
 				PskType:  schedule.PskType(pskRef.PskType),
@@ -797,7 +900,7 @@ func JoinFromWelcomeWithContext(
 
 	groupInfo, err := UnmarshalGroupInfo(groupInfoData)
 	if err != nil {
-		return nil, fmt.Errorf("unmarshaling group info: %w", err)
+		return nil, fmt.Errorf("unmarshaling group info: %w", ErrGroupInfoUnmarshal)
 	}
 	welcome.GroupInfo = groupInfo
 
@@ -825,7 +928,7 @@ func JoinFromWelcomeWithContext(
 	}
 	if ratchetTree == nil {
 		if ratchetTreeParseErr != nil {
-			return nil, fmt.Errorf("parsing ratchet_tree extension: %w", ratchetTreeParseErr)
+			return nil, fmt.Errorf("parsing ratchet_tree extension: %w", ErrRatchetTreeUnmarshal)
 		}
 		ratchetTree = treesync.NewRatchetTree(1, groupInfo.GroupContext.CipherSuite)
 	}
@@ -838,8 +941,8 @@ func JoinFromWelcomeWithContext(
 		computedTreeHash := ratchetTree.TreeHash()
 		// TreeHash is a public integrity value carried in GroupInfo.
 		if !bytes.Equal(computedTreeHash, groupInfo.GroupContext.TreeHash) {
-			return nil, fmt.Errorf("ratchet tree hash mismatch: computed=%x want=%x",
-				computedTreeHash, groupInfo.GroupContext.TreeHash)
+			return nil, fmt.Errorf("ratchet tree hash mismatch: computed=%x want=%x: %w",
+				computedTreeHash, groupInfo.GroupContext.TreeHash, ErrTreeHashMismatch)
 		}
 	}
 
@@ -868,7 +971,7 @@ func JoinFromWelcomeWithContext(
 			if err := treesync.ValidateLeafNodeStructureWithContext(
 				leaf.LeafData, welcome.CipherSuite, groupID, uint32(i),
 			); err != nil {
-				return nil, fmt.Errorf("invalid leaf node at index %d in ratchet tree: %w", i, err)
+				return nil, fmt.Errorf("invalid leaf node at index %d in ratchet tree: %w", i, ErrLeafNodeInvalid)
 			}
 		}
 
@@ -882,12 +985,12 @@ func JoinFromWelcomeWithContext(
 			for _, unmergedLeafIdx := range node.UnmergedLeaves {
 				leafNode := ratchetTree.GetLeaf(treesync.LeafIndex(unmergedLeafIdx))
 				if leafNode == nil || leafNode.State != treesync.NodeStatePresent {
-					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d references a blank or missing leaf",
-						unmergedLeafIdx, nodeIdx)
+					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d references a blank or missing leaf: %w",
+						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
 				}
 				if !ratchetTree.SubtreeContainsLeaf(treesync.NodeIndex(nodeIdx), treesync.LeafIndex(unmergedLeafIdx)) {
-					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d is not a descendant of that node",
-						unmergedLeafIdx, nodeIdx)
+					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d is not a descendant of that node: %w",
+						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
 				}
 			}
 		}
@@ -904,7 +1007,7 @@ func JoinFromWelcomeWithContext(
 	// benefiting from proper join-time extension validation.
 	for _, ext := range groupContext.Extensions {
 		if !slices.Contains(keypackages.SupportedExtensionTypes(), uint16(ext.Type)) {
-			return nil, fmt.Errorf("joiner does not support GroupContext extension type 0x%04x (RFC §13.4)", uint16(ext.Type))
+			return nil, fmt.Errorf("joiner does not support GroupContext extension type 0x%04x (RFC §13.4): %w", uint16(ext.Type), ErrRequiredExtensionMissing)
 		}
 	}
 
@@ -917,7 +1020,7 @@ func JoinFromWelcomeWithContext(
 
 	_, err = keySchedule.ComputePskSecret(psks)
 	if err != nil {
-		return nil, fmt.Errorf("computing psk secret: %w", err)
+		return nil, fmt.Errorf("computing psk secret: %w", ErrWelcomeInvalidPSK)
 	}
 
 	groupContextBytes := groupContext.Marshal()
@@ -938,7 +1041,7 @@ func JoinFromWelcomeWithContext(
 		groupContext.ConfirmedTranscriptHash,
 	)
 	if !ciphersuite.EqualCT(expectedConfTag, groupInfo.ConfirmationTag) {
-		return nil, fmt.Errorf("welcome confirmation_tag mismatch: derived key does not match GroupInfo")
+		return nil, fmt.Errorf("welcome confirmation_tag mismatch: derived key does not match GroupInfo: %w", ErrConfirmationTagMismatch)
 	}
 
 	// Determine OwnLeafIndex by looking for our key in the tree.
@@ -965,7 +1068,7 @@ func JoinFromWelcomeWithContext(
 	// provided but our leaf is absent. When no tree was provided (fallback), the
 	// joiner must validate via the external ratchet tree they supply later.
 	if treeFromExtension && !ownLeafFound {
-		return nil, fmt.Errorf("own leaf not found in ratchet tree: KeyPackage not present in Welcome")
+		return nil, fmt.Errorf("own leaf not found in ratchet tree: %w", ErrJoinerLeafNotFound)
 	}
 	// Create Group
 	group := &Group{
@@ -1081,24 +1184,24 @@ func JoinFromWelcomeWithContext(
 
 func verifyGroupInfoSignature(groupInfo *GroupInfo, tree *treesync.RatchetTree) error {
 	if groupInfo == nil {
-		return fmt.Errorf("group info is nil")
+		return ErrGroupInfoNil
 	}
 	if tree == nil {
-		return fmt.Errorf("ratchet tree is nil")
+		return ErrRatchetTreeNil
 	}
 	signerLeaf := tree.GetLeaf(treesync.LeafIndex(groupInfo.Signer))
 	if signerLeaf == nil || signerLeaf.LeafData == nil {
-		return fmt.Errorf("missing signer leaf in ratchet tree")
+		return ErrSignerLeafMissing
 	}
 	rawKey := signerLeaf.LeafData.SigKeyBytes()
 	if len(rawKey) == 0 {
-		return fmt.Errorf("missing signature key for signer leaf")
+		return ErrSignerKeyMissing
 	}
 	cs := groupInfo.GroupContext.CipherSuite
 	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
 	sig := ciphersuite.NewSignature(groupInfo.Signature)
 	if err := ciphersuite.VerifyWithLabel(pubKey, "GroupInfoTBS", groupInfo.MarshalTBS(), sig); err != nil {
-		return fmt.Errorf("invalid group info signature: %w", err)
+		return &ErrInvalidSignature{Context: "group info", Err: err}
 	}
 	return nil
 }

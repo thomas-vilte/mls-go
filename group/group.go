@@ -488,7 +488,20 @@ func NewGroup(
 	cipherSuite ciphersuite.CipherSuite,
 	keyPackage *keypackages.KeyPackage,
 	privKeys *keypackages.KeyPackagePrivateKeys,
+	opts ...GroupOption,
 ) (*Group, error) {
+	cfg := groupConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	groupExtensions := cloneExtensions(cfg.extensions)
+	if groupExtensions == nil {
+		groupExtensions = []Extension{}
+	}
+
 	// Create ratchet tree with 1 leaf
 	ratchetTree := treesync.NewRatchetTree(1, cipherSuite)
 
@@ -518,7 +531,7 @@ func NewGroup(
 		GroupID:     groupID,
 		Epoch:       NewGroupEpoch(0),
 		CipherSuite: cipherSuite,
-		Extensions:  []Extension{},
+		Extensions:  groupExtensions,
 		TreeHash:    ratchetTree.TreeHash(),
 	}
 
@@ -571,6 +584,8 @@ func NewGroup(
 		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		cachedPsks:            make(map[string][]byte),
+		PSKStore:              cfg.pskStore,
+		paddingSize:           cfg.paddingSize,
 	}
 
 	// Initialize secret tree
@@ -597,6 +612,8 @@ func NewGroup(
 
 // NewGroupWithExtensions creates a new group with the given GroupContext extensions.
 // Identical to NewGroup except the initial GroupContext includes the provided extensions.
+//
+// Deprecated: use NewGroup(..., WithExtensions(extensions)).
 func NewGroupWithExtensions(
 	groupID *GroupID,
 	cipherSuite ciphersuite.CipherSuite,
@@ -604,14 +621,7 @@ func NewGroupWithExtensions(
 	privKeys *keypackages.KeyPackagePrivateKeys,
 	extensions []Extension,
 ) (*Group, error) {
-	g, err := NewGroup(groupID, cipherSuite, keyPackage, privKeys)
-	if err != nil {
-		return nil, err
-	}
-	if len(extensions) > 0 {
-		g.groupContext.Extensions = extensions
-	}
-	return g, nil
+	return NewGroup(groupID, cipherSuite, keyPackage, privKeys, WithExtensions(extensions))
 }
 
 // AddMember creates a proposal to add a new member to the group.
@@ -2861,38 +2871,81 @@ func (g *Group) GetGroupInfo(
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}
-	return g.buildSignedGroupInfo(signerPrivKey, GroupInfoOptions{})
+	return g.buildSignedGroupInfo(signerPrivKey)
+}
+
+// GetGroupInfoWithOptions returns a signed GroupInfo for the current epoch with
+// customizable extension inclusion.
+func (g *Group) GetGroupInfoWithOptions(
+	signerPrivKey *ciphersuite.SignaturePrivateKey,
+	opts ...GroupInfoOption,
+) (*GroupInfo, error) {
+	if g.state != StateOperational {
+		return nil, fmt.Errorf("group not operational")
+	}
+	return g.buildSignedGroupInfo(signerPrivKey, opts...)
+}
+
+type groupInfoConfig struct {
+	includeRatchetTree bool
+	includeExternalPub bool
+}
+
+func defaultGroupInfoConfig() groupInfoConfig {
+	return groupInfoConfig{includeRatchetTree: true, includeExternalPub: true}
+}
+
+// GroupInfoOption configures GroupInfo serialization behavior.
+type GroupInfoOption func(*groupInfoConfig)
+
+// WithRatchetTree controls inclusion of the ratchet_tree extension.
+func WithRatchetTree(include bool) GroupInfoOption {
+	return func(cfg *groupInfoConfig) {
+		cfg.includeRatchetTree = include
+	}
+}
+
+// WithExternalPub controls inclusion of the external_pub extension.
+func WithExternalPub(include bool) GroupInfoOption {
+	return func(cfg *groupInfoConfig) {
+		cfg.includeExternalPub = include
+	}
 }
 
 // GroupInfoOptions controls optional extensions in GroupInfo serialization.
-// By default, all RFC 9420 extensions are included for maximum compatibility.
+//
+// Deprecated: use GroupInfoOption values (WithRatchetTree/WithExternalPub).
 type GroupInfoOptions struct {
-	// IncludeRatchetTree controls whether the ratchet_tree extension is included.
-	// Default: true (required for Welcome messages so joiners can instantiate the group).
 	IncludeRatchetTree *bool
-	// IncludeExternalPub controls whether the external_pub extension is included.
-	// Default: true (required for external commits per RFC 9420 §11.2.4).
-	// Applications like DAVE that don't use external commits may set this to false.
 	IncludeExternalPub *bool
+}
+
+func legacyGroupInfoOptions(opts GroupInfoOptions) []GroupInfoOption {
+	out := make([]GroupInfoOption, 0, 2)
+	if opts.IncludeRatchetTree != nil {
+		out = append(out, WithRatchetTree(*opts.IncludeRatchetTree))
+	}
+	if opts.IncludeExternalPub != nil {
+		out = append(out, WithExternalPub(*opts.IncludeExternalPub))
+	}
+	return out
 }
 
 func (g *Group) buildSignedGroupInfo(
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
-	opts ...GroupInfoOptions,
+	opts ...GroupInfoOption,
 ) (*GroupInfo, error) {
-	var opt GroupInfoOptions
-	if len(opts) > 0 {
-		opt = opts[0]
+	cfg := defaultGroupInfoConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
-	// Defaults: include all extensions for RFC compliance
-	includeRatchetTree := opt.IncludeRatchetTree == nil || *opt.IncludeRatchetTree
-	includeExternalPub := opt.IncludeExternalPub == nil || *opt.IncludeExternalPub
 	if signerPrivKey == nil {
 		return nil, fmt.Errorf("signer private key is nil")
 	}
 
-	extensions := make([]Extension, len(g.groupContext.Extensions))
-	copy(extensions, g.groupContext.Extensions)
+	extensions := cloneExtensions(g.groupContext.Extensions)
 
 	groupInfo := &GroupInfo{
 		GroupContext:    g.groupContext,
@@ -2904,7 +2957,7 @@ func (g *Group) buildSignedGroupInfo(
 
 	// ratchet_tree extension (RFC 9420 §12.4.3.3) — use RFC interoperable format.
 	// Required in Welcome messages so joiners can instantiate the group.
-	if includeRatchetTree {
+	if cfg.includeRatchetTree {
 		groupInfo.Extensions = append(groupInfo.Extensions, Extension{
 			Type: mlsext.ExtensionTypeRatchetTree,
 			Data: g.ratchetTree.MarshalTreeRFC(),
@@ -2913,7 +2966,7 @@ func (g *Group) buildSignedGroupInfo(
 
 	// external_pub extension (RFC 9420 §11.2.4) — used for external commits.
 	// Applications that don't support external commits (e.g., DAVE) may omit this.
-	if includeExternalPub {
+	if cfg.includeExternalPub {
 		externalPriv, err := ciphersuite.DeriveKeyPair(
 			g.cipherSuite,
 			g.epochSecrets.ExternalSecret.AsSlice(),

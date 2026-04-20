@@ -962,13 +962,14 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	// Create Welcome for new members if any Add proposals were committed.
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
-			JoinerSecret:  joinerSecret,
-			SignerPrivKey: sigKey,
-			PskIDs:        staged.PskIDs(),
-			PskSecret:     staged.RawPskSecret(),
-			StagedCommit:  staged,
-		})
+		welcome, err := g.CreateWelcomeWithOpts(
+			newMemberKPs,
+			sigKey,
+			group.WithJoinerSecret(joinerSecret),
+			group.WithPSKIDs(staged.PskIDs()),
+			group.WithPSKSecret(staged.RawPskSecret()),
+			group.WithStagedCommit(staged),
+		)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating welcome: %v", err)
 		}
@@ -1366,13 +1367,14 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
-			JoinerSecret:  joinerSecret,
-			SignerPrivKey: state.SigPrivKey,
-			PskIDs:        staged.PskIDs(),
-			PskSecret:     staged.RawPskSecret(),
-			StagedCommit:  staged,
-		})
+		welcome, err := newGroup.CreateWelcomeWithOpts(
+			newMemberKPs,
+			state.SigPrivKey,
+			group.WithJoinerSecret(joinerSecret),
+			group.WithPSKIDs(staged.PskIDs()),
+			group.WithPSKSecret(staged.RawPskSecret()),
+			group.WithStagedCommit(staged),
+		)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating reinit welcome: %v", err)
 		}
@@ -1469,7 +1471,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	}
 
 	branchGID := group.NewGroupID(req.GroupId)
-	newGroup, err := group.NewGroupWithExtensions(branchGID, cs, kp, privKeys, exts)
+	newGroup, err := group.NewGroup(branchGID, cs, kp, privKeys, group.WithExtensions(exts))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "creating branch group: %v", err)
 	}
@@ -1527,13 +1529,14 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 
 	var welcomeData []byte
 	if len(newMemberKPs) > 0 {
-		welcome, err := newGroup.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
-			JoinerSecret:  joinerSecret,
-			SignerPrivKey: newSigKey,
-			PskIDs:        staged.PskIDs(),
-			PskSecret:     staged.RawPskSecret(),
-			StagedCommit:  staged,
-		})
+		welcome, err := newGroup.CreateWelcomeWithOpts(
+			newMemberKPs,
+			newSigKey,
+			group.WithJoinerSecret(joinerSecret),
+			group.WithPSKIDs(staged.PskIDs()),
+			group.WithPSKSecret(staged.RawPskSecret()),
+			group.WithStagedCommit(staged),
+		)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "creating branch welcome: %v", err)
 		}
