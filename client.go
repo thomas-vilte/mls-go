@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -58,6 +59,9 @@ type clientConfig struct {
 	cacheStrategy       CacheStrategy
 	credentialWithKey   *credentials.CredentialWithKey
 	sigKey              *ciphersuite.SignaturePrivateKey
+	logger              *slog.Logger
+	credentialHandlers  *CredentialHandlerRegistry
+	proposalPolicies    *ProposalPolicyRegistry
 }
 
 // ClientOption configures optional Client behavior.
@@ -173,6 +177,50 @@ func WithEventHandler(h EventHandler) ClientOption {
 	}
 }
 
+// WithLogger sets the logger for the client.
+// Uses slog.Default() if not provided.
+func WithLogger(logger *slog.Logger) ClientOption {
+	return func(cfg *clientConfig) {
+		if cfg == nil || logger == nil {
+			return
+		}
+		cfg.logger = logger
+	}
+}
+
+// WithCredentialHandler registers a custom credential handler for a specific type.
+func WithCredentialHandler(t credentials.CredentialType, h CredentialHandler) ClientOption {
+	return func(cfg *clientConfig) {
+		if cfg == nil || h == nil {
+			return
+		}
+		if cfg.credentialHandlers == nil {
+			cfg.credentialHandlers = NewCredentialHandlerRegistry()
+		}
+		cfg.credentialHandlers.Register(t, h)
+	}
+}
+
+// WithProposalPolicy registers a proposal policy hook.
+func WithProposalPolicy(p ProposalPolicy) ClientOption {
+	return func(cfg *clientConfig) {
+		if cfg == nil || p == nil {
+			return
+		}
+		if cfg.proposalPolicies == nil {
+			cfg.proposalPolicies = NewProposalPolicyRegistry()
+		}
+		cfg.proposalPolicies.Register(p)
+	}
+}
+
+// log logs a message at the configured level if a logger is set.
+func (c *Client) log(level slog.Level, msg string, args ...any) {
+	if c.logger != nil {
+		c.logger.Log(context.Background(), level, msg, args...)
+	}
+}
+
 var (
 	// ErrEmptyIdentity is returned when NewClient receives an empty identity slice.
 	ErrEmptyIdentity = errors.New("mls: identity is empty")
@@ -215,6 +263,21 @@ type ErrUnknownMember = group.ErrUnknownMember
 // ErrDecryptionFailed is a type alias for group.ErrDecryptionFailed, surfaced at the Client level.
 type ErrDecryptionFailed = group.ErrDecryptionFailed
 
+// ErrWelcomeNoEncryptedSecrets is re-exported for programmatic error checking.
+var ErrWelcomeNoEncryptedSecrets = group.ErrWelcomeNoEncryptedSecrets
+
+// ErrWelcomeMissingPSK is re-exported for programmatic error checking.
+var ErrWelcomeMissingPSK = group.ErrWelcomeMissingPSK
+
+// ErrWelcomePSKNotFound is re-exported for programmatic error checking.
+var ErrWelcomePSKNotFound = group.ErrWelcomePSKNotFound
+
+// ErrGroupNotOperational is re-exported for programmatic error checking.
+var ErrGroupNotOperational = group.ErrGroupNotOperational
+
+// ErrPendingProposals is re-exported for programmatic error checking.
+var ErrPendingProposals = group.ErrPendingProposals
+
 // IsEpochMismatch reports whether err contains an ErrEpochMismatch.
 func IsEpochMismatch(err error) bool {
 	var target *group.ErrEpochMismatch
@@ -243,6 +306,31 @@ func IsUnknownMember(err error) bool {
 func IsDecryptionFailed(err error) bool {
 	var target *group.ErrDecryptionFailed
 	return errors.As(err, &target)
+}
+
+// IsWelcomeNoEncryptedSecrets reports whether err contains an ErrWelcomeNoEncryptedSecrets.
+func IsWelcomeNoEncryptedSecrets(err error) bool {
+	return errors.Is(err, group.ErrWelcomeNoEncryptedSecrets)
+}
+
+// IsWelcomeMissingPSK reports whether err contains an ErrWelcomeMissingPSK.
+func IsWelcomeMissingPSK(err error) bool {
+	return errors.Is(err, group.ErrWelcomeMissingPSK)
+}
+
+// IsWelcomePSKNotFound reports whether err contains an ErrWelcomePSKNotFound.
+func IsWelcomePSKNotFound(err error) bool {
+	return errors.Is(err, group.ErrWelcomePSKNotFound)
+}
+
+// IsGroupNotOperational reports whether err contains an ErrGroupNotOperational.
+func IsGroupNotOperational(err error) bool {
+	return errors.Is(err, group.ErrGroupNotOperational)
+}
+
+// IsPendingProposals reports whether err contains an ErrPendingProposals.
+func IsPendingProposals(err error) bool {
+	return errors.Is(err, group.ErrPendingProposals)
 }
 
 // ReceivedMessage is the result of a successful ReceiveMessage or ReceiveMessageWithAAD call.
@@ -294,6 +382,7 @@ type Client struct {
 
 	events EventHandler
 	closed bool
+	logger *slog.Logger
 
 	pendingKPs   map[string]*pendingEntry
 	groupEntries map[string]*groupEntry
@@ -315,6 +404,11 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 	}
 	if cfg.storage == nil {
 		cfg.storage = memorystore.NewStore()
+	}
+	// Use default logger if none provided
+	logger := cfg.logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	var (
 		credWithKey *credentials.CredentialWithKey
@@ -359,6 +453,7 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 		events:        cfg.eventHandler,
 		paddingSize:   cfg.paddingSize,
 		cacheStrategy: cfg.cacheStrategy,
+		logger:        logger,
 		pendingKPs:    make(map[string]*pendingEntry),
 		groupEntries:  make(map[string]*groupEntry),
 	}, nil
@@ -459,7 +554,7 @@ func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, ke
 	}
 
 	groupID := group.NewGroupID(cloneBytes(groupIDBytes))
-	g, err := group.NewGroupWithExtensions(groupID, c.cs, pe.kp, pe.kpPriv, extensions)
+	g, err := group.NewGroup(groupID, c.cs, pe.kp, pe.kpPriv, group.WithExtensions(extensions))
 	if err != nil {
 		return nil, fmt.Errorf("creating group with extensions: %w", err)
 	}
@@ -675,7 +770,15 @@ func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentit
 }
 
 // CommitPendingProposals commits all currently stored proposals in one operation.
-func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte) (commit, welcome []byte, err error) {
+// Use WithGroupInfoParams to customize the Welcome extensions.
+func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte, opts ...CommitPendingProposalOption) (commit, welcome []byte, err error) {
+	cfg := defaultCommitPendingConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
 		c.mu.Unlock()
@@ -695,7 +798,7 @@ func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte) (co
 	if err != nil {
 		return nil, nil, err
 	}
-	return c.commitPendingProposals(ctx, g, entry)
+	return c.commitPendingProposalsWithConfig(ctx, g, entry, cfg)
 }
 
 // ProcessCommit applies a commit from another existing group member.
@@ -809,8 +912,31 @@ func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes
 	return c.persistGroup(ctx, g, entry)
 }
 
+// SendMessageOption configures the behavior of a single SendMessage call.
+type SendMessageOption func(*sendMessageConfig)
+
+type sendMessageConfig struct {
+	aad     []byte
+	padding int
+}
+
+// WithPadding sets custom padding size for the message.
+func WithPadding(size int) SendMessageOption {
+	return func(cfg *sendMessageConfig) {
+		cfg.padding = size
+	}
+}
+
 // SendMessage encrypts an application message for the given group.
-func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]byte, error) {
+// Use WithAAD for authenticated data, WithPadding for custom padding.
+func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte, opts ...SendMessageOption) ([]byte, error) {
+	cfg := &sendMessageConfig{padding: c.paddingSize}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
 		c.mu.Unlock()
@@ -830,9 +956,16 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]
 	if err != nil {
 		return nil, err
 	}
-	pm, err := g.SendMessage(plaintext, c.sigKey)
-	if err != nil {
-		return nil, fmt.Errorf("sending message: %w", err)
+
+	var pm *framing.PrivateMessage
+	var err2 error
+	if len(cfg.aad) > 0 {
+		pm, err2 = g.SendApplicationMessage(plaintext, cfg.aad, c.sigKey)
+	} else {
+		pm, err2 = g.SendMessage(plaintext, c.sigKey)
+	}
+	if err2 != nil {
+		return nil, fmt.Errorf("sending message: %w", err2)
 	}
 	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, err
@@ -841,6 +974,8 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte) ([]
 }
 
 // SendMessageWithAAD encrypts an application message with authenticated associated data.
+//
+// Deprecated: use SendMessage with WithAAD option instead.
 func (c *Client) SendMessageWithAAD(ctx context.Context, groupID, plaintext, authenticatedData []byte) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1462,9 +1597,48 @@ func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *
 
 // CommitPendingProposalsOptions controls the behavior of CommitPendingProposalsWithOptions.
 type CommitPendingProposalsOptions struct {
-	// GroupInfo controls which extensions are included in the Welcome's GroupInfo.
+	// GroupInfoOptions controls which extensions are included in the Welcome's GroupInfo.
 	// By default, all RFC 9420 extensions are included.
+	GroupInfoOptions []group.GroupInfoOption
+
+	// Deprecated: use GroupInfoOptions.
+	// Kept for backward compatibility with code that still passes this field.
 	GroupInfoOpts group.GroupInfoOptions
+}
+
+// commitPendingConfig holds the configuration for commit operations.
+type commitPendingConfig struct {
+	groupInfoOpts []group.GroupInfoOption
+}
+
+// CommitPendingProposalOption configures CommitPendingProposals behavior.
+type CommitPendingProposalOption func(*commitPendingConfig)
+
+// WithGroupInfoParams controls which extensions are included in the Welcome's GroupInfo.
+func WithGroupInfoParams(opts ...group.GroupInfoOption) CommitPendingProposalOption {
+	return func(cfg *commitPendingConfig) {
+		cfg.groupInfoOpts = append(cfg.groupInfoOpts, opts...)
+	}
+}
+
+func defaultCommitPendingConfig() commitPendingConfig {
+	return commitPendingConfig{}
+}
+
+// commitPendingOptionsForCommit produces GroupInfoOption slice from CommitPendingProposalsOptions.
+// Used by legacy code that passes the struct.
+func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.GroupInfoOption {
+	out := append([]group.GroupInfoOption(nil), opts.GroupInfoOptions...)
+	if opts.GroupInfoOpts == (group.GroupInfoOptions{}) {
+		return out
+	}
+	if opts.GroupInfoOpts.IncludeRatchetTree != nil {
+		out = append(out, group.WithRatchetTree(*opts.GroupInfoOpts.IncludeRatchetTree))
+	}
+	if opts.GroupInfoOpts.IncludeExternalPub != nil {
+		out = append(out, group.WithExternalPub(*opts.GroupInfoOpts.IncludeExternalPub))
+	}
+	return out
 }
 
 // PendingCommitHandle represents a commit that has been generated but not yet
@@ -1597,14 +1771,16 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 
 	var welcomeBytes []byte
 	if len(handle.newMemberKPs) > 0 {
-		welcomeObj, err := g.CreateWelcomeWithOptions(handle.newMemberKPs, group.CreateWelcomeOptions{
-			JoinerSecret:  handle.staged.JoinerSecret(),
-			SignerPrivKey: c.sigKey,
-			PskIDs:        handle.staged.PskIDs(),
-			PskSecret:     handle.staged.RawPskSecret(),
-			StagedCommit:  handle.staged,
-			GroupInfoOpts: handle.opts.GroupInfoOpts,
-		})
+		welcomeOpts := []group.CreateWelcomeOption{
+			group.WithJoinerSecret(handle.staged.JoinerSecret()),
+			group.WithPSKIDs(handle.staged.PskIDs()),
+			group.WithPSKSecret(handle.staged.RawPskSecret()),
+			group.WithStagedCommit(handle.staged),
+		}
+		if infoOpts := commitPendingOptionsForCommit(handle.opts); len(infoOpts) > 0 {
+			welcomeOpts = append(welcomeOpts, group.WithGroupInfoOptions(infoOpts...))
+		}
+		welcomeObj, err := g.CreateWelcomeWithOpts(handle.newMemberKPs, c.sigKey, welcomeOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("creating welcome: %w", err)
 		}
@@ -1690,7 +1866,14 @@ func (c *Client) CommitPendingProposalsWithOptions(ctx context.Context, groupID 
 }
 
 func (c *Client) commitPendingProposals(ctx context.Context, g *group.Group, entry *groupEntry) (commit, welcome []byte, err error) {
-	return c.commitPendingProposalsWithOptions(ctx, g, entry, CommitPendingProposalsOptions{})
+	return c.commitPendingProposalsWithConfig(ctx, g, entry, defaultCommitPendingConfig())
+}
+
+func (c *Client) commitPendingProposalsWithConfig(ctx context.Context, g *group.Group, entry *groupEntry, cfg commitPendingConfig) (commit, welcome []byte, err error) {
+	opts := CommitPendingProposalsOptions{
+		GroupInfoOptions: cfg.groupInfoOpts,
+	}
+	return c.commitPendingProposalsWithOptions(ctx, g, entry, opts)
 }
 
 func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group.Group, entry *groupEntry, opts CommitPendingProposalsOptions) (commit, welcome []byte, err error) {
@@ -1731,6 +1914,8 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 		return nil, nil, fmt.Errorf("merging own commit: %w", err)
 	}
 
+	c.log(slog.LevelInfo, "epoch advanced", "group", g.GroupID().AsSlice(), "epoch", g.Epoch().AsUint64())
+
 	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
 		Content:       staged.AuthenticatedContent().Content,
 		Auth:          staged.AuthenticatedContent().Auth,
@@ -1749,14 +1934,16 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 		return commitBytes, nil, nil
 	}
 
-	welcomeObj, err := g.CreateWelcomeWithOptions(newMemberKPs, group.CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: c.sigKey,
-		PskIDs:        staged.PskIDs(),
-		PskSecret:     staged.RawPskSecret(),
-		StagedCommit:  staged,
-		GroupInfoOpts: opts.GroupInfoOpts,
-	})
+	welcomeOpts := []group.CreateWelcomeOption{
+		group.WithJoinerSecret(joinerSecret),
+		group.WithPSKIDs(staged.PskIDs()),
+		group.WithPSKSecret(staged.RawPskSecret()),
+		group.WithStagedCommit(staged),
+	}
+	if infoOpts := commitPendingOptionsForCommit(opts); len(infoOpts) > 0 {
+		welcomeOpts = append(welcomeOpts, group.WithGroupInfoOptions(infoOpts...))
+	}
+	welcomeObj, err := g.CreateWelcomeWithOpts(newMemberKPs, c.sigKey, welcomeOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
 	}
