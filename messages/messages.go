@@ -172,6 +172,7 @@ func unmarshalEncryptedGroupSecrets(data []byte) ([]EncryptedGroupSecrets, error
 // Returns nil if no matching secrets are found.
 func (w *Welcome) FindSecret(keyPackageHash []byte) *EncryptedGroupSecrets {
 	for i := range w.Secrets {
+		// KeyPackageHash is a public Welcome lookup key, not secret material.
 		if bytes.Equal(w.Secrets[i].KeyPackageHash, keyPackageHash) {
 			return &w.Secrets[i]
 		}

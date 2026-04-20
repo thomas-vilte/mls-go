@@ -675,6 +675,7 @@ func JoinFromWelcomeWithContext(
 	// Find my encrypted GroupSecrets
 	var myEncryptedSecrets *EncryptedGroupSecrets
 	for i := range welcome.Secrets {
+		// key_package_ref is a public protocol lookup value, not secret material.
 		if bytes.Equal(welcome.Secrets[i].NewMember, myRef) {
 			myEncryptedSecrets = &welcome.Secrets[i]
 			break
@@ -757,6 +758,7 @@ func JoinFromWelcomeWithContext(
 			return nil, fmt.Errorf("computing psk input: %w", pskErr)
 		}
 		rawPskSecret = ciphersuite.NewSecret(pskInput)
+		secureZeroBytes(pskInput)
 	}
 
 	joinerCopy := ciphersuite.NewSecret(groupSecrets.JoinerSecret.AsSlice())
@@ -765,18 +767,23 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
 	}
 	welcomeSecret, err := memberSecret.DeriveSecret(welcome.CipherSuite, "welcome")
+	secureZeroSecret(memberSecret)
 	if err != nil {
 		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
 	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, welcome.CipherSuite.AeadKeyLength())
 	if err != nil {
+		secureZeroSecret(welcomeSecret)
 		return nil, fmt.Errorf("deriving welcome_key: %w", err)
 	}
+	defer secureZeroSecret(welcomeKey)
 	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, welcome.CipherSuite.AeadNonceLength())
+	secureZeroSecret(welcomeSecret)
 	if err != nil {
 		return nil, fmt.Errorf("deriving welcome_nonce: %w", err)
 	}
+	defer secureZeroSecret(welcomeNonce)
 	groupInfoData, err := ciphersuite.DecryptWithCipherSuite(
 		welcomeKey.AsSlice(),
 		welcomeNonce.AsSlice(),
@@ -829,6 +836,7 @@ func JoinFromWelcomeWithContext(
 	// caller did not supply a tree, they are responsible for fetching and verifying it.
 	if treeFromExtension {
 		computedTreeHash := ratchetTree.TreeHash()
+		// TreeHash is a public integrity value carried in GroupInfo.
 		if !bytes.Equal(computedTreeHash, groupInfo.GroupContext.TreeHash) {
 			return nil, fmt.Errorf("ratchet tree hash mismatch: computed=%x want=%x",
 				computedTreeHash, groupInfo.GroupContext.TreeHash)
@@ -945,6 +953,7 @@ func JoinFromWelcomeWithContext(
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil {
+			// Leaf encryption keys in the ratchet tree are public HPKE public keys.
 			if bytes.Equal(leaf.LeafData.EncryptionKey, leafEncKey) {
 				ownLeafIndex = LeafNodeIndex(i)
 				ownLeafFound = true
@@ -982,9 +991,9 @@ func JoinFromWelcomeWithContext(
 	group.proposalByRef = make(map[string]*Proposal)
 	// Store the leaf's private HPKE key to decrypt path secrets in commits.
 	if myPrivateKeys.EncryptionKey != nil {
-		group.myLeafEncryptionKey = myPrivateKeys.EncryptionKey.Bytes()
+		group.setMyLeafEncryptionKey(myPrivateKeys.EncryptionKey.Bytes())
 	} else if myPrivateKeys.InitKey != nil {
-		group.myLeafEncryptionKey = myPrivateKeys.InitKey.Bytes()
+		group.setMyLeafEncryptionKey(myPrivateKeys.InitKey.Bytes())
 	}
 	for id, pskBytes := range externalPsks {
 		group.cachedPsks[id] = append([]byte(nil), pskBytes...)
@@ -1021,15 +1030,12 @@ func JoinFromWelcomeWithContext(
 					continue // joiner is not in this node's subtree
 				}
 				started = true
-				if group.pathNodePrivKeys == nil {
-					group.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
-				}
 			}
 			nodeSecret, nsErr := ps.DeriveSecret(welcome.CipherSuite, "node")
 			if nsErr == nil {
 				privKey, pkErr := ciphersuite.DeriveKeyPair(welcome.CipherSuite, nodeSecret.AsSlice())
 				if pkErr == nil {
-					group.pathNodePrivKeys[nodeIdx] = privKey.Bytes()
+					group.setPathNodePrivKey(nodeIdx, privKey.Bytes())
 				}
 			}
 			ps, _ = ps.DeriveSecret(welcome.CipherSuite, "path")

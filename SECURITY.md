@@ -23,6 +23,7 @@ Include a description of the issue, steps to reproduce, and the potential impact
 
 These are known gaps, not vulnerabilities. They are documented here because the project is still pre-1.0 and these edges matter:
 
+- Secret zeroing in Go is best-effort. mls-go overwrites sensitive byte slices and uses `runtime.KeepAlive()` / `SecureZero()` patterns to reduce dead-store elimination, but the Go runtime may still copy or move data before zeroing. This means in-memory secret erasure is a mitigation, not a hard guarantee equivalent to `mlock`-backed secure memory.
 - `NewGroupFromReInit` still needs a tighter review of its `joiner_secret` derivation path
 - `new_member_proposal` PublicMessages do not yet verify the outer message signature independently
 - Application message padding defaults to zero unless `Group.PaddingSize` is configured explicitly
@@ -51,6 +52,97 @@ Recent fixes:
 - **RFC 9420 §13.4**: joining a group via Welcome now verifies that mls-go supports every extension present in the GroupContext; unsupported extensions cause the join to fail rather than silently proceeding with unknown group semantics
 
 These limitations do not break the normal encrypted group flow, but they do reduce assurance on specific edge cases.
+
+## Threat model
+
+mls-go implements the core MLS security properties from RFC 9420, assuming the application preserves local private state correctly and delivers protocol messages coherently.
+
+### Security properties provided
+
+- Confidentiality of application messages against parties that are not current group members
+- Forward secrecy across epochs: removed members cannot decrypt future epochs
+- Post-compromise security after recovery: if a compromised member performs a fresh update and the attacker later loses access, future epochs regain confidentiality
+- Authentication of commits, proposals, and application messages according to the credential and signature model used by the group
+- Integrity of ratchet-tree evolution, transcript hashes, and confirmation tags through RFC 9420 validation
+
+### Assumptions
+
+- The Delivery Service (DS) is untrusted for message contents, but is assumed to provide eventual delivery of protocol messages
+- Applications are responsible for durable storage of local group state if they need to survive restarts or support out-of-order delivery across epochs
+- Applications are responsible for protecting signature private keys, HPKE private keys, and serialized group state at rest
+- Credential validation is only as strong as the application's configured trust model (`BasicCredential`, X.509 validation, or application-specific policy)
+
+### Delivery Service compromise
+
+A malicious or compromised DS can:
+
+- Drop, delay, replay, reorder, or equivocate on delivered messages
+- Observe metadata visible outside MLS ciphertexts
+- Cause availability failures or force clients into conflict resolution paths
+
+A malicious or compromised DS cannot, by itself:
+
+- Forge valid member-authenticated commits or application messages
+- Read protected application plaintext without also compromising member key material
+- Bypass transcript-hash, confirmation-tag, or ratchet-tree validation performed by clients
+
+### Storage compromise
+
+If an attacker obtains persisted group state or live process memory containing MLS state, they may gain access to:
+
+- Epoch secrets
+- Secret tree state
+- Leaf private keys
+- Enough local state to continue operating as that member
+
+In practice, compromise of serialized state should be treated as compromise of that local member. `MarshalState()` is a serialization helper, not a secure storage format.
+
+### Member compromise
+
+If a member device is compromised, the attacker can act as that member and decrypt traffic available to that member for the epochs covered by the compromised state.
+
+MLS post-compromise security is not instantaneous:
+
+- If the attacker keeps access to the compromised device, they keep access
+- If the attacker loses access, confidentiality is only restored after fresh updates or commits advance the group into new epochs derived from uncompromised secrets
+
+### Out of scope / not guaranteed
+
+mls-go does not by itself provide:
+
+- Deniability beyond the base MLS protocol properties
+- Metadata protection against the Delivery Service or network observers
+- Reliable ordering or exactly-once delivery
+- Secure persistence, HSM integration, `mlock`, or OS-level secret isolation
+- Protection against compromise of the host runtime, debugger access, or full memory disclosure
+
+## Constant-time comparison audit
+
+A targeted audit was performed for `bytes.Equal` uses in production code.
+
+Current classification:
+
+- `group/state.go`
+  - GroupID equality during restored-state validation: public identifier, not secret
+  - TreeHash equality during restored-state validation: public integrity value, not secret
+- `group/welcome.go`
+  - Matching `key_package_ref` / encrypted group secrets entry: public protocol lookup
+  - Ratchet tree hash equality: public integrity value from GroupInfo
+  - Matching leaf encryption public keys in the ratchet tree: public key lookup
+- `messages/messages.go`
+  - Matching `KeyPackageHash` in Welcome secrets: public protocol lookup
+- `group/group.go`
+  - GroupID equality on received commit path: public identifier
+  - Signature public key matching in tree/proposals: public key lookup
+  - HPKE public key equality checks for UpdatePath validation: public key consistency checks
+  - Proposal reference equality in the proposal store: public hash/reference lookup
+
+No currently-audited production use of `bytes.Equal` was identified as a comparison of secret key material, MAC tags, confirmation tags, or membership tags.
+
+Secret/MAC comparisons continue to use constant-time helpers:
+
+- `ciphersuite.EqualCT()`
+- `subtle.ConstantTimeCompare`
 
 ## Cryptographic foundation
 

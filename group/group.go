@@ -16,6 +16,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
+	"runtime"
 	"sort"
 	"sync"
 
@@ -51,6 +52,49 @@ func NewGroupIDRandom() (*GroupID, error) {
 // AsSlice returns the GroupID as a byte slice.
 func (g *GroupID) AsSlice() []byte {
 	return g.Value
+}
+
+func secureZeroBytes(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+
+func secureZeroSecret(s *ciphersuite.Secret) {
+	if s != nil {
+		s.SecureZero()
+	}
+}
+
+func (g *Group) setMyLeafEncryptionKey(key []byte) {
+	if g == nil {
+		return
+	}
+	secureZeroBytes(g.myLeafEncryptionKey)
+	g.myLeafEncryptionKey = key
+}
+
+func (g *Group) setPathNodePrivKey(nodeIdx treesync.NodeIndex, key []byte) {
+	if g == nil {
+		return
+	}
+	if g.pathNodePrivKeys == nil {
+		g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+	}
+	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
+	g.pathNodePrivKeys[nodeIdx] = key
+}
+
+func (g *Group) deletePathNodePrivKey(nodeIdx treesync.NodeIndex) {
+	if g == nil || g.pathNodePrivKeys == nil {
+		return
+	}
+	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
+	delete(g.pathNodePrivKeys, nodeIdx)
 }
 
 // GroupEpoch represents the epoch number of a group.
@@ -219,6 +263,14 @@ func (g *Group) DiscardPendingCommit() error {
 		return fmt.Errorf("group: no pending commit to discard (state=%d)", g.state)
 	}
 	g.pendingCommit = nil
+	if len(g.pendingLeafKey) > 0 {
+		for i := range g.pendingLeafKey {
+			g.pendingLeafKey[i] = 0
+		}
+		// keep the slice alive until after the overwrite so the compiler
+		// does not discard the zeroing as a dead store
+		runtime.KeepAlive(g.pendingLeafKey)
+	}
 	g.pendingLeafKey = nil
 	g.state = StateOperational
 	return nil
@@ -311,6 +363,7 @@ func (g *Group) FindMemberBySigKey(sigKeyBytes []byte) (LeafNodeIndex, bool) {
 			continue
 		}
 		leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
+		// Signature keys in LeafNodes are public verification keys, not secret material.
 		if leaf != nil && leaf.LeafData != nil && bytes.Equal(leaf.LeafData.SigKeyBytes(), sigKeyBytes) {
 			return leafIdx, true
 		}
@@ -338,6 +391,19 @@ func (g *Group) GetTreeLeaf(leafIdx LeafNodeIndex) *treesync.Node {
 //
 // Returns true if the proposal was found and removed, false if not found.
 func (g *Group) RevokeProposal(ref []byte) bool {
+	for _, sp := range g.proposals.Proposals {
+		if !bytes.Equal(sp.Ref, ref) {
+			continue
+		}
+		if sp.Proposal != nil && sp.Proposal.Type == ProposalTypeUpdate && g.pendingUpdatePrivKey != nil && sp.Proposal.Update != nil && sp.Proposal.Update.LeafNode != nil {
+			ownLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
+			if ownLeaf != nil && ownLeaf.LeafData != nil && bytes.Equal(sp.Proposal.Update.LeafNode.SignatureKeyBytes, ownLeaf.LeafData.SigKeyBytes()) {
+				secureZeroBytes(g.pendingUpdatePrivKey)
+				g.pendingUpdatePrivKey = nil
+			}
+		}
+		break
+	}
 	if !g.proposals.RemoveByRef(ref) {
 		return false
 	}
@@ -349,6 +415,8 @@ func (g *Group) RevokeProposal(ref []byte) bool {
 func (g *Group) ClearProposals() {
 	g.proposals.Clear()
 	g.proposalByRef = make(map[string]*Proposal)
+	secureZeroBytes(g.pendingUpdatePrivKey)
+	g.pendingUpdatePrivKey = nil
 }
 
 // epochState holds the decryption and verification material for a past epoch.
@@ -513,7 +581,7 @@ func NewGroup(
 
 	// Store our leaf encryption private key for TreeKEM decryption (RFC §10.1)
 	if privKeys != nil && privKeys.EncryptionKey != nil {
-		group.myLeafEncryptionKey = privKeys.EncryptionKey.Bytes()
+		group.setMyLeafEncryptionKey(privKeys.EncryptionKey.Bytes())
 	}
 
 	// Add ourselves as a member
@@ -690,6 +758,7 @@ func (g *Group) SelfUpdate(sigKey *ciphersuite.SignaturePrivateKey) (*Proposal, 
 	newEncPub := newEncPriv.PublicKey().Bytes()
 	// Store the private key; it will be needed to decrypt the UpdatePath when
 	// this proposal is committed in a received commit (RFC §12.4.3.3).
+	secureZeroBytes(g.pendingUpdatePrivKey)
 	g.pendingUpdatePrivKey = newEncPriv.Bytes()
 
 	// Build the new leaf node (LeafNodeSource=2 for update per RFC §7.2).
@@ -1090,9 +1159,6 @@ func (g *Group) createUpdatePath(
 	// Also store private keys so this member can later decrypt commits where one
 	// of these ancestor nodes appears in the copath resolution (RFC §12.4.2).
 	pubKeys := make([][]byte, F)
-	if g.pathNodePrivKeys == nil {
-		g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
-	}
 	for m, level := range levels {
 		// pathSecrets[N-F+m+1] is the path_secret for this parent node.
 		// Receivers decrypt this value and derive: node_key = DeriveKeyPair(DeriveSecret(ps, "node")).
@@ -1101,6 +1167,7 @@ func (g *Group) createUpdatePath(
 		nodePs := pathSecrets[N-F+m+1]
 		nodeSecret, _ := nodePs.DeriveSecret(g.cipherSuite, "node")
 		privKey, _ := ciphersuite.DeriveKeyPair(g.cipherSuite, nodeSecret.AsSlice())
+		secureZeroSecret(nodeSecret)
 		pubKeys[m] = privKey.PublicKey().Bytes()
 
 		nodeIdx := directPath[level+1]
@@ -1109,7 +1176,7 @@ func (g *Group) createUpdatePath(
 		tree.Nodes[nodeIdx].UnmergedLeaves = nil
 
 		// Store private key: needed if a future copath resolution includes this node.
-		g.pathNodePrivKeys[nodeIdx] = privKey.Bytes()
+		g.setPathNodePrivKey(nodeIdx, privKey.Bytes())
 	}
 
 	// Compute parent hashes top-down (RFC §7.9).
@@ -1167,6 +1234,7 @@ func (g *Group) createUpdatePath(
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("deriving leaf node secret: %w", err)
 	}
 	leafPrivKey, err := ciphersuite.DeriveKeyPair(g.cipherSuite, leafNodeSecret.AsSlice())
+	secureZeroSecret(leafNodeSecret)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("deriving leaf key pair: %w", err)
 	}
@@ -1405,6 +1473,7 @@ func (g *Group) ProcessReceivedCommit(
 	myHpkePrivKeyBytes []byte,
 ) error {
 	// RFC §12.4.1: validate GroupID and epoch before any costly work.
+	// GroupID is public protocol metadata, not secret material.
 	if !bytes.Equal(ac.Content.GroupID, g.groupContext.GroupID.AsSlice()) {
 		return &ErrGroupIDMismatch{
 			Got:  append([]byte(nil), ac.Content.GroupID...),
@@ -1487,6 +1556,7 @@ func (g *Group) ProcessReceivedCommit(
 				// so MemberCount() as an upper bound on leaf indices misses high slots.
 				for leafIdx := range g.members {
 					leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(leafIdx))
+					// Update proposal sender inference compares public signature keys.
 					if leaf != nil && leaf.LeafData != nil && bytes.Equal(leaf.LeafData.SigKeyBytes(), newSigKey) {
 						sender = leafIdx
 						break
@@ -1600,6 +1670,7 @@ func (g *Group) ProcessReceivedCommit(
 				if p.Type == ProposalTypeUpdate && p.Update != nil && p.Update.LeafNode != nil {
 					propKey := p.Update.LeafNode.SignatureKeyBytes
 					ownKey := ownLeaf.LeafData.SigKeyBytes()
+					// SelfUpdate detection compares public signature keys, not private key material.
 					if bytes.Equal(propKey, ownKey) {
 						decryptKey = g.pendingUpdatePrivKey
 						break
@@ -1632,6 +1703,7 @@ func (g *Group) ProcessReceivedCommit(
 		// RFC §12.4.2: the UpdatePath.LeafNode.EncryptionKey MUST differ from the
 		// sender's current leaf key (forward secrecy — the old key must be retired).
 		if senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx); senderLeaf != nil && senderLeaf.LeafData != nil {
+			// UpdatePath leaf encryption keys are public HPKE public keys.
 			if commit.Path.LeafNode != nil && bytes.Equal(commit.Path.LeafNode.EncryptionKey, senderLeaf.LeafData.EncryptionKey) {
 				return fmt.Errorf("UpdatePath.LeafNode.EncryptionKey must differ from current leaf key: %w", ErrInvalidProposal)
 			}
@@ -1761,6 +1833,7 @@ func (g *Group) decryptPathSecret(
 			// RFC §12.4.2: also verify each derived public key matches the published
 			// UpdatePathNode.EncryptionKey (Gap 13).
 			pathSecret := ciphersuite.NewSecret(psBytes)
+			secureZeroBytes(psBytes)
 			if g.pathNodePrivKeys == nil {
 				g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
 			}
@@ -1774,13 +1847,19 @@ func (g *Group) decryptPathSecret(
 					if pkErr == nil {
 						// RFC §12.4.2: verify derived public key matches published EncryptionKey.
 						if !bytes.Equal(privKey.PublicKey().Bytes(), updatePath.Nodes[k].EncryptionKey) {
+							secureZeroSecret(nodeSecret)
+							secureZeroSecret(pathSecret)
 							return nil, fmt.Errorf("derived public key at path level %d does not match UpdatePath.Nodes[%d].EncryptionKey: %w",
 								k, k, ErrInvalidProposal)
 						}
-						g.pathNodePrivKeys[nodeIdx] = privKey.Bytes()
+						g.setPathNodePrivKey(nodeIdx, privKey.Bytes())
 					}
+					secureZeroSecret(nodeSecret)
 				}
-				pathSecret, err = pathSecret.DeriveSecret(g.cipherSuite, "path")
+				nextPathSecret, deriveErr := pathSecret.DeriveSecret(g.cipherSuite, "path")
+				secureZeroSecret(pathSecret)
+				pathSecret = nextPathSecret
+				err = deriveErr
 				if err != nil {
 					return nil, err
 				}
@@ -1885,12 +1964,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		// (PendingUpdatePrivKey from SelfUpdate) replaces the current MyLeafEncryptionKey.
 		if proposal.Type == ProposalTypeUpdate && g.pendingUpdatePrivKey != nil && proposal.Update != nil && proposal.Update.LeafNode != nil {
 			ownLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
+			// This compares public signature keys to detect whether our own update committed.
 			if ownLeaf != nil && ownLeaf.LeafData != nil && bytes.Equal(proposal.Update.LeafNode.SignatureKeyBytes, ownLeaf.LeafData.SigKeyBytes()) {
 				// RFC §9.2: zero the old HPKE private key before replacing with the new one
-				for i := range g.myLeafEncryptionKey {
-					g.myLeafEncryptionKey[i] = 0
-				}
-				g.myLeafEncryptionKey = g.pendingUpdatePrivKey
+				g.setMyLeafEncryptionKey(g.pendingUpdatePrivKey)
 				g.pendingUpdatePrivKey = nil
 			}
 		}
@@ -1986,10 +2063,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				if nodeIdx < treesync.NodeIndex(len(g.ratchetTree.Nodes)) &&
 					g.ratchetTree.Nodes[nodeIdx].State != treesync.NodeStatePresent {
 					// RFC §9.2: zero key bytes before removing from map (forward secrecy)
-					for i := range g.pathNodePrivKeys[nodeIdx] {
-						g.pathNodePrivKeys[nodeIdx][i] = 0
-					}
-					delete(g.pathNodePrivKeys, nodeIdx)
+					g.deletePathNodePrivKey(nodeIdx)
 				}
 			}
 		}
@@ -2197,7 +2271,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// Apply the new leaf HPKE private key generated during Commit() now that the
 	// commit is confirmed. pendingLeafKey is nil for receiver-side MergeCommits.
 	if g.pendingLeafKey != nil {
-		g.myLeafEncryptionKey = g.pendingLeafKey
+		g.setMyLeafEncryptionKey(g.pendingLeafKey)
+		for i := range g.pendingLeafKey {
+			g.pendingLeafKey[i] = 0
+		}
+		runtime.KeepAlive(g.pendingLeafKey)
 		g.pendingLeafKey = nil
 	}
 
