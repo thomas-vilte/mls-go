@@ -357,6 +357,145 @@ func TestGroupState(t *testing.T) {
 	}
 }
 
+func TestDiscardPendingCommit_ZeroesPendingLeafKey(t *testing.T) {
+	t.Parallel()
+
+	group, _, kpPrivKeys, _ := setupTwoMemberGroup(t)
+
+	newCred, _, err := credentials.GenerateCredentialWithKey([]byte("NewMember"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey(new member) failed: %v", err)
+	}
+	newKeyPackage, _, err := keypackages.Generate(newCred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate KeyPackage(new member) failed: %v", err)
+	}
+	if _, err := group.AddMember(newKeyPackage); err != nil {
+		t.Fatalf("AddMember failed: %v", err)
+	}
+
+	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+	if _, err := group.Commit(sigPriv, sigPriv.PublicKey(), nil); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	if group.State() != StatePendingCommit {
+		t.Fatalf("State should be StatePendingCommit, got %d", group.State())
+	}
+	if len(group.pendingLeafKey) == 0 {
+		t.Fatal("pendingLeafKey should be populated for a staged commit")
+	}
+
+	backing := group.pendingLeafKey
+	if err := group.DiscardPendingCommit(); err != nil {
+		t.Fatalf("DiscardPendingCommit failed: %v", err)
+	}
+	if group.pendingLeafKey != nil {
+		t.Fatal("pendingLeafKey should be nil after discard")
+	}
+	for i, b := range backing {
+		if b != 0 {
+			t.Fatalf("pendingLeafKey byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestClearProposals_ZeroesPendingUpdatePrivKey(t *testing.T) {
+	t.Parallel()
+
+	group, _, kpPrivKeys, _ := setupTwoMemberGroup(t)
+	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+
+	if _, err := group.SelfUpdate(sigPriv); err != nil {
+		t.Fatalf("SelfUpdate failed: %v", err)
+	}
+	if len(group.pendingUpdatePrivKey) == 0 {
+		t.Fatal("pendingUpdatePrivKey should be populated after SelfUpdate")
+	}
+
+	backing := group.pendingUpdatePrivKey
+	group.ClearProposals()
+	if group.pendingUpdatePrivKey != nil {
+		t.Fatal("pendingUpdatePrivKey should be nil after ClearProposals")
+	}
+	for i, b := range backing {
+		if b != 0 {
+			t.Fatalf("pendingUpdatePrivKey byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestSelfUpdate_ZeroesReplacedPendingUpdatePrivKey(t *testing.T) {
+	t.Parallel()
+
+	group, _, kpPrivKeys, _ := setupTwoMemberGroup(t)
+	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
+
+	if _, err := group.SelfUpdate(sigPriv); err != nil {
+		t.Fatalf("first SelfUpdate failed: %v", err)
+	}
+	if len(group.pendingUpdatePrivKey) == 0 {
+		t.Fatal("pendingUpdatePrivKey should be populated after first SelfUpdate")
+	}
+	oldBacking := group.pendingUpdatePrivKey
+
+	if _, err := group.SelfUpdate(sigPriv); err != nil {
+		t.Fatalf("second SelfUpdate failed: %v", err)
+	}
+	if len(group.pendingUpdatePrivKey) == 0 {
+		t.Fatal("pendingUpdatePrivKey should be populated after second SelfUpdate")
+	}
+	if &group.pendingUpdatePrivKey[0] == &oldBacking[0] {
+		t.Fatal("pendingUpdatePrivKey should be replaced with a new backing slice")
+	}
+	for i, b := range oldBacking {
+		if b != 0 {
+			t.Fatalf("replaced pendingUpdatePrivKey byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestSetPathNodePrivKey_ZeroesReplacedValue(t *testing.T) {
+	t.Parallel()
+
+	g := &Group{}
+	nodeIdx := treesync.NodeIndex(7)
+	first := []byte{1, 2, 3, 4}
+	g.setPathNodePrivKey(nodeIdx, first)
+	backing := g.pathNodePrivKeys[nodeIdx]
+
+	second := []byte{9, 8, 7, 6}
+	g.setPathNodePrivKey(nodeIdx, second)
+
+	if got := g.pathNodePrivKeys[nodeIdx]; !bytes.Equal(got, second) {
+		t.Fatalf("pathNodePrivKeys[%d] = %v, want %v", nodeIdx, got, second)
+	}
+	for i, b := range backing {
+		if b != 0 {
+			t.Fatalf("replaced pathNodePrivKeys byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestDeletePathNodePrivKey_ZeroesValue(t *testing.T) {
+	t.Parallel()
+
+	g := &Group{}
+	nodeIdx := treesync.NodeIndex(11)
+	key := []byte{4, 3, 2, 1}
+	g.setPathNodePrivKey(nodeIdx, key)
+	backing := g.pathNodePrivKeys[nodeIdx]
+
+	g.deletePathNodePrivKey(nodeIdx)
+	if _, ok := g.pathNodePrivKeys[nodeIdx]; ok {
+		t.Fatalf("pathNodePrivKeys[%d] should be deleted", nodeIdx)
+	}
+	for i, b := range backing {
+		if b != 0 {
+			t.Fatalf("deleted pathNodePrivKeys byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
 func TestProcessPublicMessage_StoresProposal(t *testing.T) {
 	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("Creator"))
 	if err != nil {

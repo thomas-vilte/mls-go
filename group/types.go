@@ -437,6 +437,7 @@ func (ps *ProposalStore) Clear() {
 // Returns true if a proposal was found and removed, false otherwise.
 func (ps *ProposalStore) RemoveByRef(ref []byte) bool {
 	for i, sp := range ps.Proposals {
+		// ProposalRef is a public hash/reference used for lookup, not secret material.
 		if bytes.Equal(sp.Ref, ref) {
 			ps.Proposals = append(ps.Proposals[:i], ps.Proposals[i+1:]...)
 			return true

@@ -311,6 +311,7 @@ func (g *Group) ValidateRestoredState() error {
 	if g.secretTree == nil {
 		return fmt.Errorf("validating restored state: missing secret tree: %w", ErrInvalidGroupState)
 	}
+	// GroupID is public protocol metadata, not secret material.
 	if g.groupContext.GroupID == nil || !bytes.Equal(g.groupID.AsSlice(), g.groupContext.GroupID.AsSlice()) {
 		return fmt.Errorf("validating restored state: group ID mismatch: %w", ErrInvalidGroupState)
 	}
@@ -330,6 +331,7 @@ func (g *Group) ValidateRestoredState() error {
 	}
 
 	computedTreeHash := g.ratchetTree.TreeHash()
+	// TreeHash is a public integrity value from GroupContext, not secret material.
 	if !bytes.Equal(computedTreeHash, g.groupContext.TreeHash) {
 		return fmt.Errorf("validating restored state: computed tree hash %x does not match stored tree hash %x: %w", computedTreeHash, g.groupContext.TreeHash, ErrTreeHashMismatch)
 	}
