@@ -186,8 +186,7 @@ func DecryptWithLabel(
 
 // decryptWithLabelNative is the native implementation using crypto/hpke.
 //
-// This function implements RFC 9180 §4.1 (HPKE Base Mode) decryption with
-// MLS-specific labeling per RFC 9420 §5.1.3.
+// RFC 9180 §4.1 (HPKE Base Mode) decryption, labeled per RFC 9420 §5.1.3.
 //
 // HPKE Decryption Flow:
 //

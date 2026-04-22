@@ -458,10 +458,7 @@ type Member struct {
 	Active     bool
 }
 
-// StoredProposal stores a proposal with the sender's leaf index.
-//
-// This is used to track who sent each proposal, which is needed
-// for proper proposal ordering and validation.
+// StoredProposal stores a proposal alongside the sender's leaf index.
 type StoredProposal struct {
 	Proposal *Proposal
 	Sender   LeafNodeIndex

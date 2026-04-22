@@ -675,14 +675,7 @@ func (ls *LeafSecret) Encrypt(plaintext []byte, aad []byte, seqNum uint64) ([]by
 	return ciphersuite.EncryptWithCipherSuite(key, nonce, plaintext, aad, ls.cs)
 }
 
-// Decrypt decrypts a message for the given generation using the application ratchet.
-//
-// This method derives the application key and nonce for the specified sequence
-// number, then decrypts the ciphertext using AES-128-GCM.
-//
-// Parameters:
-//   - ciphertext: The encrypted data (including authentication tag)
-//   - aad: Additional authenticated data (must match what was used for encryption)
+// Decrypt decrypts a message for the given sequence number using the application ratchet.
 //   - seqNum: Sequence number for key/nonce derivation
 //
 // Returns the decrypted plaintext, or an error if decryption fails (e.g., wrong key,
