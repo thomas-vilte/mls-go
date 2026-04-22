@@ -95,6 +95,11 @@ func NewEd25519SignaturePrivateKey(priv ed25519.PrivateKey) *SignaturePrivateKey
 	return &SignaturePrivateKey{scheme: ED25519, ed25519Key: priv}
 }
 
+// NewSignaturePrivateKeyP521 creates a wrapper from an existing P-521 ecdsa.PrivateKey.
+func NewSignaturePrivateKeyP521(priv *ecdsa.PrivateKey) *SignaturePrivateKey {
+	return &SignaturePrivateKey{scheme: ECDSA_SECP521R1_SHA512, ecdsaKey: priv}
+}
+
 // GenerateSignaturePrivateKey generates a new P-256 private key.
 func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 	// P-256 generation using ecdsa standard library function.
@@ -108,9 +113,9 @@ func GenerateSignaturePrivateKey() (*SignaturePrivateKey, error) {
 // GenerateSignaturePrivateKeyForCS generates a new private key appropriate for the cipher suite.
 //
 // Per RFC 9420 §5.1.2:
-//   - CS1 (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519): Ed25519
-//   - CS2 (MLS_128_DHKEMP256_AES128GCM_SHA256_P256): ECDSA with P-256 and SHA-256 (mandatory)
-//   - CS3 (MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519): Ed25519
+//   - CS1/CS3: Ed25519
+//   - CS2: ECDSA with P-256 and SHA-256 (mandatory)
+//   - CS5: ECDSA with P-521 and SHA-512
 func GenerateSignaturePrivateKeyForCS(cs CipherSuite) (*SignaturePrivateKey, error) {
 	switch cs.SignatureScheme() {
 	case ED25519:
@@ -121,6 +126,12 @@ func GenerateSignaturePrivateKeyForCS(cs CipherSuite) (*SignaturePrivateKey, err
 		return &SignaturePrivateKey{scheme: ED25519, ed25519Key: priv}, nil
 	case ECDSA_SECP256R1_SHA256:
 		return GenerateSignaturePrivateKey()
+	case ECDSA_SECP521R1_SHA512:
+		priv, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generating P-521 key: %w", err)
+		}
+		return &SignaturePrivateKey{scheme: ECDSA_SECP521R1_SHA512, ecdsaKey: priv}, nil
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
 	}
@@ -207,7 +218,7 @@ func (k *MLSSignaturePublicKey) Scheme() SignatureScheme {
 // For Ed25519: expects raw 64-byte signature.
 func (k *MLSSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 	switch k.SignatureScheme {
-	case ECDSA_SECP256R1_SHA256:
+	case ECDSA_SECP256R1_SHA256, ECDSA_SECP521R1_SHA512:
 		return k.verifyECDSA(data, sig)
 	case ED25519:
 		return k.verifyEd25519(data, sig)
@@ -216,13 +227,30 @@ func (k *MLSSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 	}
 }
 
-// verifyECDSA verifies an ECDSA signature by pre-hashing with the scheme's hash function
-// (SHA-256 for ECDSA-P256, RFC 9420 §5.1.2) and then calling ecdsa.VerifyASN1.
+// verifyECDSA verifies an ECDSA signature, supporting both P-256 and P-521.
 func (k *MLSSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
-	pubKey, err := NewSignaturePublicKey(k.Value).ToECDSA()
-	if err != nil {
-		return err
+	var curve elliptic.Curve
+	var coordLen int
+	switch k.SignatureScheme {
+	case ECDSA_SECP256R1_SHA256:
+		curve = elliptic.P256()
+		coordLen = 32
+	case ECDSA_SECP521R1_SHA512:
+		curve = elliptic.P521()
+		coordLen = 66
+	default:
+		return fmt.Errorf("unsupported ECDSA scheme: %v", k.SignatureScheme)
 	}
+
+	expectedLen := 1 + 2*coordLen
+	if len(k.Value) != expectedLen || k.Value[0] != 0x04 {
+		return fmt.Errorf("invalid uncompressed point: expected %d bytes starting with 0x04, got %d bytes",
+			expectedLen, len(k.Value))
+	}
+
+	x := new(big.Int).SetBytes(k.Value[1 : 1+coordLen])
+	y := new(big.Int).SetBytes(k.Value[1+coordLen:])
+	pubKey := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
 
 	// Pre-hash with the scheme's digest algorithm (RFC 9420 §5.1.2).
 	hf := k.SignatureScheme.HashFunction()

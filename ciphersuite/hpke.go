@@ -71,7 +71,7 @@ func EncryptWithLabel(
 	if err != nil {
 		return nil, err
 	}
-	return encryptWithLabelNative(publicKey, label, context, plaintext, curve, aead)
+	return encryptWithLabelNative(publicKey, label, context, plaintext, curve, hpkeKDF(cs), aead)
 }
 
 // encryptWithLabelNative is the native implementation using crypto/hpke.
@@ -116,6 +116,7 @@ func encryptWithLabelNative(
 	context []byte,
 	plaintext []byte,
 	curve ecdh.Curve,
+	kdf hpke.KDF,
 	aead hpke.AEAD,
 ) (*HpkeCiphertext, error) {
 	// Build info = Serialize(VL("MLS 1.0 " + label) || VL(context))
@@ -135,7 +136,7 @@ func encryptWithLabelNative(
 
 	// Encrypt using HPKE Seal (RFC 9180 §4.1)
 	// Seal returns enc || ciphertext concatenated
-	encapsulatedAndCt, err := hpke.Seal(pk, hpke.HKDFSHA256(), aead, info, plaintext)
+	encapsulatedAndCt, err := hpke.Seal(pk, kdf, aead, info, plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("HPKE seal: %w", err)
 	}
@@ -183,7 +184,7 @@ func DecryptWithLabel(
 	if err != nil {
 		return nil, err
 	}
-	return decryptWithLabelNative(privateKey, label, context, ciphertext, curve, aead)
+	return decryptWithLabelNative(privateKey, label, context, ciphertext, curve, hpkeKDF(cs), aead)
 }
 
 // decryptWithLabelNative is the native implementation using crypto/hpke.
@@ -221,6 +222,7 @@ func decryptWithLabelNative(
 	context []byte,
 	ciphertext *HpkeCiphertext,
 	curve ecdh.Curve,
+	kdf hpke.KDF,
 	aead hpke.AEAD,
 ) ([]byte, error) {
 	// Build info = Serialize(VL("MLS 1.0 " + label) || VL(context))
@@ -244,7 +246,7 @@ func decryptWithLabelNative(
 	encapsulatedAndCt = append(encapsulatedAndCt, ciphertext.Ciphertext...)
 
 	// Decrypt using HPKE Open (RFC 9180 §4.1)
-	plaintext, err := hpke.Open(sk, hpke.HKDFSHA256(), aead, info, encapsulatedAndCt)
+	plaintext, err := hpke.Open(sk, kdf, aead, info, encapsulatedAndCt)
 	if err != nil {
 		return nil, fmt.Errorf("HPKE open: %w", err)
 	}
@@ -287,10 +289,22 @@ func hpkeAEAD(cs CipherSuite) (hpke.AEAD, error) {
 	switch cs.AeadAlgorithm() {
 	case AES128GCM:
 		return hpke.AES128GCM(), nil
+	case AES256GCM:
+		return hpke.AES256GCM(), nil
 	case ChaCha20Poly1305:
 		return hpke.ChaCha20Poly1305(), nil
 	default:
 		return nil, fmt.Errorf("%w: no HPKE AEAD for cipher suite %d", ErrUnsupportedSuite, cs)
+	}
+}
+
+// hpkeKDF returns the crypto/hpke KDF for the cipher suite (RFC 9180 §4.1).
+func hpkeKDF(cs CipherSuite) hpke.KDF {
+	switch cs {
+	case MLS256DHKEMP521AES256GCM:
+		return hpke.HKDFSHA512()
+	default:
+		return hpke.HKDFSHA256()
 	}
 }
 
