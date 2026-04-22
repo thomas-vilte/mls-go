@@ -78,68 +78,23 @@ func benchMemberKP(b *testing.B) *keypackages.KeyPackage {
 	return kp
 }
 
-func BenchmarkCommit_2Members(b *testing.B) {
-	memberKp := benchMemberKP(b)
+var benchMemberSizes = []int{2, 10, 50, 100, 500}
 
-	for b.Loop() {
-		b.StopTimer()
-		// Re-create the group each iteration — avoids shared key schedule state
-		// from corrupting subsequent iterations.
-		g, sigPriv := setupBenchGroup(b, 1)
-		if _, err := g.AddMember(memberKp); err != nil {
-			b.Fatalf("AddMember: %v", err)
-		}
-		b.StartTimer()
-
-		sc, err := g.Commit(sigPriv, sigPriv.PublicKey(), nil)
-		if err != nil {
-			b.Fatalf("Commit: %v", err)
-		}
-		if err := g.MergeCommit(sc); err != nil {
-			b.Fatalf("MergeCommit: %v", err)
-		}
-	}
-}
-
-func BenchmarkCommit_10Members(b *testing.B) {
-	memberKp := benchMemberKP(b)
-
-	for b.Loop() {
-		b.StopTimer()
-		g, sigPriv := setupBenchGroup(b, 9)
-		if _, err := g.AddMember(memberKp); err != nil {
-			b.Fatalf("AddMember: %v", err)
-		}
-		b.StartTimer()
-
-		sc, err := g.Commit(sigPriv, sigPriv.PublicKey(), nil)
-		if err != nil {
-			b.Fatalf("Commit: %v", err)
-		}
-		if err := g.MergeCommit(sc); err != nil {
-			b.Fatalf("MergeCommit: %v", err)
-		}
-	}
-}
-
-func BenchmarkCommit_100Members(b *testing.B) {
-	memberKp := benchMemberKP(b)
-
-	for b.Loop() {
-		b.StopTimer()
-		g, sigPriv := setupBenchGroup(b, 99)
-		if _, err := g.AddMember(memberKp); err != nil {
-			b.Fatalf("AddMember: %v", err)
-		}
-		b.StartTimer()
-
-		sc, err := g.Commit(sigPriv, sigPriv.PublicKey(), nil)
-		if err != nil {
-			b.Fatalf("Commit: %v", err)
-		}
-		if err := g.MergeCommit(sc); err != nil {
-			b.Fatalf("MergeCommit: %v", err)
-		}
+func BenchmarkCommit(b *testing.B) {
+	for _, n := range benchMemberSizes {
+		b.Run(fmt.Sprintf("members=%d", n), func(b *testing.B) {
+			g, sigPriv := setupBenchGroup(b, n)
+			b.ResetTimer()
+			for b.Loop() {
+				staged, err := g.Commit(sigPriv, sigPriv.PublicKey(), nil)
+				if err != nil {
+					b.Fatalf("Commit: %v", err)
+				}
+				if err := g.MergeCommit(staged); err != nil {
+					b.Fatalf("MergeCommit: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -158,42 +113,51 @@ func BenchmarkAddMember(b *testing.B) {
 }
 
 func BenchmarkSendMessage(b *testing.B) {
-	g, sigPriv := setupBenchGroup(b, 2)
+	for _, n := range benchMemberSizes {
+		b.Run(fmt.Sprintf("members=%d", n), func(b *testing.B) {
+			g, sigPriv := setupBenchGroup(b, n)
 
-	data := make([]byte, 1024)
-	if _, err := rand.Read(data); err != nil {
-		b.Fatalf("rand.Read: %v", err)
-	}
+			data := make([]byte, 1024)
+			if _, err := rand.Read(data); err != nil {
+				b.Fatalf("rand.Read: %v", err)
+			}
 
-	for b.Loop() {
-		if _, err := g.SendMessage(data, sigPriv); err != nil {
-			b.Fatalf("SendMessage: %v", err)
-		}
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := g.SendMessage(data, sigPriv); err != nil {
+					b.Fatalf("SendMessage: %v", err)
+				}
+			}
+		})
 	}
 }
 
 func BenchmarkReceiveMessage(b *testing.B) {
-	g, sigPriv := setupBenchGroup(b, 2)
+	for _, n := range benchMemberSizes {
+		b.Run(fmt.Sprintf("members=%d", n), func(b *testing.B) {
+			g, sigPriv := setupBenchGroup(b, n)
 
-	data := make([]byte, 1024)
-	if _, err := rand.Read(data); err != nil {
-		b.Fatalf("rand.Read: %v", err)
-	}
+			data := make([]byte, 1024)
+			if _, err := rand.Read(data); err != nil {
+				b.Fatalf("rand.Read: %v", err)
+			}
 
-	for b.Loop() {
-		b.StopTimer()
-		// Each iteration needs a fresh ciphertext — the secret tree ratchets
-		// forward on every decryption, so re-using the same ciphertext would
-		// fail on the second iteration with a generation mismatch.
-		pm, err := g.SendMessage(data, sigPriv)
-		if err != nil {
-			b.Fatalf("SendMessage: %v", err)
-		}
-		b.StartTimer()
+			for b.Loop() {
+				b.StopTimer()
+				// Each iteration needs a fresh ciphertext — the secret tree ratchets
+				// forward on every decryption, so re-using the same ciphertext would
+				// fail on the second iteration with a generation mismatch.
+				pm, err := g.SendMessage(data, sigPriv)
+				if err != nil {
+					b.Fatalf("SendMessage: %v", err)
+				}
+				b.StartTimer()
 
-		if _, err := g.ReceiveMessage(pm, 0); err != nil {
-			b.Fatalf("ReceiveMessage: %v", err)
-		}
+				if _, err := g.ReceiveMessage(pm, 0); err != nil {
+					b.Fatalf("ReceiveMessage: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -222,63 +186,51 @@ func BenchmarkUnmarshalGroupState(b *testing.B) {
 }
 
 func BenchmarkJoinFromWelcome(b *testing.B) {
-	creatorCred, _, err := credentials.GenerateCredentialWithKey([]byte("CreatorJoinBench"))
-	if err != nil {
-		b.Fatalf("GenerateCredentialWithKey creator: %v", err)
-	}
-	creatorKP, creatorPriv, err := keypackages.Generate(creatorCred, keypackages.MLS128DHKEMP256)
-	if err != nil {
-		b.Fatalf("Generate creator KP: %v", err)
-	}
-	groupID, err := NewGroupIDRandom()
-	if err != nil {
-		b.Fatalf("NewGroupIDRandom: %v", err)
-	}
-	creatorGroup, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, creatorKP, creatorPriv)
-	if err != nil {
-		b.Fatalf("NewGroup: %v", err)
-	}
-	creatorSig := ciphersuite.NewSignaturePrivateKey(creatorPriv.SignatureKey)
+	for _, n := range benchMemberSizes {
+		b.Run(fmt.Sprintf("members=%d", n), func(b *testing.B) {
+			creatorGroup, creatorSig := setupBenchGroup(b, n)
 
-	joinerCred, _, err := credentials.GenerateCredentialWithKey([]byte("JoinerJoinBench"))
-	if err != nil {
-		b.Fatalf("GenerateCredentialWithKey joiner: %v", err)
-	}
-	joinerKP, joinerPriv, err := keypackages.Generate(joinerCred, keypackages.MLS128DHKEMP256)
-	if err != nil {
-		b.Fatalf("Generate joiner KP: %v", err)
-	}
-	if _, err := creatorGroup.AddMember(joinerKP); err != nil {
-		b.Fatalf("AddMember: %v", err)
-	}
-	staged, err := creatorGroup.Commit(creatorSig, creatorSig.PublicKey(), nil)
-	if err != nil {
-		b.Fatalf("Commit: %v", err)
-	}
-	joinerSecret := staged.JoinerSecret()
-	if err := creatorGroup.MergeCommit(staged); err != nil {
-		b.Fatalf("MergeCommit: %v", err)
-	}
-	welcomeObj, err := creatorGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{joinerKP}, CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: creatorSig,
-		PskIDs:        staged.PskIDs(),
-		PskSecret:     staged.RawPskSecret(),
-		StagedCommit:  staged,
-	})
-	if err != nil {
-		b.Fatalf("CreateWelcomeWithOptions: %v", err)
-	}
-	welcomeMsg := &framing.MLSMessage{Welcome: welcomeObj.Marshal()}
-	parsedWelcome, err := UnmarshalWelcome(welcomeMsg.Welcome)
-	if err != nil {
-		b.Fatalf("UnmarshalWelcome: %v", err)
-	}
+			joinerCred, _, err := credentials.GenerateCredentialWithKey([]byte("JoinerJoinBench"))
+			if err != nil {
+				b.Fatalf("GenerateCredentialWithKey joiner: %v", err)
+			}
+			joinerKP, joinerPriv, err := keypackages.Generate(joinerCred, keypackages.MLS128DHKEMP256)
+			if err != nil {
+				b.Fatalf("Generate joiner KP: %v", err)
+			}
+			if _, err := creatorGroup.AddMember(joinerKP); err != nil {
+				b.Fatalf("AddMember: %v", err)
+			}
+			staged, err := creatorGroup.Commit(creatorSig, creatorSig.PublicKey(), nil)
+			if err != nil {
+				b.Fatalf("Commit: %v", err)
+			}
+			joinerSecret := staged.JoinerSecret()
+			if err := creatorGroup.MergeCommit(staged); err != nil {
+				b.Fatalf("MergeCommit: %v", err)
+			}
+			welcomeObj, err := creatorGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{joinerKP}, CreateWelcomeOptions{
+				JoinerSecret:  joinerSecret,
+				SignerPrivKey: creatorSig,
+				PskIDs:        staged.PskIDs(),
+				PskSecret:     staged.RawPskSecret(),
+				StagedCommit:  staged,
+			})
+			if err != nil {
+				b.Fatalf("CreateWelcomeWithOptions: %v", err)
+			}
+			welcomeMsg := &framing.MLSMessage{Welcome: welcomeObj.Marshal()}
+			parsedWelcome, err := UnmarshalWelcome(welcomeMsg.Welcome)
+			if err != nil {
+				b.Fatalf("UnmarshalWelcome: %v", err)
+			}
 
-	b.ResetTimer()
-	for b.Loop() {
-		if _, err := JoinFromWelcome(parsedWelcome, joinerKP, joinerPriv, nil); err != nil {
-			b.Fatalf("JoinFromWelcome: %v", err)
-		}
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := JoinFromWelcome(parsedWelcome, joinerKP, joinerPriv, nil); err != nil {
+					b.Fatalf("JoinFromWelcome: %v", err)
+				}
+			}
+		})
 	}
 }

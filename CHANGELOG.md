@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+In this release, we focused on performance, API ergonomics, and error handling. The headline change is parallel HPKE encryption during commit path construction, which significantly reduces commit latency in large groups.
+
+### ⚡ Performance
+
+- We parallelized HPKE encryption of path secrets in `createUpdatePath`, one goroutine per filtered copath level. Tree derivation and mutation remain sequential to preserve data-race safety. For large groups, this converts an O(log N) sequential chain of HPKE Seal operations into a parallel fan-out.
+- We parameterized the benchmark suite with `members={2, 10, 50, 100, 500}` sub-benchmarks for `Commit`, `SendMessage`, `ReceiveMessage`, and `JoinFromWelcome`, making scaling curves comparable with `benchstat`.
+
+### ✨ API
+
+- We added `group.WithAAD(aad)` as a functional option on `Group.SendMessage`, and `mls.WithAAD(aad)` on `Client.SendMessage`. The standalone `SendMessageWithAAD` methods are deprecated but remain as shims for backward compatibility.
+
+### 🔧 Error handling
+
+- We added five new sentinel errors to `group/errors.go`: `ErrNoPendingCommit`, `ErrNotACommit`, `ErrMissingAuthenticatedContent`, `ErrUnknownProposalRef`, and `ErrOwnLeafNotFound`. Callers can now distinguish these failure modes with `errors.Is`.
+- We replaced anonymous `fmt.Errorf` calls in `group/group.go` with existing sentinel errors (`ErrGroupNotOperational`, `ErrNilLeafNode`, `ErrNilSignaturePrivateKey`), improving observability for downstream applications.
+
 
 ## [v1.2.0] - 2026-04-07
 

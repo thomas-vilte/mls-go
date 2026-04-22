@@ -260,7 +260,7 @@ func (g *Group) PendingCommit() *StagedCommit {
 // the application should re-commit or clear them as appropriate.
 func (g *Group) DiscardPendingCommit() error {
 	if g.state != StatePendingCommit {
-		return fmt.Errorf("group: no pending commit to discard (state=%d)", g.state)
+		return fmt.Errorf("%w (state=%d)", ErrNoPendingCommit, g.state)
 	}
 	g.pendingCommit = nil
 	secureZeroBytes(g.pendingLeafKey)
@@ -626,7 +626,7 @@ func NewGroupWithExtensions(
 // Returns the generated Proposal which can be sent to other members.
 func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state")
+		return nil, ErrGroupNotOperational
 	}
 	if keyPackage == nil {
 		return nil, ErrNilKeyPackage
@@ -689,10 +689,10 @@ func (g *Group) UpdateMember(
 	privateKeys *keypackages.KeyPackagePrivateKeys,
 ) (*Proposal, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state")
+		return nil, ErrGroupNotOperational
 	}
 	if newLeafNode == nil {
-		return nil, fmt.Errorf("new leaf node is nil")
+		return nil, ErrNilLeafNode
 	}
 	if privateKeys == nil {
 		return nil, fmt.Errorf("private keys are nil")
@@ -740,16 +740,16 @@ func (g *Group) UpdateMember(
 // key material is derived from the current group state.
 func (g *Group) SelfUpdate(sigKey *ciphersuite.SignaturePrivateKey) (*Proposal, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state")
+		return nil, ErrGroupNotOperational
 	}
 	if sigKey == nil {
-		return nil, fmt.Errorf("signature key is nil")
+		return nil, ErrNilSignaturePrivateKey
 	}
 
 	// Get current own leaf to copy credential/capabilities/lifetime.
 	currentLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
 	if currentLeaf == nil || currentLeaf.LeafData == nil {
-		return nil, fmt.Errorf("own leaf not found in ratchet tree")
+		return nil, ErrOwnLeafNotFound
 	}
 	ld := currentLeaf.LeafData
 
@@ -809,7 +809,7 @@ func (g *Group) SelfUpdate(sigKey *ciphersuite.SignaturePrivateKey) (*Proposal, 
 // will not be able to read messages sent after this proposal is committed.
 func (g *Group) RemoveMember(leafIndex LeafNodeIndex) (*Proposal, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state")
+		return nil, ErrGroupNotOperational
 	}
 
 	// Validate leaf index
@@ -870,7 +870,7 @@ func (g *Group) CommitWithContext(
 	}
 
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not in operational state: %w", ErrInvalidGroupState)
+		return nil, ErrGroupNotOperational
 	}
 
 	// Empty commits (no proposals) are valid per RFC 9420 §12.4.
@@ -1297,33 +1297,55 @@ func (g *Group) createUpdatePath(
 	// Encrypt pathSecrets[N-F+m+1] so receivers can derive the node key directly
 	// as DeriveKeyPair(DeriveSecret(decrypted, "node")) and chain to commit_secret.
 	nodes := make([]UpdatePathNode, F)
+	type encResult struct {
+		idx  int
+		node UpdatePathNode
+		err  error
+	}
+	results := make([]encResult, F)
+	var wg sync.WaitGroup
 	for m, level := range levels {
-		ps := pathSecrets[N-F+m+1]
-		res := tree.ResolutionWithExclusions(copath[level], excluded)
-		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
-		for j, resIdx := range res {
-			resNode := &tree.Nodes[resIdx]
-			var encKeyBytes []byte
-			if treesync.IsLeaf(resIdx) {
-				if resNode.LeafData != nil {
-					encKeyBytes = resNode.LeafData.EncryptionKey
+		wg.Add(1)
+		go func(m, level int) {
+			defer wg.Done()
+			ps := pathSecrets[N-F+m+1]
+			res := tree.ResolutionWithExclusions(copath[level], excluded)
+			encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
+			for j, resIdx := range res {
+				resNode := &tree.Nodes[resIdx]
+				var encKeyBytes []byte
+				if treesync.IsLeaf(resIdx) {
+					if resNode.LeafData != nil {
+						encKeyBytes = resNode.LeafData.EncryptionKey
+					}
+				} else if resNode.EncryptionKey != nil {
+					encKeyBytes = resNode.EncryptionKey.Bytes()
 				}
-			} else if resNode.EncryptionKey != nil {
-				encKeyBytes = resNode.EncryptionKey.Bytes()
+				if len(encKeyBytes) == 0 {
+					continue
+				}
+				ct, err := ciphersuite.EncryptWithLabel(encKeyBytes, "UpdatePathNode", provGCBytes, ps.AsSlice(), g.cipherSuite)
+				if err != nil {
+					results[m] = encResult{idx: m, err: err}
+					return
+				}
+				encryptedSecrets[j] = *ct
 			}
-			if len(encKeyBytes) == 0 {
-				continue
+			results[m] = encResult{
+				idx: m,
+				node: UpdatePathNode{
+					EncryptionKey:        pubKeys[m],
+					EncryptedPathSecrets: encryptedSecrets,
+				},
 			}
-			ct, err := ciphersuite.EncryptWithLabel(encKeyBytes, "UpdatePathNode", provGCBytes, ps.AsSlice(), g.cipherSuite)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
-			}
-			encryptedSecrets[j] = *ct
+		}(m, level)
+	}
+	wg.Wait()
+	for _, result := range results {
+		if result.err != nil {
+			return nil, nil, nil, nil, nil, nil, result.err
 		}
-		nodes[m] = UpdatePathNode{
-			EncryptionKey:        pubKeys[m],
-			EncryptedPathSecrets: encryptedSecrets,
-		}
+		nodes[result.idx] = result.node
 	}
 
 	// Stage the new leaf private key. myLeafEncryptionKey is updated only in
@@ -1459,7 +1481,7 @@ func (g *Group) applyProposalToTree(proposal *Proposal, tree *treesync.RatchetTr
 // RFC 9420 §12.4.2
 func (g *Group) ProcessCommit(stagedCommit *StagedCommit) error {
 	if stagedCommit.authenticatedContent == nil {
-		return fmt.Errorf("missing authenticated content")
+		return ErrMissingAuthenticatedContent
 	}
 	return g.MergeCommit(stagedCommit)
 }
@@ -1505,7 +1527,7 @@ func (g *Group) ProcessReceivedCommit(
 
 	commitBody, ok := ac.Content.Body.(framing.CommitBody)
 	if !ok {
-		return fmt.Errorf("not a commit message")
+		return ErrNotACommit
 	}
 
 	commit, err := UnmarshalCommit(commitBody.Data)
@@ -1593,7 +1615,7 @@ func (g *Group) ProcessReceivedCommit(
 				}
 				proposalSenders = append(proposalSenders, sender)
 			} else {
-				return fmt.Errorf("unknown proposal reference in commit")
+				return ErrUnknownProposalRef
 			}
 		}
 	}
@@ -1897,7 +1919,7 @@ func (g *Group) decryptPathSecret(
 			return pathSecret, nil
 		}
 	}
-	return nil, fmt.Errorf("own leaf not found in any copath resolution")
+	return nil, ErrOwnLeafNotFound
 }
 
 // MergeCommit applies a received or locally-generated commit to the group state.
