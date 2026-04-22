@@ -72,13 +72,14 @@ func main() {
 	}
 
 	// Alice creates the Welcome that Bob will receive out of band.
-	welcome, err := aliceGroup.CreateWelcomeWithOptions(newMembersKPs, group.CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: aliceSigPriv,
-		PskIDs:        staged.PskIDs(),
-		PskSecret:     staged.RawPskSecret(),
-		StagedCommit:  staged,
-	})
+	welcome, err := aliceGroup.CreateWelcomeWithOpts(
+		newMembersKPs,
+		aliceSigPriv,
+		group.WithJoinerSecret(joinerSecret),
+		group.WithPSKIDs(staged.PskIDs()),
+		group.WithPSKSecret(staged.RawPskSecret()),
+		group.WithStagedCommit(staged),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

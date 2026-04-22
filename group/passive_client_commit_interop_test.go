@@ -74,19 +74,22 @@ func runPassiveClientCommitVector(t *testing.T, v *passiveClientCommitVector) {
 	// Build private keys
 	cs := ciphersuite.CipherSuite(v.CipherSuite)
 	var curve ecdh.Curve
-	if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
+	switch cs {
+	case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS128DHKEMX25519ChaCha20:
 		curve = ecdh.X25519()
-	} else {
+	case ciphersuite.MLS256DHKEMP521AES256GCM:
+		curve = ecdh.P521()
+	default:
 		curve = ecdh.P256()
 	}
 
-	initPrivBytes := mustDecodeHex(t, v.InitPriv)
+	initPrivBytes := padECDHPrivKey(curve, mustDecodeHex(t, v.InitPriv))
 	initPrivKey, err := curve.NewPrivateKey(initPrivBytes)
 	if err != nil {
 		t.Fatalf("init_priv: %v", err)
 	}
 
-	encPrivBytes := mustDecodeHex(t, v.EncryptionPriv)
+	encPrivBytes := padECDHPrivKey(curve, mustDecodeHex(t, v.EncryptionPriv))
 	encPrivKey, err := curve.NewPrivateKey(encPrivBytes)
 	if err != nil {
 		t.Fatalf("encryption_priv: %v", err)
@@ -173,4 +176,15 @@ func mustDecodeHex(t *testing.T, s string) []byte {
 		t.Fatalf("hex decode: %v", err)
 	}
 	return b
+}
+
+// padECDHPrivKey left-pads a private key scalar to the curve's required size.
+// Some test vectors omit leading zero bytes from P521 scalars (65 bytes instead of 66).
+func padECDHPrivKey(curve ecdh.Curve, key []byte) []byte {
+	if curve == ecdh.P521() && len(key) < 66 {
+		padded := make([]byte, 66)
+		copy(padded[66-len(key):], key)
+		return padded
+	}
+	return key
 }

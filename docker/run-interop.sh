@@ -155,7 +155,7 @@ for suite in $SUITES; do
     else
       failed=$((failed + 1))
       printf "FAIL: [%s] suite=%s config=%s\n" "$KIND" "$suite" "$cfg"
-      sed -n "1,120p" "$log"
+      tail -80 "$log"
     fi
   done
 done
