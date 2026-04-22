@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [v1.3.0] - 2026-04-22
+
+[v1.3.0]: https://github.com/thomas-vilte/mls-go/compare/v1.2.1...v1.3.0
+
+In this release, we have significantly expanded the protocol's capabilities by adding full support for Cipher Suite 5 and implementing robust credential management policies. We also focused on refining the developer experience through a unified API and the adoption of the functional options pattern for core methods.
+
+### 🛡️ Security & Protocol
+
+- We added full support for Cipher Suite 5 to expand cryptographic compatibility and security options.
+- We implemented proposal policies and custom credential handlers to give developers finer control over group membership and authentication.
+- We introduced best-effort secret zeroing to enhance memory security by clearing sensitive data when no longer needed.
+- We added credential management and policy enforcement to ensure stricter adherence to group security protocols.
+
+### 🔧 Developer Experience
+
+- We adopted the functional options pattern for core methods to provide a more flexible and idiomatic Go API.
+- We standardized error handling with specific types to make error recovery more predictable and easier to debug.
+- We unified the message sending API to streamline how applications interact with the group messaging lifecycle.
+- We decoupled MLS client operations to improve modularity and reduce internal complexity.
+
+### 🚀 Performance & Infrastructure
+
+- We parallelized HPKE encryption to significantly improve performance during high-volume cryptographic operations.
+- We introduced a reference implementation for a delivery service to provide a clear blueprint for protocol integration.
+- We added new configuration options to control GroupInfo and Welcome extensions for better protocol customization.
+
+### 🐛 Bug Fixes
+
+- We fixed a bug where leaf encryption keys were not correctly preserved after a MergeCommit operation.
+- We improved group stability by separating replay windows and deferring tree truncation until necessary.
+
+### ⚠️ Breaking Changes
+
+- Removed deprecated welcome options API.
+- Unified message sending API and added new error types, which may require updates to existing call sites.
+- Refactored core methods to use the functional options pattern, changing several method signatures.
+
 In this release, we focused on performance, API ergonomics, and error handling. The headline change is parallel HPKE encryption during commit path construction, which significantly reduces commit latency in large groups.
 
 ### ⚡ Performance
@@ -19,7 +57,6 @@ In this release, we focused on performance, API ergonomics, and error handling. 
 
 - We added five new sentinel errors to `group/errors.go`: `ErrNoPendingCommit`, `ErrNotACommit`, `ErrMissingAuthenticatedContent`, `ErrUnknownProposalRef`, and `ErrOwnLeafNotFound`. Callers can now distinguish these failure modes with `errors.Is`.
 - We replaced anonymous `fmt.Errorf` calls in `group/group.go` with existing sentinel errors (`ErrGroupNotOperational`, `ErrNilLeafNode`, `ErrNilSignaturePrivateKey`), improving observability for downstream applications.
-
 
 ## [v1.2.1] - 2026-04-12
 
