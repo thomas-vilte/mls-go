@@ -389,7 +389,10 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	}
 
 	// RFC 9420 §9.2: mark generation as consumed to reject replays.
-	if replayErr := leaf.MarkGenerationUsed(senderData.Generation); replayErr != nil {
+	// The handshake and application ratchets are independent (both start at gen 0),
+	// so their replay windows are tracked separately.
+	isHandshake := pm.ContentType != ContentTypeApplication
+	if replayErr := leaf.MarkGenerationUsed(senderData.Generation, isHandshake); replayErr != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, replayErr)
 	}
 
