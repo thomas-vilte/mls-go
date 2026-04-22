@@ -18,7 +18,7 @@ UpdatePath path-secret encryption runs in parallel (one goroutine per filtered c
 
 Run with: `go test ./group/... -run=^$ -bench=BenchmarkCommit -benchmem -count=5` and `go test ./group/... -run=^$ -bench=BenchmarkJoinFromWelcome -benchmem -count=5`.
 
-**Current status:** `v1.2.0` — stable, interop-verified.
+**Current status:** `v1.3.0` — stable, interop-verified.
 
 ## Why This Exists
 
