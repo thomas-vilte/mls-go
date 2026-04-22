@@ -49,8 +49,8 @@ type Tree struct {
 //   - handshakeRatchetSecret: for Proposal and Commit messages (handshake)
 //   - applicationRatchetSecret: for ApplicationData messages (application)
 //
-// This separation ensures that compromise of application keys doesn't affect
-// handshake security, and allows different retention policies.
+// RFC 9420 §9.1 separates handshake and application ratchets so that compromising
+// application keys does not affect handshake security.
 //
 // RFC 9420 §9.1, Figure 26:
 //
@@ -162,13 +162,8 @@ func (t *Tree) Generation() uint64 { return t.generation }
 // IncrementGeneration increments the epoch generation counter.
 func (t *Tree) IncrementGeneration() { t.generation++ }
 
-// LeafForIndex returns a LeafSecret for the given leaf index.
-//
-// This method derives the leaf secret using the left-balanced binary tree
-// navigation algorithm (RFC 9420 §9, Figure 25). The returned LeafSecret
-// starts at ratchet generation t.generation (the tree's current epoch).
-//
-// Each call creates a fresh LeafSecret derived from the encryption_secret.
+// LeafForIndex returns a LeafSecret for the given leaf index (RFC 9420 §9, Figure 25).
+// Each call creates a fresh LeafSecret starting at ratchet generation t.generation.
 // The leaf secret is derived as:
 //
 //	leaf_secret = NavigateTree(encryption_secret, leaf_index)
@@ -385,16 +380,13 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 // Advance ratchets both secrets (handshake and application) one step forward,
 // providing forward secrecy.
 //
-// After Advance, the secrets for the previous generation are replaced and
-// cannot be recovered. This ensures that compromise of current state doesn't
-// reveal past messages.
+// After Advance, secrets for the previous generation are overwritten and irrecoverable.
 //
 // RFC 9420 §9.1:
 //
 //	After sending a message with generation j, the sender SHOULD advance
 //	the ratchet to generation j+1 and delete the secrets for generation j.
 //
-// This method is equivalent to ratchetTo(current_generation + 1).
 func (ls *LeafSecret) Advance() error {
 	return ls.ratchetTo(uint32(ls.generation) + 1)
 }
@@ -630,10 +622,7 @@ func (ls *LeafSecret) SetSequenceNumber(seq uint64) {
 	ls.sequenceNumber = seq
 }
 
-// DeleteLeaf zeroes all ratchet secrets for forward secrecy.
-//
-// This method securely erases all sensitive state from memory when a leaf
-// is removed from the group or when the tree is being destroyed.
+// DeleteLeaf zeroes all ratchet secrets for a removed or destroyed leaf (RFC 9420 §9.2).
 //
 // RFC 9420 §9.2 (Deletion Schedule):
 //
@@ -667,17 +656,7 @@ func (ls *LeafSecret) DeleteLeaf() {
 	ls.sequenceNumber = 0
 }
 
-// Encrypt encrypts a message for the given generation using the application ratchet.
-//
-// This method derives the application key and nonce for the specified sequence
-// number, then encrypts the plaintext using AES-128-GCM.
-//
-// Parameters:
-//   - plaintext: The data to encrypt
-//   - aad: Additional authenticated data (authenticated but not encrypted)
-//   - seqNum: Sequence number for key/nonce derivation
-//
-// Returns the ciphertext (including authentication tag), or an error if encryption fails.
+// Encrypt encrypts plaintext for the given sequence number using the application ratchet.
 //
 // RFC 9420 §9.1:
 //

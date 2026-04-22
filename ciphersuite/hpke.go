@@ -17,8 +17,6 @@
 //
 //	info = Serialize(VL("MLS 1.0 " + label) || VL(context))
 //
-// This ensures that keys derived for MLS cannot be reused in other protocols
-// even if the same underlying keys are used.
 //
 // # Supported Cipher Suites
 //
@@ -76,8 +74,7 @@ func EncryptWithLabel(
 
 // encryptWithLabelNative is the native implementation using crypto/hpke.
 //
-// This function implements RFC 9180 §4.1 (HPKE Base Mode) with MLS-specific
-// labeling per RFC 9420 §5.1.3.
+// RFC 9180 §4.1 (HPKE Base Mode), labeled per RFC 9420 §5.1.3.
 //
 // HPKE Encryption Flow:
 //

@@ -163,11 +163,8 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 //
 //	DeriveSecret(secret, label) = KDF-Expand-Label(secret, label, "", Hash.Length)
 //
-// This function is used in the MLS key schedule (RFC 9420 §8) to derive:
-//   - encryption_secret
-//   - decryption_secret
-//   - exporter_secret
-//   - epoch_authenticator
+// Used in the MLS key schedule (RFC 9420 §8) to derive encryption_secret,
+// exporter_secret, and epoch_authenticator among others.
 //
 // See also: RFC 9420 §8.4 for secret tree derivation
 func (s *Secret) DeriveSecret(ciphersuite CipherSuite, label string) (*Secret, error) {

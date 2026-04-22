@@ -53,16 +53,7 @@ type EpochSecrets struct {
 	InitSecret           *ciphersuite.Secret
 }
 
-// Zero securely erases all epoch secrets from memory using constant-time zeroing.
-//
-// This method is called before replacing epoch secrets to prevent sensitive
-// data from lingering in memory. It uses SecureZero() on each secret to ensure
-// the compiler doesn't optimize away the zeroing operation.
-//
-// Security best practice:
-//   - Call Zero() before assigning new epoch secrets
-//   - Prevents old secrets from being recovered from memory
-//   - Important for forward secrecy guarantees
+// Zero securely erases all epoch secrets from memory (SecureZero, forward secrecy).
 //
 // The method is idempotent and safe to call on nil EpochSecrets or nil fields.
 //
@@ -174,10 +165,7 @@ func (ks *KeySchedule) SetCommitSecret(commitSecret *ciphersuite.Secret) {
 	ks.commitSecret = commitSecret
 }
 
-// SetJoinerSecret sets joiner_secret directly.
-//
-// This is used by Welcome recipients that already possess joiner_secret
-// (e.g., from a KeyPackage's HPKE decryption).
+// SetJoinerSecret sets joiner_secret directly, used by Welcome recipients (RFC 9420 §8).
 //
 // RFC 9420 §8:
 //
@@ -290,8 +278,7 @@ func (ks *KeySchedule) SetPskSecretDirect(pskSecret *ciphersuite.Secret) error {
 	return nil
 }
 
-// SetPskSecretFromInput sets the psk_secret from a test vector input.
-// This is used for interop testing where psk_secret is provided as an input.
+// SetPskSecretFromInput sets psk_secret from a test vector input (interop use only).
 func (ks *KeySchedule) SetPskSecretFromInput(pskSecretInput *ciphersuite.Secret) error {
 	if ks.joinerSecret == nil {
 		return fmt.Errorf("joiner_secret not computed")
@@ -546,15 +533,7 @@ func ComputeMembershipTag(cs ciphersuite.CipherSuite, membershipKey, authenticat
 	return h.Sum(nil)
 }
 
-// VerifyMembershipTag verifies a membership_tag using constant-time comparison.
-//
-// This function computes the expected membership_tag and compares it with the
-// provided tag to verify the sender possesses the membership_key.
-//
-// Parameters:
-//   - cs: Cipher suite for HMAC
-//   - membershipKey: The membership_key from epoch secrets
-//   - authenticatedContent: The FramedContentAuthData that was authenticated
+// VerifyMembershipTag verifies a membership_tag using constant-time HMAC comparison.
 //   - membershipTag: The tag to verify
 //
 // Returns true if the tag is valid, false otherwise.

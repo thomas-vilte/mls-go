@@ -283,23 +283,6 @@
 //   - RFC 9420 §9.2: Deletion Schedule
 //   - RFC 9420 §8: Key Schedule (for encryption_secret derivation)
 //
-// # Testing
-//
-// The package includes comprehensive tests:
-//   - Tree creation and leaf derivation
-//   - Ratchet forward secrecy verification
-//   - Handshake vs application key separation
-//   - Encrypt/Decrypt round-trips
-//   - DeleteLeaf secure zeroing
-//   - Marshal/Unmarshal serialization
-//   - Multiple leaves produce distinct keys
-//
-// Run tests with:
-//
-//	go test ./secrettree/...
-//	go test -race ./secrettree/...
-//	go test -cover ./secrettree/...
-//
 // # References
 //
 //   - RFC 9420 §9: https://www.rfc-editor.org/rfc/rfc9420.html#section-9

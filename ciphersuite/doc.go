@@ -177,21 +177,6 @@
 //   - RFC 9180: Hybrid Public Key Encryption (HPKE)
 //   - RFC 8410: An Algorithm Identifier for the Ed25519 Signature Algorithm
 //
-// # Testing
-//
-// The package includes comprehensive tests:
-//   - RFC 5869 HKDF test vectors (3 cases)
-//   - Security tests (wrong key, tampered data, etc.)
-//   - Fuzzing tests (AEAD, HKDF, Secret)
-//   - Race detection (clean)
-//   - Coverage: 80%+
-//
-// Run tests with:
-//
-//	go test ./ciphersuite/...
-//	go test -race ./ciphersuite/...
-//	go test -cover ./ciphersuite/...
-//
 // # References
 //
 //   - RFC 9420: https://www.rfc-editor.org/rfc/rfc9420.html

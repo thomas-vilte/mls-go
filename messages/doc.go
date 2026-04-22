@@ -205,21 +205,6 @@
 //   - §12.4.3.1: Welcome Messages
 //   - RFC 8446: TLS 1.3 Presentation Language
 //
-// # Testing
-//
-// The package includes comprehensive tests:
-//   - Marshal/Unmarshal round-trip tests for all message types
-//   - Encryption/Decryption tests for GroupInfo
-//   - Confirmation tag computation and verification
-//   - KeyPackage hash determinism and uniqueness
-//   - Edge cases (wrong keys, tampered data, etc.)
-//
-// Run tests with:
-//
-//	go test ./messages/...
-//	go test -race ./messages/...
-//	go test -cover ./messages/...
-//
 // # References
 //
 //   - RFC 9420: https://www.rfc-editor.org/rfc/rfc9420.html

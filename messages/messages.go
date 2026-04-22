@@ -90,14 +90,7 @@ func (w *Welcome) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// UnmarshalWelcome parses a Welcome message from TLS presentation language format.
-//
-// This function decodes the binary data according to RFC 9420 §12.4.3.1:
-//   - cipher_suite: uint16
-//   - secrets: vector of EncryptedGroupSecrets
-//   - encrypted_group_info: opaque bytes
-//
-// Returns an error if the data is malformed or incomplete.
+// UnmarshalWelcome parses a Welcome message from TLS presentation language format (RFC 9420 §12.4.3.1).
 func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	buf := tls.NewReader(data)
 
@@ -165,11 +158,7 @@ func unmarshalEncryptedGroupSecrets(data []byte) ([]EncryptedGroupSecrets, error
 	return secrets, nil
 }
 
-// FindSecret finds the encrypted secrets for a specific KeyPackage hash.
-//
-// This method searches the Welcome message for secrets intended for a
-// particular KeyPackage, identified by its hash (RFC 9420 §10.1).
-// Returns nil if no matching secrets are found.
+// FindSecret returns the encrypted secrets for the given KeyPackage hash (RFC 9420 §10.1), or nil if not found.
 func (w *Welcome) FindSecret(keyPackageHash []byte) *EncryptedGroupSecrets {
 	for i := range w.Secrets {
 		// KeyPackageHash is a public Welcome lookup key, not secret material.
@@ -255,16 +244,7 @@ func (gi *GroupInfo) marshalTBS() []byte {
 	return buf.Bytes()
 }
 
-// UnmarshalGroupInfo parses a GroupInfo from TLS presentation language format.
-//
-// This function decodes the binary data according to RFC 9420 §12.4.3:
-//   - group_context: GroupContext structure
-//   - extensions: vector of extensions
-//   - confirmation_tag: MAC for epoch confirmation
-//   - signer: leaf index of signer
-//   - signature: signature over TBS content
-//
-// Returns an error if the data is malformed or incomplete.
+// UnmarshalGroupInfo parses a GroupInfo from TLS presentation language format (RFC 9420 §12.4.3).
 func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	buf := tls.NewReader(data)
 
@@ -307,16 +287,7 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	}, nil
 }
 
-// UnmarshalGroupContext parses a GroupContext from TLS presentation language format.
-//
-// This function decodes the binary data according to RFC 9420 §8.1:
-//   - protocol_version: uint16
-//   - cipher_suite: uint16
-//   - group_id: variable-length identifier
-//   - epoch: uint64
-//   - tree_hash: hash of ratchet tree
-//   - confirmed_transcript_hash: transcript hash
-//   - extensions: vector of extensions
+// UnmarshalGroupContext parses a GroupContext from TLS presentation language format (RFC 9420 §8.1).
 //
 // Returns an error if the data is malformed or incomplete.
 func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
@@ -371,14 +342,7 @@ func EncryptGroupInfo(groupInfo *GroupInfo, welcomeKey, welcomeNonce []byte, cs 
 	return ciphersuite.EncryptWithCipherSuite(welcomeKey, welcomeNonce, groupInfoBytes, []byte{}, cs)
 }
 
-// DecryptGroupInfo decrypts a GroupInfo from a Welcome message.
-//
-// This function reverses the encryption performed by EncryptGroupInfo,
-// using the same welcome_key and welcome_nonce derived from welcome_secret.
-// The AEAD algorithm is selected based on cs.
-//
-// Returns an error if decryption fails (e.g., wrong key, tampered ciphertext)
-// or if the decrypted data cannot be parsed as a valid GroupInfo.
+// DecryptGroupInfo decrypts a GroupInfo from a Welcome message using the welcome_key and welcome_nonce.
 func DecryptGroupInfo(encryptedGroupInfo, welcomeKey, welcomeNonce []byte, cs ciphersuite.CipherSuite) (*GroupInfo, error) {
 	if len(encryptedGroupInfo) < 16 {
 		return nil, errors.New("encrypted group info too short")
@@ -411,12 +375,7 @@ func ComputeConfirmationTag(h func() hash.Hash, confirmationKey, confirmedTransc
 	return mac.Sum(nil)
 }
 
-// VerifyConfirmationTag verifies a confirmation tag using constant-time comparison.
-//
-// This function computes the expected confirmation tag and compares it with
-// the provided tag using hmac.Equal to prevent timing attacks.
-//
-// Returns true if the tag is valid, false otherwise.
+// VerifyConfirmationTag verifies a confirmation tag using hmac.Equal (constant-time).
 func VerifyConfirmationTag(h func() hash.Hash, confirmationKey, confirmedTranscriptHash, expectedTag []byte) bool {
 	computedTag := ComputeConfirmationTag(h, confirmationKey, confirmedTranscriptHash)
 	return hmac.Equal(computedTag, expectedTag)

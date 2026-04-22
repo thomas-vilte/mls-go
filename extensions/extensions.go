@@ -57,8 +57,7 @@
 // # Implementation Notes
 //
 // **Serialization Order:** Extensions MUST be serialized in ascending order
-// by ExtensionType (RFC 9420 §13.4). This ensures deterministic GroupContext
-// hashes across all members.
+// by ExtensionType (RFC 9420 §13.4) for deterministic GroupContext hashes.
 //
 // **Duplicates:** Adding an extension of the same type replaces the existing one.
 //

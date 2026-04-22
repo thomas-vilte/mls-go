@@ -169,7 +169,6 @@ func GenerateX25519KeyPair() (publicKey, privateKey []byte, err error) {
 //  3. sk = seed as X25519 private key
 //  4. pk = sk.PublicKey()
 //
-// This is used for deterministic key derivation in HPKE.
 func DeriveKeyPairX25519(ikm []byte) (pubKey, privKey []byte, err error) {
 	hkdf := NewHKDF()
 	prk := hkdf.Extract(nil, ikm)

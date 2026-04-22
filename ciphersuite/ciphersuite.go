@@ -78,15 +78,6 @@
 //   - RFC 5869: HKDF: HMAC-based Extract-and-Expand Key Derivation Function
 //   - RFC 9180: Hybrid Public Key Encryption (HPKE)
 //
-// # Testing
-//
-// The package includes comprehensive tests:
-//   - RFC 5869 HKDF test vectors (3 cases)
-//   - Security tests (wrong key, tampered data, etc.)
-//   - Fuzzing tests (AEAD, HKDF, Secret)
-//   - Race detection (clean)
-//   - Coverage: 80.9%
-//
 // # References
 //
 //   - RFC 9420: https://www.rfc-editor.org/rfc/rfc9420.html

@@ -1,13 +1,3 @@
-// Package group implements MLS Group Management according to RFC 9420 §11-12.
-//
-// This package provides functionality for:
-//   - Group creation and joining
-//   - Proposal handling (Add, Update, Remove)
-//   - Commit creation and processing
-//   - Welcome message handling
-//   - Member management
-//
-// This implementation is generic and can be used for any MLS-based protocol.
 package group
 
 import (
@@ -1928,8 +1918,6 @@ func (g *Group) decryptPathSecret(
 // MergeCommit applies a received or locally-generated commit to the group state.
 //
 // RFC 9420 §12.4.2
-// This function verifies the commit, applies its proposals, updates the ratchet tree,
-// and derives the key schedule for the new epoch.
 func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit && g.state != StateOperational {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
@@ -3172,9 +3160,7 @@ func (g *Group) getExternalSenderSigningKey(senderIndex uint32) ([]byte, error) 
 	return nil, fmt.Errorf("ExternalSenders extension not found in GroupContext")
 }
 
-// LoadPsk loads a pre-shared key into the group's PSK cache.
-//
-// This is used for external PSKs that are referenced in PreSharedKey proposals.
+// LoadPsk loads an external PSK into the group's cache for use in PreSharedKey proposals.
 func (g *Group) LoadPsk(pskID, pskBytes []byte) {
 	g.pskMu.Lock()
 	defer g.pskMu.Unlock()

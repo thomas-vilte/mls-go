@@ -56,8 +56,7 @@
 //
 // # Serialization
 //
-// Extensions are serialized in ascending order by type ID per RFC 9420 §13.4.
-// This ensures deterministic tree hashes across all group members.
+// Extensions are serialized in ascending order by type ID (RFC 9420 §13.4).
 //
 // # Errors
 //

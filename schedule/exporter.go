@@ -71,13 +71,9 @@ func Exporter(exporterSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite, la
 
 // DeriveAuthenticationKey derives an authentication key from authentication_secret.
 //
-// This function uses HKDF-Expand to derive a fixed-length authentication key:
-//
 //	authentication_key = HKDF-Expand(authentication_secret, "authentication_key", 32)
 //
-// Parameters:
-//   - authenticationSecret: The authentication_secret from epoch secrets
-//
+
 // Returns the 32-byte authentication key, or an error if authentication_secret is nil.
 func DeriveAuthenticationKey(authenticationSecret *ciphersuite.Secret) ([]byte, error) {
 	if authenticationSecret == nil {

@@ -190,13 +190,7 @@ func InfiniteLifetime() GenerateOption {
 // Generate creates a new KeyPackage.
 //
 // This is the main entry point for creating KeyPackages.
-// It generates HPKE and signature keys, creates a LeafNode, and signs everything.
-// Generate creates a new KeyPackage and its associated private keys.
-//
-// RFC 9420 §10.1
-// This function generates the necessary HPKE keys, constructs the LeafNode with the
-// provided credential, signs the LeafNode, and finally signs the entire KeyPackage.
-// The resulting KeyPackage can be published to a directory or sent directly to a group creator.
+// Generate creates a new KeyPackage and its associated private keys (RFC 9420 §10.1).
 func Generate(
 	credWithKey *credentials.CredentialWithKey,
 	cipherSuite CipherSuite,
@@ -452,9 +446,7 @@ func (c *Capabilities) Marshal(buf *tls.Writer) {
 	buf.WriteVLBytes(credBuf.Bytes())
 }
 
-// Hash computes the hash reference of a KeyPackage.
-//
-// This is used to identify KeyPackages in Welcome messages.
+// Hash computes the KeyPackage hash reference used in Welcome messages (RFC 9420 §10.1).
 func (kp *KeyPackage) Hash() []byte {
 	data := kp.Marshal()
 	hash := sha256.Sum256(data)

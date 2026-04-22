@@ -31,15 +31,7 @@ type EpochSecretsData struct {
 	InitSecret           []byte `json:"init_secret"`
 }
 
-// MarshalData converts EpochSecrets to a serializable struct.
-//
-// This method performs a deep copy of all secret bytes to prevent accidental
-// mutation of the original EpochSecrets. The returned EpochSecretsData can be
-// safely serialized to JSON or other formats.
-//
-// Returns:
-//   - EpochSecretsData with copies of all secret bytes
-//   - nil if the receiver is nil
+// MarshalData converts EpochSecrets to a serializable struct, deep-copying all secret bytes.
 //
 // Security:
 //   - All secrets are copied using append([]byte(nil), ...) to ensure independence

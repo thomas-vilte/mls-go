@@ -120,8 +120,7 @@ func ValidateLeafNodeStructureWithContext(leafData *LeafNodeData, cs ciphersuite
 	return nil
 }
 
-// ValidateLeafNodeWithContext performs comprehensive validation of a LeafNode
-// including a context-aware signature check. Use this for leaves with
+// ValidateLeafNodeWithContext validates a LeafNode including a context-aware signature check. Use this for leaves with
 // leaf_node_source == update (2) or commit (3), which include group_id and
 // leaf_index in the signed TBS per RFC 9420 §7.2.
 // For key_package leaves (source == 1), pass (nil, 0) or use ValidateLeafNode.
@@ -153,7 +152,7 @@ func ValidateLeafNodeWithContext(leafData *LeafNodeData, cs ciphersuite.CipherSu
 	return nil
 }
 
-// ValidateLeafNode performs comprehensive validation of a LeafNode.
+// ValidateLeafNode validates a LeafNode.
 func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error {
 	if leafData == nil {
 		return errors.New("leaf node is nil")

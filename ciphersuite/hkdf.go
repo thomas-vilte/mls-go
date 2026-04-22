@@ -82,9 +82,6 @@ func (h *HKDF) Extract(salt, ikm []byte) []byte {
 //   - OKM: Output Keying Material
 //   - error: if length is too large (> 255 * HashLen per RFC 5869 §2.3)
 //
-// Security note: The info parameter provides context for key derivation.
-// It should include protocol identifiers, version numbers, etc. to ensure
-// domain separation.
 func (h *HKDF) Expand(prk, info []byte, length int) ([]byte, error) {
 	maxLen := 255 * h.hashNew().Size()
 	if length > maxLen {
