@@ -10,49 +10,49 @@ Current entry points:
 
 ## Delivery Service Example
 
-The `examples/ds/` package provides a minimal MLS Delivery Service reference
-implementation. It demonstrates how to build a group messaging system with MLS.
+The `examples/ds/` package provides a minimal Delivery Service using HTTP + SSE.
+The companion CLI at `examples/ds/client/` shows how to register key packages,
+invite members, and exchange MLS messages through the DS.
 
 ### Running
 
+Terminal 1:
+
 ```bash
-go run ./examples/ds/
+go run ./examples/ds
 ```
+
+Terminal 2 (Alice creates the first group automatically):
+
+```bash
+go run ./examples/ds/client alice
+```
+
+Terminal 3 (Bob auto-discovers the single existing group):
+
+```bash
+go run ./examples/ds/client bob
+```
+
+In Alice's prompt, invite Bob:
+
+```text
+/invite bob
+```
+
+After Bob joins, both terminals can send plain text lines as application messages.
 
 ### API Endpoints
 
-| Method | Path                         | Description                          |
-|-------|-----------------------------|--------------------------------------|
-| POST  | /groups                     | Create a new group                   |
-| POST  | /groups/{id}/keypackages   | Register a KeyPackage for invitation |
-| GET   | /groups/{id}/keypackages   | Get registered KeyPackages          |
-| POST  | /groups/{id}/messages       | Submit a Commit, Proposal, or App message |
-| GET   | /groups/{id}/events        | SSE stream for new messages           |
-
-### Example Usage
-
-```bash
-# Start DS
-go run ./examples/ds/ &
-
-# Create group
-curl -X POST http://localhost:8080/groups \
-  -H "Content-Type: application/json" \
-  -d '{"cipher_suite": 1}'
-
-# Register more KeyPackages (for inviting members)
-curl -X POST http://localhost:8080/groups/{group_id}/keypackages \
-  -H "Content-Type: application/json" \
-  -d '{"key_package": "..."}'
-
-# Submit a message
-curl -X POST http://localhost:8080/groups/{group_id}/messages \
-  -H "Content-Type: application/json" \
-  -d '{"message": "..."}'
-
-# Subscribe to events (SSE)
-curl http://localhost:8080/groups/{group_id}/events
-```
+| Method | Path                               | Description |
+|--------|------------------------------------|-------------|
+| GET    | /groups                            | List groups |
+| POST   | /groups                            | Create a group |
+| POST   | /groups/{id}/keypackages           | Upload a user's KeyPackage |
+| GET    | /groups/{id}/keypackages           | List users with uploaded KeyPackage |
+| GET    | /groups/{id}/keypackages/{user}    | Fetch a specific user's KeyPackage |
+| POST   | /groups/{id}/messages              | Publish commit/proposal/application/welcome |
+| GET    | /groups/{id}/events                | SSE stream of group events |
 
 Useful supporting sources:
 
