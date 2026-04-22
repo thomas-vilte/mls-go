@@ -246,7 +246,7 @@ func TestUnmarshalGroupState_RebuildsProposalByRef(t *testing.T) {
 	// that path so we can verify that UnmarshalGroupState rebuilds the
 	// proposalByRef lookup index from the serialized proposals.
 	fakeRef := make([]byte, 32)
-	copy(fakeRef, []byte("regression-proposalbyref-rebuild"))
+	copy(fakeRef, "regression-proposalbyref-rebuild")
 	aliceGroup.proposals.Proposals[0].Ref = fakeRef
 	aliceGroup.proposalByRef[string(fakeRef)] = aliceGroup.proposals.Proposals[0].Proposal
 	ref := fakeRef
