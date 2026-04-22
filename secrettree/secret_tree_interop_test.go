@@ -95,7 +95,7 @@ func testSecretTreeVector(t *testing.T, v secretTreeVector, cs ciphersuite.Ciphe
 		t.Run(fmt.Sprintf("leaf%d", leafIndex), func(t *testing.T) {
 			// For each leaf, we need a NEW tree because ratchet forward is destructive
 			// (once you ratchet to gen 15, you can't go back to gen 0)
-			leafTree, err := NewTree(ciphersuite.NewSecret(encryptionSecretBytes), leafCount, cs)
+			leafTree, err := NewTree(ciphersuite.NewSecretForCS(cs, encryptionSecretBytes), leafCount, cs)
 			if err != nil {
 				t.Fatalf("NewTree failed: %v", err)
 			}

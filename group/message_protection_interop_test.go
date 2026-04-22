@@ -58,8 +58,8 @@ func TestMessageProtectionVectors(t *testing.T) {
 			cs := ciphersuite.CipherSuite(v.CipherSuite)
 			gcBytes := buildMessageProtectionGroupContextBytes(t, v)
 
-			senderDataSecret := ciphersuite.NewSecret(mustDecodeHexBytes(t, v.SenderDataSecret))
-			membershipKey := ciphersuite.NewSecret(mustDecodeHexBytes(t, v.MembershipKey))
+			senderDataSecret := ciphersuite.NewSecretForCS(cs, mustDecodeHexBytes(t, v.SenderDataSecret))
+			membershipKey := ciphersuite.NewSecretForCS(cs, mustDecodeHexBytes(t, v.MembershipKey))
 			encryptionSecret := mustDecodeHexBytes(t, v.EncryptionSecret)
 			sigPub, err := parseInteropSignaturePublicKey(mustDecodeHexBytes(t, v.SignaturePub), cs)
 			if err != nil {
@@ -105,11 +105,17 @@ func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*c
 		return nil, fmt.Errorf("unexpected ed25519 public key length: %d", len(data))
 	}
 
-	// ECDSA P-256
+	// ECDSA P-256: 0x04 || 32 || 32 = 65 bytes
 	if len(data) == 65 && data[0] == 0x04 {
 		return ciphersuite.NewMLSSignaturePublicKey(data, ciphersuite.ECDSA_SECP256R1_SHA256), nil
 	}
 
+	// ECDSA P-521: 0x04 || 66 || 66 = 133 bytes
+	if len(data) == 133 && data[0] == 0x04 {
+		return ciphersuite.NewMLSSignaturePublicKey(data, ciphersuite.ECDSA_SECP521R1_SHA512), nil
+	}
+
+	// Fallback: try PKIX DER format (for any other ECDSA key)
 	pubAny, err := x509.ParsePKIXPublicKey(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse PKIX key: %w", err)
@@ -120,17 +126,16 @@ func parseInteropSignaturePublicKey(data []byte, cs ciphersuite.CipherSuite) (*c
 		return nil, fmt.Errorf("unsupported signature public key type")
 	}
 
-	// Use ECDH to get the raw public key bytes (avoids deprecated elliptic.Marshal).
 	ecdhKey, err := pub.ECDH()
 	if err != nil {
 		return nil, fmt.Errorf("converting to ECDH key: %w", err)
 	}
 	keyBytes := ecdhKey.Bytes()
-	if len(keyBytes) != 65 {
-		return nil, fmt.Errorf("unexpected encoded public key length: %d", len(keyBytes))
+	scheme := ciphersuite.ECDSA_SECP256R1_SHA256
+	if len(keyBytes) == 133 {
+		scheme = ciphersuite.ECDSA_SECP521R1_SHA512
 	}
-
-	return ciphersuite.NewMLSSignaturePublicKey(keyBytes, ciphersuite.ECDSA_SECP256R1_SHA256), nil
+	return ciphersuite.NewMLSSignaturePublicKey(keyBytes, scheme), nil
 }
 
 func peekSenderData(pm *framing.PrivateMessage, senderDataSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite) (*framing.MLSSenderData, error) {
@@ -208,7 +213,7 @@ func testDecryptPrivateMessage(
 	var ac *framing.AuthenticatedContent
 	var decryptErr error
 	for leafCount := senderLeafIndex + 1; leafCount <= 512; leafCount++ {
-		secretTree, err := secrettree.NewTree(ciphersuite.NewSecret(encryptionSecret), leafCount, cs)
+		secretTree, err := secrettree.NewTree(ciphersuite.NewSecretForCS(cs, encryptionSecret), leafCount, cs)
 		if err != nil {
 			decryptErr = err
 			continue
@@ -286,7 +291,7 @@ func decryptPrivateBodyBySearch(
 	}
 
 	for _, leafCount := range leafCounts {
-		secretTree, err := secrettree.NewTree(ciphersuite.NewSecret(encryptionSecret), leafCount, cs)
+		secretTree, err := secrettree.NewTree(ciphersuite.NewSecretForCS(cs, encryptionSecret), leafCount, cs)
 		if err != nil {
 			continue
 		}

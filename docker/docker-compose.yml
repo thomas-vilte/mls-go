@@ -26,7 +26,7 @@ services:
     networks: [mls-interop]
     expose: ["50051"]
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/50051"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -43,7 +43,7 @@ services:
     networks: [mls-interop]
     expose: ["50051"]
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/50051"]
       interval: 10s
       timeout: 5s
       retries: 30

@@ -118,31 +118,40 @@ mls-go does not by itself provide:
 
 ## Constant-time comparison audit
 
-A targeted audit was performed for `bytes.Equal` uses in production code.
+A full audit of `bytes.Equal` uses in production code (excluding `_test.go` and `interop/testrunner`) was performed. Every site compares public data — group identifiers, hashes, public keys, or credential bytes — none compare secret key material, MAC tags, or other auth-decision values that require constant time.
 
-Current classification:
+Classification by package:
 
+- `client.go`
+  - Member identity lookup by credential bytes: public identifier
+- `group/group.go`
+  - GroupID equality on received commit / staged commit content: public identifier
+  - Signature public key matching in tree, proposals, and own-leaf detection: public key lookup
+  - HPKE public key equality for UpdatePath leaf and per-node consistency checks: public key consistency
+  - Proposal reference equality in the proposal store: public hash lookup
 - `group/state.go`
-  - GroupID equality during restored-state validation: public identifier, not secret
-  - TreeHash equality during restored-state validation: public integrity value, not secret
+  - GroupID consistency check between `groupID` and `groupContext.GroupID`: public identifier
+  - TreeHash equality during restored-state validation: public integrity value
 - `group/welcome.go`
-  - Matching `key_package_ref` / encrypted group secrets entry: public protocol lookup
-  - Ratchet tree hash equality: public integrity value from GroupInfo
-  - Matching leaf encryption public keys in the ratchet tree: public key lookup
+  - Matching `key_package_ref` against own KeyPackage hash: public protocol lookup
+  - Ratchet tree hash equality against `GroupInfo.GroupContext.TreeHash`: public integrity value
+  - Matching own leaf encryption public key in the received tree: public key lookup
 - `messages/messages.go`
   - Matching `KeyPackageHash` in Welcome secrets: public protocol lookup
-- `group/group.go`
-  - GroupID equality on received commit path: public identifier
-  - Signature public key matching in tree/proposals: public key lookup
-  - HPKE public key equality checks for UpdatePath validation: public key consistency checks
-  - Proposal reference equality in the proposal store: public hash/reference lookup
-
-No currently-audited production use of `bytes.Equal` was identified as a comparison of secret key material, MAC tags, confirmation tags, or membership tags.
+- `treesync/tree.go`
+  - Encryption public key lookups for leaf indexing: public key lookup
+  - ParentHash equality during `VerifyParentHashes`: public integrity value
+- `keypackages/key_packages.go`
+  - InitKey vs LeafNode.EncryptionKey reuse check: public key consistency (RFC 9420 §10)
+- `extensions/external_senders.go`
+  - External sender credential bytes equality: public credential
+  - External sender ECDH public key equality: public key lookup
+  - Extension marshaled bytes equality: public extension wire format
 
 Secret/MAC comparisons continue to use constant-time helpers:
 
-- `ciphersuite.EqualCT()`
-- `subtle.ConstantTimeCompare`
+- `hmac.Equal` for `confirmation_tag` (`messages/messages.go`)
+- `subtle.ConstantTimeCompare` for `membership_tag` (`schedule/schedule.go`) and the generic `ciphersuite.ConstantTimeCompare` helper
 
 ## Cryptographic foundation
 

@@ -113,10 +113,13 @@ type LeafSecret struct {
 	// out-of-order decryption. Entries are evicted when the cache exceeds
 	// maxCachedGenerations to bound memory usage.
 	secretCache map[uint32]*cachedGenSecret
-	// usedGenerations tracks which generations have already been decrypted.
-	// RFC 9420 §9.2: "A receiver MUST NOT accept a message with a generation
-	// that it has already processed."
-	usedGenerations map[uint32]struct{}
+	// usedApplicationGenerations / usedHandshakeGenerations track which generations
+	// have already been decrypted per ratchet type. RFC 9420 §9.2 requires replay
+	// protection, and the two ratchets are independent (each starts at generation 0),
+	// so they must be tracked separately to avoid false replay errors when e.g. a
+	// handshake message and an application message both use generation 0.
+	usedApplicationGenerations map[uint32]struct{}
+	usedHandshakeGenerations   map[uint32]struct{}
 }
 
 // NewTree creates a new secret tree from an encryption secret and cipher suite.
@@ -595,18 +598,30 @@ func (ls *LeafSecret) NextSequenceNumber() uint64 {
 	return seq
 }
 
-// MarkGenerationUsed records that generation gen has been consumed for decryption.
-// Returns an error if the generation was already used (replay detected).
+// MarkGenerationUsed records that generation gen has been consumed for decryption
+// on the given ratchet (handshake=true or application=false).
+// Returns an error if the generation was already used on that ratchet (replay detected).
 // RFC 9420 §9.2: receivers MUST NOT accept a message with a generation that was
-// already processed.
-func (ls *LeafSecret) MarkGenerationUsed(gen uint32) error {
-	if ls.usedGenerations == nil {
-		ls.usedGenerations = make(map[uint32]struct{})
+// already processed. The two ratchets are independent, so their replay windows
+// are tracked separately.
+func (ls *LeafSecret) MarkGenerationUsed(gen uint32, handshake bool) error {
+	if handshake {
+		if ls.usedHandshakeGenerations == nil {
+			ls.usedHandshakeGenerations = make(map[uint32]struct{})
+		}
+		if _, already := ls.usedHandshakeGenerations[gen]; already {
+			return fmt.Errorf("replay detected: generation %d already processed for leaf %d (handshake)", gen, ls.leafIndex)
+		}
+		ls.usedHandshakeGenerations[gen] = struct{}{}
+	} else {
+		if ls.usedApplicationGenerations == nil {
+			ls.usedApplicationGenerations = make(map[uint32]struct{})
+		}
+		if _, already := ls.usedApplicationGenerations[gen]; already {
+			return fmt.Errorf("replay detected: generation %d already processed for leaf %d", gen, ls.leafIndex)
+		}
+		ls.usedApplicationGenerations[gen] = struct{}{}
 	}
-	if _, already := ls.usedGenerations[gen]; already {
-		return fmt.Errorf("replay detected: generation %d already processed for leaf %d", gen, ls.leafIndex)
-	}
-	ls.usedGenerations[gen] = struct{}{}
 	return nil
 }
 

@@ -142,14 +142,14 @@ func ComputePskInput(psks []Psk, cs ciphersuite.CipherSuite) ([]byte, error) {
 	if len(psks) == 0 {
 		return nil, fmt.Errorf("no PSKs provided")
 	}
-	pskSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	pskSecret := ciphersuite.ZeroSecretCS(cs)
 	count := uint16(len(psks))
 	for i, psk := range psks {
 		if err := psk.Validate(cs); err != nil {
 			return nil, fmt.Errorf("PSK at index %d: %w", i, err)
 		}
-		zeroSalt := ciphersuite.ZeroSecret(cs.HashLength())
-		extracted, err := zeroSalt.HKDFExtract(ciphersuite.NewSecret(psk.Psk))
+		zeroSalt := ciphersuite.ZeroSecretCS(cs)
+		extracted, err := zeroSalt.HKDFExtract(ciphersuite.NewSecretForCS(cs, psk.Psk))
 		if err != nil {
 			return nil, fmt.Errorf("extracting PSK %d: %w", i, err)
 		}

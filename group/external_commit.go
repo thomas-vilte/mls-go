@@ -108,7 +108,8 @@ func ExternalCommit(
 		for _, nodeIdx := range treeDiff.DirectPath(priorLeaf) {
 			treeDiff.BlankNode(nodeIdx)
 		}
-		treeDiff.TruncateTrailingBlanks()
+		// NOTE: Do NOT truncate here. Truncation is deferred until just
+		// before ExpandToPowerOf2 (matching OpenMLS behavior).
 	}
 
 	leafSecret, err := ciphersuite.NewSecretRandomCS(cs)
@@ -155,6 +156,9 @@ func ExternalCommit(
 	ownLeafData.Signature = sig.AsSlice()
 
 	ownLeafIdx, _ := treeDiff.AddLeaf(*ownLeafData)
+	// RFC §12.1.3 step 4: truncate trailing blank leaves ONCE after all
+	// proposals are applied (not per-Remove). Matches OpenMLS behavior.
+	treeDiff.TruncateTrailingBlanks()
 	treeDiff = treeDiff.ExpandToPowerOf2()
 	ownLeafIndex := LeafNodeIndex(ownLeafIdx)
 	excluded := map[treesync.LeafIndex]bool{ownLeafIdx: true}

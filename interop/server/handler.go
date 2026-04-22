@@ -147,9 +147,10 @@ func (s *Server) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameR
 func (s *Server) SupportedCiphersuites(ctx context.Context, req *proto.SupportedCiphersuitesRequest) (*proto.SupportedCiphersuitesResponse, error) {
 	return &proto.SupportedCiphersuitesResponse{
 		Ciphersuites: []uint32{
-			uint32(ciphersuite.MLS128DHKEMX25519),         // CS1
-			uint32(ciphersuite.MLS128DHKEMP256),           // CS2
-			uint32(ciphersuite.MLS128DHKEMX25519ChaCha20), // CS3
+			uint32(ciphersuite.MLS128DHKEMX25519),          // CS1
+			uint32(ciphersuite.MLS128DHKEMP256),            // CS2
+			uint32(ciphersuite.MLS128DHKEMX25519ChaCha20),  // CS3
+			uint32(ciphersuite.MLS256DHKEMP521AES256GCM),   // CS5
 		},
 	}, nil
 }

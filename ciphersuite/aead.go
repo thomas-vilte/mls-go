@@ -9,63 +9,82 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// AESEncrypt encrypts plaintext using AES-128-GCM (RFC 9420 §5.1).
-//
-// key must be 16 bytes (AES-128). nonce must be 12 bytes (GCM standard).
-// Returns [ErrInvalidKeyLength] or [ErrInvalidNonceLength] for wrong sizes.
-func AESEncrypt(key, nonce, plaintext, aad []byte) ([]byte, error) {
-	if len(key) != 16 {
-		return nil, fmt.Errorf("%w: AES-128 requires 16 bytes, got %d", ErrInvalidKeyLength, len(key))
-	}
+// aesGCMEncrypt is the shared AES-GCM encrypt implementation for any valid key size.
+func aesGCMEncrypt(key, nonce, plaintext, aad []byte) ([]byte, error) {
 	if len(nonce) != 12 {
 		return nil, fmt.Errorf("%w: AES-GCM requires 12 bytes, got %d", ErrInvalidNonceLength, len(nonce))
 	}
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("creating cipher: %w", err)
 	}
-
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, fmt.Errorf("creating GCM: %w", err)
 	}
+	return gcm.Seal(nil, nonce, plaintext, aad), nil
+}
 
-	// Seal appends the ciphertext to the destination
-	ciphertext := gcm.Seal(nil, nonce, plaintext, aad)
-	return ciphertext, nil
+// aesGCMDecrypt is the shared AES-GCM decrypt implementation for any valid key size.
+func aesGCMDecrypt(key, nonce, ciphertext, aad []byte) ([]byte, error) {
+	if len(nonce) != 12 {
+		return nil, fmt.Errorf("%w: AES-GCM requires 12 bytes, got %d", ErrInvalidNonceLength, len(nonce))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("creating GCM: %w", err)
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrAeadDecryption, err)
+	}
+	return plaintext, nil
+}
+
+// AESEncrypt encrypts plaintext using AES-128-GCM (RFC 9420 §5.1).
+//
+// key must be 16 bytes (AES-128). nonce must be 12 bytes.
+func AESEncrypt(key, nonce, plaintext, aad []byte) ([]byte, error) {
+	if len(key) != 16 {
+		return nil, fmt.Errorf("%w: AES-128 requires 16 bytes, got %d", ErrInvalidKeyLength, len(key))
+	}
+	return aesGCMEncrypt(key, nonce, plaintext, aad)
 }
 
 // AESDecrypt decrypts ciphertext using AES-128-GCM (RFC 9420 §5.1).
 //
-// key must be 16 bytes (AES-128). nonce must be 12 bytes (GCM standard).
-// Returns [ErrInvalidKeyLength] or [ErrInvalidNonceLength] for wrong sizes.
+// key must be 16 bytes (AES-128). nonce must be 12 bytes.
 // Returns [ErrAeadDecryption] if the ciphertext has been tampered with.
 func AESDecrypt(key, nonce, ciphertext, aad []byte) ([]byte, error) {
 	if len(key) != 16 {
 		return nil, fmt.Errorf("%w: AES-128 requires 16 bytes, got %d", ErrInvalidKeyLength, len(key))
 	}
-	if len(nonce) != 12 {
-		return nil, fmt.Errorf("%w: AES-GCM requires 12 bytes, got %d", ErrInvalidNonceLength, len(nonce))
-	}
+	return aesGCMDecrypt(key, nonce, ciphertext, aad)
+}
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("creating cipher: %w", err)
+// AES256Encrypt encrypts plaintext using AES-256-GCM (RFC 9420 §5.1).
+//
+// key must be 32 bytes (AES-256). nonce must be 12 bytes.
+func AES256Encrypt(key, nonce, plaintext, aad []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("%w: AES-256 requires 32 bytes, got %d", ErrInvalidKeyLength, len(key))
 	}
+	return aesGCMEncrypt(key, nonce, plaintext, aad)
+}
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("creating GCM: %w", err)
+// AES256Decrypt decrypts ciphertext using AES-256-GCM (RFC 9420 §5.1).
+//
+// key must be 32 bytes (AES-256). nonce must be 12 bytes.
+// Returns [ErrAeadDecryption] if the ciphertext has been tampered with.
+func AES256Decrypt(key, nonce, ciphertext, aad []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("%w: AES-256 requires 32 bytes, got %d", ErrInvalidKeyLength, len(key))
 	}
-
-	// Open decrypts the ciphertext in place
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrAeadDecryption, err)
-	}
-
-	return plaintext, nil
+	return aesGCMDecrypt(key, nonce, ciphertext, aad)
 }
 
 // EncryptWithCipherSuite encrypts plaintext using the AEAD algorithm of the given cipher suite.
@@ -86,6 +105,8 @@ func EncryptWithCipherSuite(key, nonce, plaintext, aad []byte, cs CipherSuite) (
 	switch cs.AeadAlgorithm() {
 	case AES128GCM:
 		return AESEncrypt(key, nonce, plaintext, aad)
+	case AES256GCM:
+		return AES256Encrypt(key, nonce, plaintext, aad)
 	case ChaCha20Poly1305:
 		aead, err := chacha20poly1305.New(key)
 		if err != nil {
@@ -116,6 +137,8 @@ func DecryptWithCipherSuite(key, nonce, ciphertext, aad []byte, cs CipherSuite) 
 	switch cs.AeadAlgorithm() {
 	case AES128GCM:
 		return AESDecrypt(key, nonce, ciphertext, aad)
+	case AES256GCM:
+		return AES256Decrypt(key, nonce, ciphertext, aad)
 	case ChaCha20Poly1305:
 		aead, err := chacha20poly1305.New(key)
 		if err != nil {

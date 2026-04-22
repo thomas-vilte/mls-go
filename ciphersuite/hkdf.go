@@ -28,6 +28,15 @@ func NewHKDF() *HKDF {
 	return &HKDF{hashNew: sha256.New}
 }
 
+// NewHKDFForCS creates an HKDF instance parameterized by the cipher suite's hash.
+func NewHKDFForCS(cs CipherSuite) *HKDF {
+	h := cs.HashFunction()
+	if h == nil {
+		h = sha256.New
+	}
+	return &HKDF{hashNew: h}
+}
+
 // Extract extracts a pseudorandom key (PRK) from input keying material (IKM).
 //
 // RFC 5869 §2.2:
@@ -97,35 +106,32 @@ func (h *HKDF) ExtractExpand(salt, ikm, info []byte, length int) ([]byte, error)
 	return h.Expand(prk, info, length)
 }
 
-// hkdfExtract is a helper function used by Secret (always SHA-256 for supported CS).
-func hkdfExtract(salt, ikm []byte) []byte {
+// hkdfExtractWithHash performs HKDF-Extract parameterized by a hash constructor.
+func hkdfExtractWithHash(h func() hash.Hash, salt, ikm []byte) []byte {
 	if salt == nil {
-		salt = make([]byte, sha256.Size)
+		salt = make([]byte, h().Size())
 	}
-
-	hmacHash := hmac.New(sha256.New, salt)
+	hmacHash := hmac.New(h, salt)
 	hmacHash.Write(ikm)
 	return hmacHash.Sum(nil)
 }
 
-// hkdfExpand is a helper function used by Secret (always SHA-256 for supported CS).
-func hkdfExpand(prk, info []byte, length int) ([]byte, error) {
-	if length > 255*sha256.Size {
-		return nil, fmt.Errorf("hkdf: output length too large: %d", length)
+// hkdfExpandWithHash performs HKDF-Expand parameterized by a hash constructor.
+func hkdfExpandWithHash(h func() hash.Hash, prk, info []byte, length int) ([]byte, error) {
+	maxLen := 255 * h().Size()
+	if length > maxLen {
+		return nil, fmt.Errorf("hkdf: output length too large: %d (max %d)", length, maxLen)
 	}
-
-	okm, err := hkdf.Expand(sha256.New, prk, string(info), length)
+	okm, err := hkdf.Expand(h, prk, string(info), length)
 	if err != nil {
 		return nil, fmt.Errorf("hkdf expand: %w", err)
 	}
-
 	return okm, nil
 }
 
-// hmacSha256 computes HMAC-SHA256 using the standard library.
-// This implementation replaces the manual version prone to errors.
-func hmacSha256(key, message []byte) []byte {
-	hmacHash := hmac.New(sha256.New, key)
+// hmacWithHash computes HMAC parameterized by a hash constructor.
+func hmacWithHash(h func() hash.Hash, key, message []byte) []byte {
+	hmacHash := hmac.New(h, key)
 	hmacHash.Write(message)
 	return hmacHash.Sum(nil)
 }

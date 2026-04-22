@@ -22,10 +22,19 @@ func TestCipherSuite_IsSupported(t *testing.T) {
 		t.Error("MLS128DHKEMX25519ChaCha20 (cs=3) should be supported")
 	}
 
-	// Unsupported cipher suites (cs=4,5,6,7 are placeholders)
-	var unsupported CipherSuite = 0x0004
+	// CS4 (X448) is not supported — X448 is not in Go stdlib
+	if MLS256DHKEMX448AES256GCM.IsSupported() {
+		t.Error("MLS256DHKEMX448AES256GCM (cs=4) should NOT be supported: X448 not in stdlib")
+	}
+	// CS5 (P521) is now supported
+	if !MLS256DHKEMP521AES256GCM.IsSupported() {
+		t.Error("MLS256DHKEMP521AES256GCM (cs=5) should be supported")
+	}
+
+	// Unsupported cipher suites (cs=6,7,8,9 are placeholders)
+	var unsupported CipherSuite = 0x0006
 	if unsupported.IsSupported() {
-		t.Error("Unknown cipher suite 0x0004 should not be supported")
+		t.Error("Unknown cipher suite 0x0006 should not be supported")
 	}
 
 	unsupported = 0xFFFF

@@ -6,10 +6,13 @@ import (
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// TestTreeTruncation_DirectApply verifies that applyRemoveProposal trunca el
-// árbol cuando el último leaf queda en blanco.
+// TestTreeTruncation_DirectApply verifies that applyRemoveProposal blanks
+// the leaf and its direct path but does NOT truncate the tree.
+// Truncation is deferred until after all proposals are applied in the commit
+// flow (matching OpenMLS behavior).
 func TestTreeTruncation_DirectApply(t *testing.T) {
 	aliceGroup, _, _, _ := setupTwoMemberGroup(t)
 
@@ -23,14 +26,28 @@ func TestTreeTruncation_DirectApply(t *testing.T) {
 		t.Fatalf("applyRemoveProposal: %v", err)
 	}
 
+	// applyRemoveProposal no longer truncates; NumLeaves stays 2.
 	after := aliceGroup.ratchetTree.NumLeaves
-	if after != 1 {
-		t.Errorf("NumLeaves after removing last member = %d, want 1", after)
+	if after != 2 {
+		t.Errorf("NumLeaves after removing last member = %d, want 2 (truncation deferred)", after)
+	}
+
+	// Verify the removed leaf is blanked.
+	leaf := aliceGroup.ratchetTree.GetLeaf(1)
+	if leaf == nil || leaf.State != treesync.NodeStateBlank {
+		t.Errorf("removed leaf should be blank")
+	}
+
+	// After explicit truncation, NumLeaves should be 1.
+	aliceGroup.ratchetTree.TruncateTrailingBlanks()
+	if aliceGroup.ratchetTree.NumLeaves != 1 {
+		t.Errorf("NumLeaves after explicit truncation = %d, want 1", aliceGroup.ratchetTree.NumLeaves)
 	}
 }
 
-// TestTreeTruncation_NonTrailingLeaf verifies that remover un leaf que NO es
-// el último no trunca el árbol más allá del trailing blank.
+// TestTreeTruncation_NonTrailingLeaf verifies that removing a non-trailing leaf
+// blanks it without truncation (deferred), and explicit truncation afterwards
+// removes trailing blanks correctly.
 func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
 	// Create grupo de 3 miembros: Alice(0), Bob(1), Charlie(2).
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
@@ -67,9 +84,16 @@ func TestTreeTruncation_NonTrailingLeaf(t *testing.T) {
 		t.Fatalf("applyRemoveProposal: %v", err)
 	}
 
-	// Trailing blank at leaf 3 is truncated; Charlie at leaf 2 is still present → 3 leaves remain.
+	// applyRemoveProposal no longer truncates; NumLeaves stays 4.
+	if aliceGroup.ratchetTree.NumLeaves != 4 {
+		t.Errorf("NumLeaves after removing non-trailing leaf = %d, want 4 (truncation deferred)", aliceGroup.ratchetTree.NumLeaves)
+	}
+
+	// After explicit truncation: trailing blank at leaf 3 is removed;
+	// Charlie at leaf 2 is still present → 3 leaves remain.
+	aliceGroup.ratchetTree.TruncateTrailingBlanks()
 	if aliceGroup.ratchetTree.NumLeaves != 3 {
-		t.Errorf("NumLeaves after removing non-trailing leaf = %d, want 3", aliceGroup.ratchetTree.NumLeaves)
+		t.Errorf("NumLeaves after explicit truncation = %d, want 3", aliceGroup.ratchetTree.NumLeaves)
 	}
 }
 

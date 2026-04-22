@@ -229,7 +229,7 @@ func EncapToBytes(recipientPubKeyBytes []byte, cs CipherSuite) (kemOutput, expor
 		return nil, nil, fmt.Errorf("creating HPKE public key: %w", err)
 	}
 	// RFC 9420 §12.4.3.2: info = "" (empty), export context = "MLS 1.0 external init secret"
-	enc, sender, err := hpke.NewSender(hpkePub, hpke.HKDFSHA256(), aead, nil)
+	enc, sender, err := hpke.NewSender(hpkePub, hpkeKDF(cs), aead, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("HPKE NewSender: %w", err)
 	}
@@ -261,7 +261,7 @@ func DecapToBytes(enc, privKeyBytes []byte, cs CipherSuite) ([]byte, error) {
 		return nil, fmt.Errorf("creating HPKE private key: %w", err)
 	}
 	// RFC 9420 §12.4.3.2: info = "" (empty), export context = "MLS 1.0 external init secret"
-	recipient, err := hpke.NewRecipient(enc, hpkePriv, hpke.HKDFSHA256(), aead, nil)
+	recipient, err := hpke.NewRecipient(enc, hpkePriv, hpkeKDF(cs), aead, nil)
 	if err != nil {
 		return nil, fmt.Errorf("HPKE NewRecipient: %w", err)
 	}

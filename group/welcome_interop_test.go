@@ -57,6 +57,8 @@ func TestWelcomeVectors(t *testing.T) {
 				initPrivKey, err = ecdh.X25519().NewPrivateKey(initPrivBytes)
 			case ciphersuite.MLS128DHKEMP256:
 				initPrivKey, err = ecdh.P256().NewPrivateKey(initPrivBytes)
+			case ciphersuite.MLS256DHKEMP521AES256GCM:
+				initPrivKey, err = ecdh.P521().NewPrivateKey(initPrivBytes)
 			}
 			if err != nil {
 				t.Fatalf("parse init_priv: %v", err)

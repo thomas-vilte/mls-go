@@ -2,21 +2,45 @@ package ciphersuite
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"runtime"
 )
 
-// Secret represents a secret value with secure handling
+// Secret represents a secret value with secure handling.
+// The hashNew field carries the cipher suite's hash constructor so that
+// HKDF and HMAC operations use the correct hash for CS5 (SHA-512).
 type Secret struct {
-	Value []byte
+	Value   []byte
+	hashNew func() hash.Hash
 }
 
-// NewSecret creates a Secret from bytes
+// hashFunc returns the hash constructor, defaulting to SHA-256 for backward compat.
+func (s *Secret) hashFunc() func() hash.Hash {
+	if s != nil && s.hashNew != nil {
+		return s.hashNew
+	}
+	return sha256.New
+}
+
+// NewSecret creates a Secret from bytes (uses SHA-256 by default).
 func NewSecret(value []byte) *Secret {
 	copyBytes := make([]byte, len(value))
 	copy(copyBytes, value)
 	return &Secret{Value: copyBytes}
+}
+
+// NewSecretForCS creates a Secret carrying the cipher suite's hash constructor.
+func NewSecretForCS(cs CipherSuite, value []byte) *Secret {
+	copyBytes := make([]byte, len(value))
+	copy(copyBytes, value)
+	h := cs.HashFunction()
+	if h == nil {
+		h = sha256.New
+	}
+	return &Secret{Value: copyBytes, hashNew: h}
 }
 
 // NewSecretRandom generates a random Secret of the specified length.
@@ -28,9 +52,17 @@ func NewSecretRandom(length int) (*Secret, error) {
 	return &Secret{Value: value}, nil
 }
 
-// NewSecretRandomCS generates a random Secret with ciphersuite hash length.
-func NewSecretRandomCS(ciphersuite CipherSuite) (*Secret, error) {
-	return NewSecretRandom(ciphersuite.HashLength())
+// NewSecretRandomCS generates a random Secret with ciphersuite hash length and hash function.
+func NewSecretRandomCS(cs CipherSuite) (*Secret, error) {
+	value := make([]byte, cs.HashLength())
+	if _, err := rand.Read(value); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInsufficientRandom, err)
+	}
+	h := cs.HashFunction()
+	if h == nil {
+		h = sha256.New
+	}
+	return &Secret{Value: value, hashNew: h}, nil
 }
 
 // ZeroSecret creates an all-zero Secret of given length.
@@ -38,9 +70,9 @@ func ZeroSecret(length int) *Secret {
 	return &Secret{Value: make([]byte, length)}
 }
 
-// ZeroSecretCS creates an all-zero Secret with ciphersuite hash length.
+// ZeroSecretCS creates an all-zero Secret with ciphersuite hash length and hash function.
 func ZeroSecretCS(ciphersuite CipherSuite) *Secret {
-	return ZeroSecret(ciphersuite.HashLength())
+	return NewSecretForCS(ciphersuite, make([]byte, ciphersuite.HashLength()))
 }
 
 // FromSlice creates a Secret from a byte slice.
@@ -64,12 +96,14 @@ func (s *Secret) Len() int {
 	return len(s.Value)
 }
 
-// Clone creates a copy of the Secret.
+// Clone creates a copy of the Secret, preserving the hash function.
 func (s *Secret) Clone() *Secret {
 	if s == nil || s.Value == nil {
 		return &Secret{Value: nil}
 	}
-	return NewSecret(s.Value)
+	cp := NewSecret(s.Value)
+	cp.hashNew = s.hashNew
+	return cp
 }
 
 // HKDFExtract performs HKDF-Extract with this Secret as salt.
@@ -85,7 +119,8 @@ func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 		ikm = ZeroSecret(len(s.Value))
 	}
 
-	prk := hkdfExtract(s.Value, ikm.Value)
+	hf := s.hashFunc()
+	prk := hkdfExtractWithHash(hf, s.Value, ikm.Value)
 
 	// CRITICAL: Keep alive until hkdfExtract completes
 	runtime.KeepAlive(s)
@@ -95,7 +130,7 @@ func (s *Secret) HKDFExtract(ikm *Secret) (*Secret, error) {
 	s.SecureZero()
 	ikm.SecureZero()
 
-	return NewSecret(prk), nil
+	return &Secret{Value: prk, hashNew: hf}, nil
 }
 
 // HKDFExpand performs HKDF-Expand with this Secret as PRK.
@@ -107,7 +142,8 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 		return nil, ErrInvalidLength
 	}
 
-	okm, err := hkdfExpand(s.Value, info, length)
+	hf := s.hashFunc()
+	okm, err := hkdfExpandWithHash(hf, s.Value, info, length)
 	if err != nil {
 		return nil, fmt.Errorf("hkdf expand failed: %w", err)
 	}
@@ -118,7 +154,7 @@ func (s *Secret) HKDFExpand(info []byte, length int) (*Secret, error) {
 	// CRITICAL: Keep alive until hkdfExpand completes
 	runtime.KeepAlive(s)
 
-	return NewSecret(okm), nil
+	return &Secret{Value: okm, hashNew: hf}, nil
 }
 
 // DeriveSecret derives a new Secret with the given label as defined in RFC 9420 §8.
@@ -170,9 +206,9 @@ func (s *Secret) Hmac(message []byte) ([]byte, error) {
 		return nil, fmt.Errorf("key is nil")
 	}
 
-	result := hmacSha256(s.Value, message)
+	result := hmacWithHash(s.hashFunc(), s.Value, message)
 
-	// CRITICAL: Keep alive until hmacSha256 completes
+	// CRITICAL: Keep alive until HMAC completes
 	runtime.KeepAlive(s)
 
 	return result, nil

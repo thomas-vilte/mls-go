@@ -146,9 +146,11 @@ type KeySchedule struct {
 //	init_secret_[0] = 0^Nh
 //	init_secret_[n] = DeriveSecret(epoch_secret_[n-1], "init") for n > 0
 func NewKeySchedule(cs ciphersuite.CipherSuite, initSecret *ciphersuite.Secret) *KeySchedule {
+	// Wrap initSecret with the CS hash so HKDF propagates SHA-512 for CS5.
+	is := ciphersuite.NewSecretForCS(cs, initSecret.Value)
 	return &KeySchedule{
 		ciphersuite: cs,
-		initSecret:  initSecret,
+		initSecret:  is,
 	}
 }
 
@@ -211,7 +213,7 @@ func (ks *KeySchedule) ComputeJoinerSecret(groupContext []byte) (*ciphersuite.Se
 
 	commitSecret := ks.commitSecret
 	if commitSecret == nil {
-		commitSecret = ciphersuite.ZeroSecret(ks.ciphersuite.HashLength())
+		commitSecret = ciphersuite.ZeroSecretCS(ks.ciphersuite)
 	}
 
 	intermediate, err := ks.initSecret.HKDFExtract(commitSecret)
@@ -256,13 +258,13 @@ func (ks *KeySchedule) ComputePskSecret(psks []Psk) (*ciphersuite.Secret, error)
 	}
 	var pskSecret *ciphersuite.Secret
 	if len(psks) == 0 {
-		pskSecret = ciphersuite.ZeroSecret(ks.ciphersuite.HashLength())
+		pskSecret = ciphersuite.ZeroSecretCS(ks.ciphersuite)
 	} else {
 		pskInput, err := ComputePskInput(psks, ks.ciphersuite)
 		if err != nil {
 			return nil, fmt.Errorf("computing psk input: %w", err)
 		}
-		pskSecret = ciphersuite.NewSecret(pskInput)
+		pskSecret = ciphersuite.NewSecretForCS(ks.ciphersuite, pskInput)
 	}
 	ks.rawPskSecret = pskSecret.Clone() // clone BEFORE HKDFExtract zeroes pskSecret
 	memberSecret, err := ks.joinerSecret.HKDFExtract(pskSecret)

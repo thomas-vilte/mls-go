@@ -52,13 +52,19 @@ func TestPassiveClientWelcomeVectors(t *testing.T) {
 				t.Fatalf("UnmarshalKeyPackage: %v", err)
 			}
 
-			initPrivBytes := mustDecodeHexBytes(t, v.InitPriv)
-			var initPrivKey *ecdh.PrivateKey
-			if cs == ciphersuite.MLS128DHKEMX25519 || cs == ciphersuite.MLS128DHKEMX25519ChaCha20 {
-				initPrivKey, err = ecdh.X25519().NewPrivateKey(initPrivBytes)
-			} else {
-				initPrivKey, err = ecdh.P256().NewPrivateKey(initPrivBytes)
+			initPrivRaw := mustDecodeHexBytes(t, v.InitPriv)
+			var curve ecdh.Curve
+			switch cs {
+			case ciphersuite.MLS128DHKEMX25519, ciphersuite.MLS128DHKEMX25519ChaCha20:
+				curve = ecdh.X25519()
+			case ciphersuite.MLS256DHKEMP521AES256GCM:
+				curve = ecdh.P521()
+			default:
+				curve = ecdh.P256()
 			}
+			initPrivBytes := padECDHPrivKey(curve, initPrivRaw)
+			var initPrivKey *ecdh.PrivateKey
+			initPrivKey, err = curve.NewPrivateKey(initPrivBytes)
 			if err != nil {
 				t.Fatalf("parse init_priv: %v", err)
 			}

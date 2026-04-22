@@ -536,6 +536,7 @@ func GenerateInteropTestVectors() (*TestVectorSet, error) {
 		ciphersuite.MLS128DHKEMX25519,         // CS1
 		ciphersuite.MLS128DHKEMP256,           // CS2
 		ciphersuite.MLS128DHKEMX25519ChaCha20, // CS3
+		ciphersuite.MLS256DHKEMP521AES256GCM,  // CS5
 	}
 
 	for _, cs := range suites {

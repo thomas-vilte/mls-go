@@ -98,6 +98,7 @@ package ciphersuite
 import (
 	"crypto/ecdh"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"fmt"
 	"hash"
@@ -111,6 +112,10 @@ const (
 	// P256UncompressedKeySize is the length of an uncompressed ECDSA P-256 public key
 	// in SEC 1 format: 0x04 || 32-byte X || 32-byte Y = 65 bytes (RFC 5480 §2.2).
 	P256UncompressedKeySize = 65
+
+	// P521UncompressedKeySize is the length of an uncompressed ECDSA P-521 public key
+	// in SEC 1 format: 0x04 || 66-byte X || 66-byte Y = 133 bytes (RFC 5480 §2.2).
+	P521UncompressedKeySize = 133
 
 	// Ed25519KeySize is the length of an Ed25519 public key (RFC 8410 §3).
 	Ed25519KeySize = 32
@@ -131,14 +136,20 @@ const (
 	MLS128DHKEMP256 CipherSuite = 0x0002
 
 	// MLS128DHKEMX25519ChaCha20 is cipher suite 3: MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
-	// RFC 9420 §17.1: RFC 9420 §17.1: X25519 + ChaCha20-Poly1305 (for devices without AES-NI)
+	// RFC 9420 §17.1: X25519 + ChaCha20-Poly1305 (for devices without AES-NI)
 	MLS128DHKEMX25519ChaCha20 CipherSuite = 0x0003
 
-	// Placeholder cipher suites (not implemented)
-	// MLS256DHKEMP384AES256GCM        CipherSuite = 0x0004 // CS4: P384 + AES256GCM + SHA384 + P384
-	// MLS256DHKEMP521AES256GCM        CipherSuite = 0x0005 // CS5: P521 + AES256GCM + SHA512 + P521
-	// MLS256DHKEMP256ChaCha20         CipherSuite = 0x0006 // CS6: P256 + ChaCha20 + SHA256 + P256
-	// MLS256DHKEMP384ChaCha20         CipherSuite = 0x0007 // CS7: P384 + ChaCha20 + SHA384 + P384
+	// MLS256DHKEMX448AES256GCM is cipher suite 4: MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448
+	// RFC 9420 §17.1: X448 + AES-256-GCM + SHA-512 + Ed448
+	MLS256DHKEMX448AES256GCM CipherSuite = 0x0004
+
+	// MLS256DHKEMP521AES256GCM is cipher suite 5: MLS_256_DHKEMP521_AES256GCM_SHA512_P521
+	// RFC 9420 §17.1: P-521 + AES-256-GCM + SHA-512 + ECDSA-P521
+	MLS256DHKEMP521AES256GCM CipherSuite = 0x0005
+
+	// MLS256DHKEMX448ChaCha20Poly1305 is a deprecated alias kept for backward compatibility.
+	// The correct name for cipher suite 0x0005 is MLS256DHKEMP521AES256GCM.
+	MLS256DHKEMX448ChaCha20Poly1305 = MLS256DHKEMP521AES256GCM //nolint:revive // deprecated alias
 )
 
 // String returns the name of the cipher suite.
@@ -150,6 +161,10 @@ func (cs CipherSuite) String() string {
 		return "MLS_128_DHKEMP256_AES128GCM_SHA256_P256"
 	case MLS128DHKEMX25519ChaCha20:
 		return "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519"
+	case MLS256DHKEMX448AES256GCM:
+		return "MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448"
+	case MLS256DHKEMP521AES256GCM:
+		return "MLS_256_DHKEMP521_AES256GCM_SHA512_P521"
 	default:
 		return fmt.Sprintf("Unknown(0x%04X)", uint16(cs))
 	}
@@ -158,7 +173,8 @@ func (cs CipherSuite) String() string {
 // IsSupported returns true if the cipher suite is implemented.
 func (cs CipherSuite) IsSupported() bool {
 	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20,
+		MLS256DHKEMP521AES256GCM:
 		return true
 	default:
 		return false
@@ -168,10 +184,10 @@ func (cs CipherSuite) IsSupported() bool {
 // HashAlgorithm returns the hash algorithm for the cipher suite.
 func (cs CipherSuite) HashAlgorithm() HashAlgorithm {
 	switch cs {
-	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20:
+	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20, MLS128DHKEMP256:
 		return SHA256
-	case MLS128DHKEMP256:
-		return SHA256
+	case MLS256DHKEMX448AES256GCM, MLS256DHKEMP521AES256GCM:
+		return SHA512
 	default:
 		return 0
 	}
@@ -184,6 +200,8 @@ func (cs CipherSuite) AeadAlgorithm() AeadAlgorithm {
 		return AES128GCM
 	case MLS128DHKEMX25519ChaCha20:
 		return ChaCha20Poly1305
+	case MLS256DHKEMX448AES256GCM, MLS256DHKEMP521AES256GCM:
+		return AES256GCM
 	default:
 		return 0
 	}
@@ -196,6 +214,8 @@ func (cs CipherSuite) Curve() ecdh.Curve {
 		return ecdh.X25519()
 	case MLS128DHKEMP256:
 		return ecdh.P256()
+	case MLS256DHKEMP521AES256GCM:
+		return ecdh.P521()
 	default:
 		return nil
 	}
@@ -208,6 +228,8 @@ func (cs CipherSuite) SignatureScheme() SignatureScheme {
 		return ED25519
 	case MLS128DHKEMP256:
 		return ECDSA_SECP256R1_SHA256
+	case MLS256DHKEMP521AES256GCM:
+		return ECDSA_SECP521R1_SHA512
 	default:
 		return 0
 	}
@@ -220,7 +242,9 @@ func (cs CipherSuite) SignatureScheme() SignatureScheme {
 func (cs CipherSuite) SignatureKeyLength() int {
 	switch cs.SignatureScheme() {
 	case ECDSA_SECP256R1_SHA256:
-		return 65 // 0x04 + 32-byte X + 32-byte Y (SEC 1 uncompressed)
+		return P256UncompressedKeySize
+	case ECDSA_SECP521R1_SHA512:
+		return P521UncompressedKeySize
 	case ED25519:
 		return 32
 	default:
@@ -231,11 +255,13 @@ func (cs CipherSuite) SignatureKeyLength() int {
 // HashLength returns the hash output length in bytes (Nh in RFC 9420 §5.1).
 //
 // CS1/CS2/CS3: 32 bytes (SHA-256).
-// CS4 would be 48 (SHA-384); CS5 would be 64 (SHA-512) — not yet implemented.
+// CS4/CS5: 64 bytes (SHA-512).
 func (cs CipherSuite) HashLength() int {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20, MLS128DHKEMP256:
 		return 32 // SHA-256
+	case MLS256DHKEMX448AES256GCM, MLS256DHKEMX448ChaCha20Poly1305:
+		return 64 // SHA-512
 	default:
 		return 0
 	}
@@ -248,6 +274,8 @@ func (cs CipherSuite) AeadKeyLength() int {
 		return 16 // AES-128
 	case MLS128DHKEMX25519ChaCha20:
 		return 32 // ChaCha20
+	case MLS256DHKEMP521AES256GCM, MLS256DHKEMX448AES256GCM:
+		return 32 // AES-256
 	default:
 		return 0
 	}
@@ -279,6 +307,12 @@ func (cs CipherSuite) HPKEConfig() HPKEConfig {
 			KDF:  HKDF_SHA256,
 			AEAD: ChaCha20Poly1305,
 		}
+	case MLS256DHKEMP521AES256GCM:
+		return HPKEConfig{
+			KEM:  DHKEM_P521_HKDF_SHA512,
+			KDF:  HKDF_SHA512,
+			AEAD: AES256GCM,
+		}
 	default:
 		return HPKEConfig{}
 	}
@@ -289,6 +323,8 @@ func (cs CipherSuite) HashFunction() func() hash.Hash {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20:
 		return sha256.New
+	case MLS256DHKEMP521AES256GCM:
+		return sha512.New
 	default:
 		return nil
 	}
@@ -301,12 +337,18 @@ const (
 	// SHA256 is SHA-256 (32 bytes output)
 	// RFC 9420 §5.2: Used by cipher suites 1, 2, and 3
 	SHA256 HashAlgorithm = 0x01
+
+	// SHA512 is SHA-512 (64 bytes output)
+	// RFC 9420 §5.2: Used by cipher suites 4 and 5
+	SHA512 HashAlgorithm = 0x02
 )
 
 func (h HashAlgorithm) String() string {
 	switch h {
 	case SHA256:
 		return "SHA256"
+	case SHA512:
+		return "SHA512"
 	default:
 		return fmt.Sprintf("Unknown(0x%02x)", uint8(h))
 	}
@@ -317,6 +359,8 @@ func (h HashAlgorithm) Size() int {
 	switch h {
 	case SHA256:
 		return 32
+	case SHA512:
+		return 64
 	default:
 		return 0
 	}
@@ -381,14 +425,27 @@ const (
 	// ED25519 is Ed25519 signatures
 	// RFC 8410: Used by cipher suites 1 and 3
 	ED25519 SignatureScheme = 0x0807
+
+	// ED448 is Ed448 signatures
+	// RFC 8032: Used by cipher suite 4
+	ED448 SignatureScheme = 0x0808
+
+	// ECDSA_SECP521R1_SHA512 is ECDSA with P-521 and SHA-512
+	// RFC 8446 §4.2.3: Used by cipher suite 5
+	//nolint:revive // RFC 8446 naming convention
+	ECDSA_SECP521R1_SHA512 SignatureScheme = 0x0603
 )
 
 func (s SignatureScheme) String() string {
 	switch s {
 	case ECDSA_SECP256R1_SHA256:
 		return "ecdsa_secp256r1_sha256"
+	case ECDSA_SECP521R1_SHA512:
+		return "ecdsa_secp521r1_sha512"
 	case ED25519:
 		return "ed25519"
+	case ED448:
+		return "ed448"
 	default:
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(s))
 	}
@@ -403,6 +460,8 @@ func (s SignatureScheme) HashFunction() func() hash.Hash {
 	switch s {
 	case ECDSA_SECP256R1_SHA256:
 		return sha256.New
+	case ECDSA_SECP521R1_SHA512:
+		return sha512.New
 	default:
 		return nil // Ed25519 and unknown schemes: no pre-hashing
 	}
@@ -428,6 +487,11 @@ const (
 	// RFC 9180 §4.1: Used by cipher suites 1 and 3
 	//nolint:revive // RFC 9180 naming convention
 	DHKEM_X25519_HKDF_SHA256 KEMAlgorithm = 0x0020
+
+	// DHKEM_P521_HKDF_SHA512 is DHKEM with P-521 and HKDF-SHA512
+	// RFC 9180 §4.1: Used by cipher suite 5
+	//nolint:revive // RFC 9180 naming convention
+	DHKEM_P521_HKDF_SHA512 KEMAlgorithm = 0x0012
 )
 
 func (k KEMAlgorithm) String() string {
@@ -436,6 +500,8 @@ func (k KEMAlgorithm) String() string {
 		return "DHKEM_P256_HKDF_SHA256"
 	case DHKEM_X25519_HKDF_SHA256:
 		return "DHKEM_X25519_HKDF_SHA256"
+	case DHKEM_P521_HKDF_SHA512:
+		return "DHKEM_P521_HKDF_SHA512"
 	default:
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(k))
 	}
@@ -446,15 +512,22 @@ type KDFAlgorithm uint16
 
 const (
 	// HKDF_SHA256 is HKDF-SHA256 (32 bytes output)
-	// RFC 9180 §4.1: Used by all implemented cipher suites
+	// RFC 9180 §4.1: Used by cipher suites 1, 2, and 3
 	//nolint:revive // RFC 9180 naming convention
 	HKDF_SHA256 KDFAlgorithm = 0x0001
+
+	// HKDF_SHA512 is HKDF-SHA512 (64 bytes output)
+	// RFC 9180 §4.1: Used by cipher suite 5
+	//nolint:revive // RFC 9180 naming convention
+	HKDF_SHA512 KDFAlgorithm = 0x0003
 )
 
 func (k KDFAlgorithm) String() string {
 	switch k {
 	case HKDF_SHA256:
 		return "HKDF-SHA256"
+	case HKDF_SHA512:
+		return "HKDF-SHA512"
 	default:
 		return fmt.Sprintf("Unknown(0x%04x)", uint16(k))
 	}

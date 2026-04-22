@@ -214,13 +214,6 @@ func WithProposalPolicy(p ProposalPolicy) ClientOption {
 	}
 }
 
-// log logs a message at the configured level if a logger is set.
-func (c *Client) log(level slog.Level, msg string, args ...any) {
-	if c.logger != nil {
-		c.logger.Log(context.Background(), level, msg, args...)
-	}
-}
-
 var (
 	// ErrEmptyIdentity is returned when NewClient receives an empty identity slice.
 	ErrEmptyIdentity = errors.New("mls: identity is empty")
@@ -386,6 +379,13 @@ type Client struct {
 
 	pendingKPs   map[string]*pendingEntry
 	groupEntries map[string]*groupEntry
+}
+
+// log logs a message at the configured level if a logger is set.
+func (c *Client) log(level slog.Level, msg string, args ...any) {
+	if c.logger != nil {
+		c.logger.Log(context.Background(), level, msg, args...)
+	}
 }
 
 type pendingEntry struct {
@@ -1603,7 +1603,7 @@ type CommitPendingProposalsOptions struct {
 
 	// Deprecated: use GroupInfoOptions.
 	// Kept for backward compatibility with code that still passes this field.
-	GroupInfoOpts group.GroupInfoOptions
+	GroupInfoOpts group.GroupInfoOptions //nolint:staticcheck // backward compatibility shim
 }
 
 // commitPendingConfig holds the configuration for commit operations.
@@ -1629,13 +1629,13 @@ func defaultCommitPendingConfig() commitPendingConfig {
 // Used by legacy code that passes the struct.
 func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.GroupInfoOption {
 	out := append([]group.GroupInfoOption(nil), opts.GroupInfoOptions...)
-	if opts.GroupInfoOpts == (group.GroupInfoOptions{}) {
+	if opts.GroupInfoOpts == (group.GroupInfoOptions{}) { //nolint:staticcheck // backward compatibility shim
 		return out
 	}
-	if opts.GroupInfoOpts.IncludeRatchetTree != nil {
+	if opts.GroupInfoOpts.IncludeRatchetTree != nil { //nolint:staticcheck // backward compatibility shim
 		out = append(out, group.WithRatchetTree(*opts.GroupInfoOpts.IncludeRatchetTree))
 	}
-	if opts.GroupInfoOpts.IncludeExternalPub != nil {
+	if opts.GroupInfoOpts.IncludeExternalPub != nil { //nolint:staticcheck // backward compatibility shim
 		out = append(out, group.WithExternalPub(*opts.GroupInfoOpts.IncludeExternalPub))
 	}
 	return out

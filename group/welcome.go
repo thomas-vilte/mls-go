@@ -642,9 +642,9 @@ func (g *Group) createWelcome(
 	// We use a copy to preserve joiner_secret (needed for GroupSecrets).
 	// The psk_secret must match what was used in the epoch key schedule.
 	if pskSecret == nil {
-		pskSecret = ciphersuite.ZeroSecret(g.cipherSuite.HashLength())
+		pskSecret = ciphersuite.ZeroSecretCS(g.cipherSuite)
 	}
-	joinerCopyForWelcome := ciphersuite.NewSecret(joinerSecret.AsSlice())
+	joinerCopyForWelcome := ciphersuite.NewSecretForCS(g.cipherSuite, joinerSecret.AsSlice())
 	memberSecretForWelcome, err := joinerCopyForWelcome.HKDFExtract(pskSecret)
 	if err != nil {
 		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
@@ -854,17 +854,17 @@ func JoinFromWelcomeWithContext(
 	//
 	// We use a COPY of joiner_secret so that HKDFExtract (which zeroes its inputs)
 	// does not destroy the original, which the key schedule needs later.
-	rawPskSecret := ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength())
+	rawPskSecret := ciphersuite.ZeroSecretCS(welcome.CipherSuite)
 	if len(psks) > 0 {
 		pskInput, pskErr := schedule.ComputePskInput(psks, welcome.CipherSuite)
 		if pskErr != nil {
 			return nil, fmt.Errorf("computing psk input: %w", pskErr)
 		}
-		rawPskSecret = ciphersuite.NewSecret(pskInput)
+		rawPskSecret = ciphersuite.NewSecretForCS(welcome.CipherSuite, pskInput)
 		secureZeroBytes(pskInput)
 	}
 
-	joinerCopy := ciphersuite.NewSecret(groupSecrets.JoinerSecret.AsSlice())
+	joinerCopy := ciphersuite.NewSecretForCS(welcome.CipherSuite, groupSecrets.JoinerSecret.AsSlice())
 	memberSecret, err := joinerCopy.HKDFExtract(rawPskSecret)
 	if err != nil {
 		return nil, fmt.Errorf("computing member_secret for welcome: %w", err)
@@ -917,7 +917,7 @@ func JoinFromWelcomeWithContext(
 			if parseErr == nil {
 				// RFC §7.4.1: wire format is minimal (no trailing blanks), but the
 				// internal tree logic assumes power-of-2 leaf count for parent/copath
-				// indexing. Expand unconditionally; TreeHashMinimal stays unchanged.
+				// indexing. Expand unconditionally; TreeHash computes over the full tree.
 				parsed = parsed.ExpandToPowerOf2()
 				ratchetTree = parsed
 				treeFromExtension = true
@@ -1014,9 +1014,9 @@ func JoinFromWelcomeWithContext(
 	// Advance key schedule from joiner_secret provided by Welcome.
 	keySchedule := schedule.NewKeySchedule(
 		welcome.CipherSuite,
-		ciphersuite.ZeroSecret(welcome.CipherSuite.HashLength()),
+		ciphersuite.ZeroSecretCS(welcome.CipherSuite),
 	)
-	keySchedule.SetJoinerSecret(groupSecrets.JoinerSecret)
+	keySchedule.SetJoinerSecret(ciphersuite.NewSecretForCS(welcome.CipherSuite, groupSecrets.JoinerSecret.AsSlice()))
 
 	_, err = keySchedule.ComputePskSecret(psks)
 	if err != nil {
@@ -1118,7 +1118,7 @@ func JoinFromWelcomeWithContext(
 		// The path_secret advances one step per PRESENT node.
 		// We start storing keys from the first PRESENT node that is an ancestor
 		// of the joiner's leaf (SubtreeContainsLeaf check).
-		ps := ciphersuite.NewSecret(groupSecrets.PathSecret)
+		ps := ciphersuite.NewSecretForCS(welcome.CipherSuite, groupSecrets.PathSecret)
 		ownLeaf := treesync.LeafIndex(ownLeafIndex)
 		started := false
 		for _, nodeIdx := range committerDP[1:] { // skip the sender leaf (index 0)

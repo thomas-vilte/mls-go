@@ -699,6 +699,24 @@ func GenerateCredentialWithKeyForCS(identity []byte, cs ciphersuite.CipherSuite)
 			SignatureKeyBytes: ecdhKey.PublicKey().Bytes(),
 		}
 		return credWithKey, sigPriv, nil
+	case ciphersuite.ECDSA_SECP521R1_SHA512:
+		privKey, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("generating P-521 key: %w", err)
+		}
+		ecdhKey, err := privKey.ECDH()
+		if err != nil {
+			return nil, nil, fmt.Errorf("converting to ECDH key: %w", err)
+		}
+		cred := NewBasicCredential(identity)
+		sigPriv := ciphersuite.NewSignaturePrivateKeyP521(privKey)
+		credWithKey := &CredentialWithKey{
+			Credential:        cred,
+			SignatureKey:      &privKey.PublicKey,
+			PrivateKey:        privKey,
+			SignatureKeyBytes: ecdhKey.PublicKey().Bytes(),
+		}
+		return credWithKey, sigPriv, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported cipher suite: %d", cs)
 	}
