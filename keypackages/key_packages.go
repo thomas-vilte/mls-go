@@ -31,6 +31,7 @@ const (
 	MLS128DHKEMX25519         = ciphersuite.MLS128DHKEMX25519
 	MLS128DHKEMP256           = ciphersuite.MLS128DHKEMP256
 	MLS128DHKEMX25519ChaCha20 = ciphersuite.MLS128DHKEMX25519ChaCha20
+	MLS256DHKEMP521AES256GCM  = ciphersuite.MLS256DHKEMP521AES256GCM
 )
 
 // ProtocolVersion represents the MLS protocol version.
@@ -120,7 +121,7 @@ func DefaultCapabilities() *Capabilities {
 	grease := randomGREASEValue()
 	return &Capabilities{
 		ProtocolVersions: []ProtocolVersion{MLS10},
-		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20},
+		CipherSuites:     []CipherSuite{MLS128DHKEMX25519, MLS128DHKEMP256, MLS128DHKEMX25519ChaCha20, MLS256DHKEMP521AES256GCM},
 		Extensions:       []uint16{grease},
 		Proposals:        []uint16{grease},
 		Credentials:      []uint16{0x0001}, // BasicCredential
@@ -254,7 +255,7 @@ func Generate(
 	if credWithKey.Ed25519PrivateKey != nil {
 		sigPrivKey = ciphersuite.NewEd25519SignaturePrivateKey(credWithKey.Ed25519PrivateKey)
 	} else {
-		sigPrivKey = ciphersuite.NewSignaturePrivateKey(credWithKey.PrivateKey)
+		sigPrivKey = newECDSASignaturePrivateKey(credWithKey.PrivateKey)
 	}
 	leafNodeTBS := leafNode.marshalTBS()
 	leafNodeSig, err := ciphersuite.SignWithLabel(sigPrivKey, "LeafNodeTBS", leafNodeTBS)
@@ -292,7 +293,16 @@ func (k *KeyPackagePrivateKeys) GetSignaturePrivateKey() *ciphersuite.SignatureP
 	if k.Ed25519SignatureKey != nil {
 		return ciphersuite.NewEd25519SignaturePrivateKey(k.Ed25519SignatureKey)
 	}
-	return ciphersuite.NewSignaturePrivateKey(k.SignatureKey)
+	return newECDSASignaturePrivateKey(k.SignatureKey)
+}
+
+// newECDSASignaturePrivateKey wraps an ecdsa.PrivateKey with the correct scheme
+// based on the curve (P-256 → ECDSA_SECP256R1_SHA256, P-521 → ECDSA_SECP521R1_SHA512).
+func newECDSASignaturePrivateKey(priv *ecdsa.PrivateKey) *ciphersuite.SignaturePrivateKey {
+	if priv.Curve == elliptic.P521() {
+		return ciphersuite.NewSignaturePrivateKeyP521(priv)
+	}
+	return ciphersuite.NewSignaturePrivateKey(priv)
 }
 
 // generateHPKEKeyPairForCS generates an HPKE key pair for the given cipher suite.

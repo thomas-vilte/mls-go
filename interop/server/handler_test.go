@@ -29,8 +29,8 @@ func TestServerSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SupportedCiphersuites() failed: %v", err)
 	}
-	if len(csResp.Ciphersuites) != 3 {
-		t.Errorf("SupportedCiphersuites() returned %d suites, want 3", len(csResp.Ciphersuites))
+	if len(csResp.Ciphersuites) != 4 {
+		t.Errorf("SupportedCiphersuites() returned %d suites, want 4", len(csResp.Ciphersuites))
 	}
 }
 
@@ -121,6 +121,7 @@ func TestThreePersonCommitAfterWelcome(t *testing.T) {
 		uint32(ciphersuite.MLS128DHKEMX25519),
 		uint32(ciphersuite.MLS128DHKEMP256),
 		uint32(ciphersuite.MLS128DHKEMX25519ChaCha20),
+		uint32(ciphersuite.MLS256DHKEMP521AES256GCM),
 	} {
 		cs := ciphersuite.CipherSuite(csID)
 		t.Run(cs.String(), func(t *testing.T) {
@@ -261,6 +262,7 @@ func TestPathSecretInWelcome(t *testing.T) {
 		uint32(ciphersuite.MLS128DHKEMX25519),
 		uint32(ciphersuite.MLS128DHKEMP256),
 		uint32(ciphersuite.MLS128DHKEMX25519ChaCha20),
+		uint32(ciphersuite.MLS256DHKEMP521AES256GCM),
 	} {
 		cs := ciphersuite.CipherSuite(csID)
 		t.Run(cs.String(), func(t *testing.T) {
@@ -400,6 +402,7 @@ func TestExternalJoinHandleCommit(t *testing.T) {
 		uint32(ciphersuite.MLS128DHKEMX25519),
 		uint32(ciphersuite.MLS128DHKEMP256),
 		uint32(ciphersuite.MLS128DHKEMX25519ChaCha20),
+		uint32(ciphersuite.MLS256DHKEMP521AES256GCM),
 	} {
 		cs := ciphersuite.CipherSuite(csID)
 		t.Run(cs.String(), func(t *testing.T) {

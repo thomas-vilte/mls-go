@@ -100,7 +100,7 @@ func TestCryptoBasicsVectors(t *testing.T) {
 
 func testDeriveSecret(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	t.Helper()
-	secret := NewSecret(mustDecodeHex(t, v.DeriveSecret.Secret))
+	secret := NewSecretForCS(cs, mustDecodeHex(t, v.DeriveSecret.Secret))
 	out, err := secret.DeriveSecret(cs, v.DeriveSecret.Label)
 	if err != nil {
 		t.Errorf("DeriveSecret: %v", err)
@@ -112,12 +112,9 @@ func testDeriveSecret(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	}
 }
 
-func testDeriveTreeSecret(t *testing.T, _ CipherSuite, v cryptoBasicsVector) {
+func testDeriveTreeSecret(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	t.Helper()
-	// DeriveTreeSecret deriva un secreto del árbol de secret
-	// DeriveTreeSecret(secret, label, generation, length) = KDF-Expand-Label(secret, label, uint32_be(generation), length)
-	//   ExpandWithLabel(secret, label, uint32_be(generation), length)
-	secret := NewSecret(mustDecodeHex(t, v.DeriveTreeSecret.Secret))
+	secret := NewSecretForCS(cs, mustDecodeHex(t, v.DeriveTreeSecret.Secret))
 	var genBytes [4]byte
 	binary.BigEndian.PutUint32(genBytes[:], v.DeriveTreeSecret.Generation)
 	out, err := secret.KdfExpandLabel(v.DeriveTreeSecret.Label, genBytes[:], v.DeriveTreeSecret.Length)
@@ -132,9 +129,9 @@ func testDeriveTreeSecret(t *testing.T, _ CipherSuite, v cryptoBasicsVector) {
 	}
 }
 
-func testExpandWithLabel(t *testing.T, _ CipherSuite, v cryptoBasicsVector) {
+func testExpandWithLabel(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 	t.Helper()
-	secret := NewSecret(mustDecodeHex(t, v.ExpandWithLabel.Secret))
+	secret := NewSecretForCS(cs, mustDecodeHex(t, v.ExpandWithLabel.Secret))
 	ctx := mustDecodeHex(t, v.ExpandWithLabel.Context)
 	out, err := secret.KdfExpandLabel(v.ExpandWithLabel.Label, ctx, v.ExpandWithLabel.Length)
 	if err != nil {
@@ -181,34 +178,43 @@ func testSignWithLabel(t *testing.T, v cryptoBasicsVector) {
 	// Also test sign+verify round-trip using the private key
 	privBytes := mustDecodeHex(t, v.SignWithLabel.Priv)
 
-	// For Ed25519 (cs=1, cs=3), use Ed25519 key derivation from 32-byte seed
-	if sigScheme == ED25519 {
+	var sig2 *Signature
+	switch sigScheme {
+	case ED25519:
 		// Test vectors provide 32-byte seed, derive full 64-byte private key
 		privKey, err := NewEd25519PrivateKey(privBytes)
 		if err != nil {
 			t.Errorf("NewEd25519PrivateKey: %v", err)
 			return
 		}
-		sig2, err := privKey.Sign(tbs)
+		sig2, err = privKey.Sign(tbs)
 		if err != nil {
 			t.Errorf("Sign(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
 			return
 		}
-		if err := pubKey.Verify(tbs, sig2); err != nil {
-			t.Errorf("round-trip Verify(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
+	case ECDSA_SECP521R1_SHA512:
+		// CS5: P-521 private key — 66-byte scalar
+		ecdsaKey := privKeyFromScalarP521(privBytes)
+		privKey := &SignaturePrivateKey{scheme: ECDSA_SECP521R1_SHA512, ecdsaKey: ecdsaKey}
+		var err error
+		sig2, err = privKey.Sign(tbs)
+		if err != nil {
+			t.Errorf("Sign(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
+			return
 		}
-	} else {
-		// For ECDSA (cs=2), use ECDSA key derivation
+	default:
+		// CS2: P-256 private key — 32-byte scalar
 		ecdsaKey := privKeyFromScalar(privBytes)
 		privKey := NewSignaturePrivateKey(ecdsaKey)
-		sig2, err := privKey.Sign(tbs)
+		var err error
+		sig2, err = privKey.Sign(tbs)
 		if err != nil {
 			t.Errorf("Sign(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
 			return
 		}
-		if err := pubKey.Verify(tbs, sig2); err != nil {
-			t.Errorf("round-trip Verify(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
-		}
+	}
+	if err := pubKey.Verify(tbs, sig2); err != nil {
+		t.Errorf("round-trip Verify(SignWithLabel %q): %v", v.SignWithLabel.Label, err)
 	}
 }
 
@@ -254,6 +260,17 @@ func testEncryptWithLabel(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 // nolint:staticcheck // Using ScalarBaseMult for test vector compatibility
 func privKeyFromScalar(scalar []byte) *ecdsa.PrivateKey {
 	curve := elliptic.P256()
+	x, y := curve.ScalarBaseMult(scalar)
+	return &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		D:         new(big.Int).SetBytes(scalar),
+	}
+}
+
+// privKeyFromScalarP521 reconstructs an ECDSA P-521 private key from a raw 66-byte scalar.
+// nolint:staticcheck // Using ScalarBaseMult for test vector compatibility
+func privKeyFromScalarP521(scalar []byte) *ecdsa.PrivateKey {
+	curve := elliptic.P521()
 	x, y := curve.ScalarBaseMult(scalar)
 	return &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
