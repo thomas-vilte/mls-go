@@ -70,33 +70,6 @@ func secureZeroSecret(s *ciphersuite.Secret) {
 	}
 }
 
-func (g *Group) setMyLeafEncryptionKey(key []byte) {
-	if g == nil {
-		return
-	}
-	secureZeroBytes(g.myLeafEncryptionKey)
-	g.myLeafEncryptionKey = key
-}
-
-func (g *Group) setPathNodePrivKey(nodeIdx treesync.NodeIndex, key []byte) {
-	if g == nil {
-		return
-	}
-	if g.pathNodePrivKeys == nil {
-		g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
-	}
-	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
-	g.pathNodePrivKeys[nodeIdx] = key
-}
-
-func (g *Group) deletePathNodePrivKey(nodeIdx treesync.NodeIndex) {
-	if g == nil || g.pathNodePrivKeys == nil {
-		return
-	}
-	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
-	delete(g.pathNodePrivKeys, nodeIdx)
-}
-
 // GroupEpoch represents the epoch number of a group.
 type GroupEpoch uint64
 
@@ -167,6 +140,33 @@ type Group struct {
 	// out-of-order messages that arrive after the epoch has advanced.
 	// Keyed by epoch number. Limited to the last maxCachedEpochs epochs.
 	epochHistory map[uint64]*epochState
+}
+
+func (g *Group) setMyLeafEncryptionKey(key []byte) {
+	if g == nil {
+		return
+	}
+	secureZeroBytes(g.myLeafEncryptionKey)
+	g.myLeafEncryptionKey = key
+}
+
+func (g *Group) setPathNodePrivKey(nodeIdx treesync.NodeIndex, key []byte) {
+	if g == nil {
+		return
+	}
+	if g.pathNodePrivKeys == nil {
+		g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
+	}
+	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
+	g.pathNodePrivKeys[nodeIdx] = key
+}
+
+func (g *Group) deletePathNodePrivKey(nodeIdx treesync.NodeIndex) {
+	if g == nil || g.pathNodePrivKeys == nil {
+		return
+	}
+	secureZeroBytes(g.pathNodePrivKeys[nodeIdx])
+	delete(g.pathNodePrivKeys, nodeIdx)
 }
 
 // GroupID returns the unique identifier of the group.
@@ -263,14 +263,7 @@ func (g *Group) DiscardPendingCommit() error {
 		return fmt.Errorf("group: no pending commit to discard (state=%d)", g.state)
 	}
 	g.pendingCommit = nil
-	if len(g.pendingLeafKey) > 0 {
-		for i := range g.pendingLeafKey {
-			g.pendingLeafKey[i] = 0
-		}
-		// keep the slice alive until after the overwrite so the compiler
-		// does not discard the zeroing as a dead store
-		runtime.KeepAlive(g.pendingLeafKey)
-	}
+	secureZeroBytes(g.pendingLeafKey)
 	g.pendingLeafKey = nil
 	g.state = StateOperational
 	return nil
@@ -536,11 +529,11 @@ func NewGroup(
 	}
 
 	// Initialize key schedule with zeros for first epoch
-	initSecret := ciphersuite.ZeroSecret(cipherSuite.HashLength())
+	initSecret := ciphersuite.ZeroSecretCS(cipherSuite)
 	keySchedule := schedule.NewKeySchedule(cipherSuite, initSecret)
 
 	// Compute epoch secrets
-	commitSecret := ciphersuite.ZeroSecret(cipherSuite.HashLength())
+	commitSecret := ciphersuite.ZeroSecretCS(cipherSuite)
 	keySchedule.SetCommitSecret(commitSecret)
 
 	groupContextBytes := groupContext.Marshal()
@@ -903,11 +896,20 @@ func (g *Group) CommitWithContext(
 	excluded := make(map[treesync.LeafIndex]bool)
 	newExtensions := g.groupContext.Extensions // default: carry forward current extensions
 	for _, fp := range filtered {
-		if fp.Proposal.Type == ProposalTypeAdd && fp.Proposal.Add != nil && fp.Proposal.Add.KeyPackage != nil && fp.Proposal.Add.KeyPackage.LeafNode != nil {
+		switch {
+		case fp.Proposal.Type == ProposalTypeAdd && fp.Proposal.Add != nil && fp.Proposal.Add.KeyPackage != nil && fp.Proposal.Add.KeyPackage.LeafNode != nil:
 			leafData := *keyPackageLeafToTreeSync(fp.Proposal.Add.KeyPackage.LeafNode)
 			addedIdx, _ := treeDiff.AddLeaf(leafData)
 			excluded[addedIdx] = true
-		} else {
+		case fp.Proposal.Type == ProposalTypeRemove && fp.Proposal.Remove != nil:
+			// Truncation is deferred until after ALL proposals are applied
+			// (matching OpenMLS behavior), so that AddLeaf slot selection
+			// and UnmergedLeaves are consistent across implementations.
+			removedLeaf := treesync.LeafIndex(fp.Proposal.Remove.Removed)
+			for _, nodeIdx := range treeDiff.DirectPath(removedLeaf) {
+				treeDiff.BlankNode(nodeIdx)
+			}
+		default:
 			if err := g.applyProposalToTree(fp.Proposal, treeDiff, fp.Sender); err != nil {
 				return nil, fmt.Errorf("applying proposal to tree: %w", err)
 			}
@@ -923,6 +925,10 @@ func (g *Group) CommitWithContext(
 			newExtensions = exts
 		}
 	}
+	// RFC §12.1.3 step 4: truncate trailing blank leaves ONCE after all
+	// proposals are applied (not per-Remove). This matches OpenMLS behavior
+	// and ensures AddLeaf slot selection and UnmergedLeaves are consistent.
+	treeDiff.TruncateTrailingBlanks()
 	treeDiff = treeDiff.ExpandToPowerOf2()
 
 	// Generate UpdatePath if necessary (RFC §12.4.1).
@@ -940,7 +946,7 @@ func (g *Group) CommitWithContext(
 			return nil, fmt.Errorf("creating update path: %w", err)
 		}
 	} else {
-		commitSecret = ciphersuite.ZeroSecret(g.cipherSuite.HashLength())
+		commitSecret = ciphersuite.ZeroSecretCS(g.cipherSuite)
 	}
 
 	// Build Commit structure — use by-reference for proposals received from the
@@ -1651,11 +1657,20 @@ func (g *Group) ProcessReceivedCommit(
 	excluded := make(map[treesync.LeafIndex]bool)
 	var newExtensions []Extension // nil = inherit current extensions
 	for i, p := range proposals {
-		if p.Type == ProposalTypeAdd && p.Add != nil && p.Add.KeyPackage != nil && p.Add.KeyPackage.LeafNode != nil {
+		switch {
+		case p.Type == ProposalTypeAdd && p.Add != nil && p.Add.KeyPackage != nil && p.Add.KeyPackage.LeafNode != nil:
 			leafData := *keyPackageLeafToTreeSync(p.Add.KeyPackage.LeafNode)
 			addedIdx, _ := treeAfterProposals.AddLeaf(leafData)
 			excluded[addedIdx] = true
-		} else {
+		case p.Type == ProposalTypeRemove && p.Remove != nil:
+			// Truncation is deferred until after ALL proposals are applied
+			// (matching OpenMLS behavior), so that AddLeaf slot selection
+			// and UnmergedLeaves are consistent across implementations.
+			removedLeaf := treesync.LeafIndex(p.Remove.Removed)
+			for _, nodeIdx := range treeAfterProposals.DirectPath(removedLeaf) {
+				treeAfterProposals.BlankNode(nodeIdx)
+			}
+		default:
 			if err := g.applyProposalToTree(p, treeAfterProposals, proposalSenders[i]); err != nil {
 				return fmt.Errorf("applying proposal %d to provisional tree: %w", i, err)
 			}
@@ -1668,6 +1683,11 @@ func (g *Group) ProcessReceivedCommit(
 			newExtensions = exts
 		}
 	}
+	// RFC §12.1.3 step 4: truncate trailing blank leaves ONCE after all
+	// proposals are applied (not per-Remove). This matches OpenMLS behavior
+	// and ensures AddLeaf slot selection and UnmergedLeaves are consistent.
+	treeAfterProposals.TruncateTrailingBlanks()
+
 	// RFC §12.4.3.3: if the commit contains an Update proposal for our own leaf,
 	// use PendingUpdatePrivKey (generated by SelfUpdate) instead of the current leaf key.
 	// We detect our own UpdateProposal by matching the signature key (SelfUpdate keeps the
@@ -1842,7 +1862,7 @@ func (g *Group) decryptPathSecret(
 			// sender's ancestor node appears in the copath resolution.
 			// RFC §12.4.2: also verify each derived public key matches the published
 			// UpdatePathNode.EncryptionKey (Gap 13).
-			pathSecret := ciphersuite.NewSecret(psBytes)
+			pathSecret := ciphersuite.NewSecretForCS(g.cipherSuite, psBytes)
 			secureZeroBytes(psBytes)
 			if g.pathNodePrivKeys == nil {
 				g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
@@ -2012,6 +2032,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		return fmt.Errorf("collecting PSKs: %w", err)
 	}
 
+	// RFC §12.1.3 step 4: truncate trailing blank leaves ONCE after all
+	// proposals are applied (not per-Remove). This matches OpenMLS behavior.
+	g.ratchetTree.TruncateTrailingBlanks()
 	g.ratchetTree = g.ratchetTree.ExpandToPowerOf2()
 
 	// Apply UpdatePath if it exists
@@ -2195,7 +2218,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				return fmt.Errorf("HPKE decap for external commit: %w", decapErr)
 			}
 
-			initSecretForNewEpoch = ciphersuite.NewSecret(sharedSecretBytes)
+			initSecretForNewEpoch = ciphersuite.NewSecretForCS(g.cipherSuite, sharedSecretBytes)
 			break
 		}
 
@@ -2203,7 +2226,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		if stagedCommit.commit != nil && stagedCommit.commit.Path != nil {
 			commitSecret = stagedCommit.rootPathSecret
 		} else {
-			commitSecret = ciphersuite.ZeroSecret(g.cipherSuite.HashLength())
+			commitSecret = ciphersuite.ZeroSecretCS(g.cipherSuite)
 		}
 
 		newGCBytes := g.groupContext.Marshal()
@@ -2280,12 +2303,11 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 
 	// Apply the new leaf HPKE private key generated during Commit() now that the
 	// commit is confirmed. pendingLeafKey is nil for receiver-side MergeCommits.
+	// setMyLeafEncryptionKey takes ownership of the slice (no copy), so we must
+	// NOT zero it here — that would also zero myLeafEncryptionKey via the shared
+	// backing array, breaking decryption of future path secrets addressed to us.
 	if g.pendingLeafKey != nil {
 		g.setMyLeafEncryptionKey(g.pendingLeafKey)
-		for i := range g.pendingLeafKey {
-			g.pendingLeafKey[i] = 0
-		}
-		runtime.KeepAlive(g.pendingLeafKey)
 		g.pendingLeafKey = nil
 	}
 
@@ -2671,7 +2693,8 @@ func (g *Group) applyRemoveProposal(remove *RemoveProposal) error {
 	for _, nodeIdx := range g.ratchetTree.DirectPath(removedLeaf) {
 		g.ratchetTree.BlankNode(nodeIdx)
 	}
-	g.ratchetTree.TruncateTrailingBlanks()
+	// NOTE: Do NOT truncate here. Truncation is deferred until after all
+	// proposals are applied (matching OpenMLS behavior). See applyProposalToTree.
 
 	// Mark member as inactive
 	if member, ok := g.members[remove.Removed]; ok {
@@ -2804,9 +2827,9 @@ func NewGroupFromReInit(
 		Extensions:              reInit.Extensions,
 	}
 
-	initSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	initSecret := ciphersuite.ZeroSecretCS(cs)
 	keySchedule := schedule.NewKeySchedule(cs, initSecret)
-	commitSecret := ciphersuite.ZeroSecret(cs.HashLength())
+	commitSecret := ciphersuite.ZeroSecretCS(cs)
 	keySchedule.SetCommitSecret(commitSecret)
 
 	groupContextBytes := groupContext.Marshal()
