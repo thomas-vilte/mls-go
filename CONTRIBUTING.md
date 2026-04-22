@@ -63,7 +63,7 @@ go test ./group/... -run TestPassiveClientCommitVectors -v
 
 ## Architecture
 
-Before diving into a big change, read `AGENTS.md` and the package-level documentation in the repository. They document the main invariants, testing expectations, and protocol details that are easy to get wrong.
+Before diving into a big change, read the package-level godoc (especially `group/doc.go`, `doc.go`, and `INTEGRATION.md`) and the relevant RFC 9420 sections. They document the main invariants, testing expectations, and protocol details that are easy to get wrong.
 
 ## Questions
 
