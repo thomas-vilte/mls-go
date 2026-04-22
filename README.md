@@ -148,9 +148,9 @@ _           = client.DiscardPendingCommit(ctx, handle)          // DS rejected �
 client.SelfUpdate(ctx, groupID)                         // rotate leaf encryption key
 
 // Messaging
-client.SendMessage(ctx, groupID, plaintext)             // → ciphertext
-client.SendMessageWithAAD(ctx, groupID, plaintext, aad)
-client.ReceiveMessage(ctx, groupID, ciphertext)         // → ReceivedMessage
+client.SendMessage(ctx, groupID, plaintext)                         // → ciphertext
+client.SendMessage(ctx, groupID, plaintext, mls.WithAAD(aad))       // with authenticated data
+client.ReceiveMessage(ctx, groupID, ciphertext)                     // → ReceivedMessage
 
 // Crypto material
 client.Export(ctx, groupID, label, context, length)     // MLS-Exporter

@@ -927,6 +927,13 @@ func WithPadding(size int) SendMessageOption {
 	}
 }
 
+// WithAAD sets authenticated data for the message.
+func WithAAD(aad []byte) SendMessageOption {
+	return func(cfg *sendMessageConfig) {
+		cfg.aad = cloneBytes(aad)
+	}
+}
+
 // SendMessage encrypts an application message for the given group.
 // Use WithAAD for authenticated data, WithPadding for custom padding.
 func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte, opts ...SendMessageOption) ([]byte, error) {
@@ -960,7 +967,7 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte, opt
 	var pm *framing.PrivateMessage
 	var err2 error
 	if len(cfg.aad) > 0 {
-		pm, err2 = g.SendApplicationMessage(plaintext, cfg.aad, c.sigKey)
+		pm, err2 = g.SendMessage(plaintext, c.sigKey, group.WithAAD(cfg.aad))
 	} else {
 		pm, err2 = g.SendMessage(plaintext, c.sigKey)
 	}
@@ -977,33 +984,7 @@ func (c *Client) SendMessage(ctx context.Context, groupID, plaintext []byte, opt
 //
 // Deprecated: use SendMessage with WithAAD option instead.
 func (c *Client) SendMessageWithAAD(ctx context.Context, groupID, plaintext, authenticatedData []byte) ([]byte, error) {
-	c.mu.Lock()
-	if err := c.checkOpen(); err != nil {
-		c.mu.Unlock()
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		c.mu.Unlock()
-		return nil, err
-	}
-	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
-	c.mu.Unlock()
-
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-
-	g, err := c.loadGroupEntry(ctx, groupID, entry)
-	if err != nil {
-		return nil, err
-	}
-	pm, err := g.SendApplicationMessage(plaintext, authenticatedData, c.sigKey)
-	if err != nil {
-		return nil, fmt.Errorf("sending message with AAD: %w", err)
-	}
-	if err := c.persistGroup(ctx, g, entry); err != nil {
-		return nil, err
-	}
-	return framing.NewMLSMessagePrivate(pm).Marshal(), nil
+	return c.SendMessage(ctx, groupID, plaintext, WithAAD(authenticatedData))
 }
 
 // ReceiveMessage decrypts an application message for the given group.

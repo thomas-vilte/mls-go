@@ -9,6 +9,20 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
+// MessageOption configures the behavior of a single Group.SendMessage call.
+type MessageOption func(*messageConfig)
+
+type messageConfig struct {
+	aad []byte
+}
+
+// WithAAD sets authenticated data for Group.SendMessage.
+func WithAAD(aad []byte) MessageOption {
+	return func(cfg *messageConfig) {
+		cfg.aad = append([]byte(nil), aad...)
+	}
+}
+
 // SendMessage encrypts an application message for the group.
 //
 // RFC 9420 §6.3
@@ -16,6 +30,21 @@ import (
 // using the current epoch's symmetric keys (via the Secret Tree).
 func (g *Group) SendMessage(
 	data []byte,
+	sigPrivKey *ciphersuite.SignaturePrivateKey,
+	opts ...MessageOption,
+) (*framing.PrivateMessage, error) {
+	cfg := &messageConfig{aad: []byte{}}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	return g.sendApplicationMessage(data, cfg.aad, sigPrivKey)
+}
+
+func (g *Group) sendApplicationMessage(
+	data []byte,
+	authenticatedData []byte,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 ) (*framing.PrivateMessage, error) {
 	if g.state != StateOperational {
@@ -40,7 +69,7 @@ func (g *Group) SendMessage(
 		GroupID:           g.groupID.AsSlice(),
 		Epoch:             g.epoch.AsUint64(),
 		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.ownLeafIndex)},
-		AuthenticatedData: []byte{},
+		AuthenticatedData: authenticatedData,
 		Body:              framing.ApplicationData{Data: data},
 	}
 
@@ -65,42 +94,18 @@ func (g *Group) SendApplicationMessage(
 	authenticatedData []byte,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 ) (*framing.PrivateMessage, error) {
-	if g.state != StateOperational {
-		return nil, fmt.Errorf("send application message: %w", ErrGroupNotOperational)
-	}
-	// RFC 9420 §12.4 requires committing observed proposals before sending
-	// application data in the current epoch.
-	if g.proposals != nil && len(g.proposals.Proposals) > 0 {
-		return nil, fmt.Errorf("cannot send application data while proposals are pending: %w", ErrPendingProposals)
-	}
-	if sigPrivKey == nil {
-		return nil, fmt.Errorf("send application message: %w", ErrNilSignaturePrivateKey)
-	}
-	if g.epochSecrets == nil || g.epochSecrets.SenderDataSecret == nil {
-		return nil, fmt.Errorf("send application message: %w", ErrSenderDataSecretMissing)
-	}
-	if g.secretTree == nil {
-		return nil, fmt.Errorf("send application message: %w", ErrSecretTreeMissing)
-	}
+	return g.sendApplicationMessage(data, authenticatedData, sigPrivKey)
+}
 
-	content := framing.FramedContent{
-		GroupID:           g.groupID.AsSlice(),
-		Epoch:             g.epoch.AsUint64(),
-		Sender:            framing.Sender{Type: framing.SenderTypeMember, LeafIndex: uint32(g.ownLeafIndex)},
-		AuthenticatedData: authenticatedData,
-		Body:              framing.ApplicationData{Data: data},
-	}
-
-	return framing.Encrypt(framing.EncryptParams{
-		Content:          content,
-		SenderLeafIndex:  uint32(g.ownLeafIndex),
-		CipherSuite:      g.cipherSuite,
-		PaddingSize:      g.paddingSize,
-		SenderDataSecret: g.epochSecrets.SenderDataSecret,
-		SecretTree:       g.secretTree,
-		SigKey:           sigPrivKey,
-		GroupContext:     g.groupContext.Marshal(),
-	})
+// SendMessageWithAAD encrypts an application message with authenticated data.
+//
+// Deprecated: use SendMessage with WithAAD option instead.
+func (g *Group) SendMessageWithAAD(
+	data []byte,
+	authenticatedData []byte,
+	sigPrivKey *ciphersuite.SignaturePrivateKey,
+) (*framing.PrivateMessage, error) {
+	return g.SendMessage(data, sigPrivKey, WithAAD(authenticatedData))
 }
 
 // SignProposalAsPublicMessage wraps a Proposal in a signed PublicMessage MLSMessage.
