@@ -140,6 +140,8 @@ type Group struct {
 	// out-of-order messages that arrive after the epoch has advanced.
 	// Keyed by epoch number. Limited to the last maxCachedEpochs epochs.
 	epochHistory map[uint64]*epochState
+
+	extensionHandlers *ExtensionHandlerRegistry
 }
 
 func (g *Group) setMyLeafEncryptionKey(key []byte) {
@@ -579,6 +581,7 @@ func NewGroup(
 		cachedPsks:            make(map[string][]byte),
 		PSKStore:              cfg.pskStore,
 		paddingSize:           cfg.paddingSize,
+		extensionHandlers:     cfg.extensionHandlers,
 	}
 
 	// Initialize secret tree
@@ -1993,6 +1996,7 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// RFC §12.4.2: newly added members must be excluded from copath resolution
 	// when decrypting the UpdatePath (same exclusion the committer applied).
 	excluded := make(map[treesync.LeafIndex]bool)
+	hasGroupContextExtensions := false
 	for i, proposal := range stagedCommit.proposals {
 		// Use per-proposal sender if available (from ProcessReceivedCommit),
 		// otherwise fall back to committer index (self-commit path).
@@ -2012,6 +2016,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				return fmt.Errorf("applying proposal: %w", err)
 			}
 		}
+		if proposal.Type == ProposalTypeGroupContextExtensions {
+			hasGroupContextExtensions = true
+		}
 		// RFC §12.4.3.3: if our own Update proposal was committed, the new leaf key
 		// (PendingUpdatePrivKey from SelfUpdate) replaces the current MyLeafEncryptionKey.
 		if proposal.Type == ProposalTypeUpdate && g.pendingUpdatePrivKey != nil && proposal.Update != nil && proposal.Update.LeafNode != nil {
@@ -2022,6 +2029,12 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 				g.setMyLeafEncryptionKey(g.pendingUpdatePrivKey)
 				g.pendingUpdatePrivKey = nil
 			}
+		}
+	}
+
+	if hasGroupContextExtensions && g.extensionHandlers != nil {
+		if err := g.extensionHandlers.ValidateAll(context.Background(), g.groupContext); err != nil {
+			return fmt.Errorf("validating custom group context extensions: %w", err)
 		}
 	}
 
@@ -2800,7 +2813,15 @@ func NewGroupFromReInit(
 	oldGroupID []byte,
 	myKP *keypackages.KeyPackage,
 	myPriv *keypackages.KeyPackagePrivateKeys,
+	opts ...GroupOption,
 ) (*Group, error) {
+	cfg := groupConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
 	if reInit == nil {
 		return nil, fmt.Errorf("reinit proposal is nil")
 	}
@@ -2839,6 +2860,14 @@ func NewGroupFromReInit(
 	}
 	_, _ = ratchetTree.AddLeaf(leafData)
 
+	groupExtensions := cloneExtensions(reInit.Extensions)
+	if cfg.extensions != nil {
+		groupExtensions = cloneExtensions(cfg.extensions)
+	}
+	if groupExtensions == nil {
+		groupExtensions = []Extension{}
+	}
+
 	groupContext := &GroupContext{
 		Version:                 reInit.Version,
 		CipherSuite:             cs,
@@ -2846,7 +2875,7 @@ func NewGroupFromReInit(
 		Epoch:                   NewGroupEpoch(0),
 		TreeHash:                ratchetTree.TreeHash(),
 		ConfirmedTranscriptHash: []byte{},
-		Extensions:              reInit.Extensions,
+		Extensions:              groupExtensions,
 	}
 
 	initSecret := ciphersuite.ZeroSecretCS(cs)
@@ -2894,6 +2923,9 @@ func NewGroupFromReInit(
 		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		cachedPsks:            make(map[string][]byte),
+		PSKStore:              cfg.pskStore,
+		paddingSize:           cfg.paddingSize,
+		extensionHandlers:     cfg.extensionHandlers,
 	}
 	group.cachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
 	group.secretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, cs)
@@ -2963,17 +2995,6 @@ func WithExternalPub(include bool) GroupInfoOption {
 type GroupInfoOptions struct {
 	IncludeRatchetTree *bool
 	IncludeExternalPub *bool
-}
-
-func legacyGroupInfoOptions(opts GroupInfoOptions) []GroupInfoOption {
-	out := make([]GroupInfoOption, 0, 2)
-	if opts.IncludeRatchetTree != nil {
-		out = append(out, WithRatchetTree(*opts.IncludeRatchetTree))
-	}
-	if opts.IncludeExternalPub != nil {
-		out = append(out, WithExternalPub(*opts.IncludeExternalPub))
-	}
-	return out
 }
 
 func (g *Group) buildSignedGroupInfo(

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,40 @@ func loadGroupForTest(t *testing.T, c *Client, groupIDBytes []byte) *group.Group
 
 type rejectingValidator struct {
 	rejectIdentity string
+}
+
+type testCredentialHandler struct {
+	called *bool
+}
+
+func (h testCredentialHandler) Type() credentials.CredentialType {
+	return credentials.CredentialType(0xFF01)
+}
+
+func (h testCredentialHandler) Validate(_ context.Context, raw []byte) error {
+	if h.called != nil {
+		*h.called = true
+	}
+	if len(raw) == 0 {
+		return fmt.Errorf("credential payload is empty")
+	}
+	return nil
+}
+
+func (h testCredentialHandler) Identity(raw []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("credential payload is empty")
+	}
+	return append([]byte(nil), raw...), nil
+}
+
+type rejectAddPolicy struct{}
+
+func (rejectAddPolicy) ReviewProposal(_ context.Context, _ GroupSnapshot, proposal ReviewableProposal) error {
+	if proposal.Type == group.ProposalTypeAdd {
+		return fmt.Errorf("add proposals are blocked by policy")
+	}
+	return nil
 }
 
 type countingStore struct {
@@ -384,6 +419,72 @@ func TestClientSendMessageWithAADAndReceiveMetadata(t *testing.T) {
 	}
 	if string(received.SenderIdentity) != "alice" {
 		t.Fatalf("unexpected sender identity: %q", received.SenderIdentity)
+	}
+}
+
+func TestClientValidateCredential_CustomTypeRequiresHandler(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+
+	withoutHandler, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating client without handler: %v", err)
+	}
+	customCred := &credentials.Credential{
+		CredentialType: credentials.CredentialType(0xFF01),
+		Identity:       []byte("custom:alice"),
+	}
+	if err := withoutHandler.validateCredential(ctx, customCred); !errors.Is(err, ErrUnknownCredentialType) {
+		t.Fatalf("validateCredential without handler = %v, want ErrUnknownCredentialType", err)
+	}
+
+	called := false
+	withHandler, err := NewClient(
+		[]byte("alice2"),
+		cs,
+		WithCredentialHandler(credentials.CredentialType(0xFF01), testCredentialHandler{called: &called}),
+	)
+	if err != nil {
+		t.Fatalf("creating client with handler: %v", err)
+	}
+	if err := withHandler.validateCredential(ctx, customCred); err != nil {
+		t.Fatalf("validateCredential with handler: %v", err)
+	}
+	if !called {
+		t.Fatal("custom credential handler was not called")
+	}
+}
+
+func TestClientProposalPolicyRejectsAdd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+
+	alice, err := NewClient([]byte("alice"), cs, WithProposalPolicy(rejectAddPolicy{}))
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+
+	_, err = alice.ProposeAddMember(ctx, groupID, bobKP)
+	if err == nil {
+		t.Fatal("expected add proposal to be rejected by policy")
+	}
+	if !strings.Contains(err.Error(), "blocked by policy") {
+		t.Fatalf("unexpected proposal policy error: %v", err)
 	}
 }
 
