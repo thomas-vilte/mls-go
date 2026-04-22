@@ -271,6 +271,42 @@ var ErrGroupNotOperational = group.ErrGroupNotOperational
 // ErrPendingProposals is re-exported for programmatic error checking.
 var ErrPendingProposals = group.ErrPendingProposals
 
+// ErrNoPendingCommit is re-exported for programmatic error checking.
+var ErrNoPendingCommit = group.ErrNoPendingCommit
+
+// ErrNotACommit is re-exported for programmatic error checking.
+var ErrNotACommit = group.ErrNotACommit
+
+// ErrMissingAuthenticatedContent is re-exported for programmatic error checking.
+var ErrMissingAuthenticatedContent = group.ErrMissingAuthenticatedContent
+
+// ErrUnknownProposalRef is re-exported for programmatic error checking.
+var ErrUnknownProposalRef = group.ErrUnknownProposalRef
+
+// ErrOwnLeafNotFound is re-exported for programmatic error checking.
+var ErrOwnLeafNotFound = group.ErrOwnLeafNotFound
+
+// ErrWelcomeInvalidGroupSecrets is re-exported for programmatic error checking.
+var ErrWelcomeInvalidGroupSecrets = group.ErrWelcomeInvalidGroupSecrets
+
+// ErrWelcomeJoinerSecretMissing is re-exported for programmatic error checking.
+var ErrWelcomeJoinerSecretMissing = group.ErrWelcomeJoinerSecretMissing
+
+// ErrGroupInfoUnmarshal is re-exported for programmatic error checking.
+var ErrGroupInfoUnmarshal = group.ErrGroupInfoUnmarshal
+
+// ErrRatchetTreeUnmarshal is re-exported for programmatic error checking.
+var ErrRatchetTreeUnmarshal = group.ErrRatchetTreeUnmarshal
+
+// ErrRequiredExtensionMissing is re-exported for programmatic error checking.
+var ErrRequiredExtensionMissing = group.ErrRequiredExtensionMissing
+
+// ErrJoinerLeafNotFound is re-exported for programmatic error checking.
+var ErrJoinerLeafNotFound = group.ErrJoinerLeafNotFound
+
+// ErrConfirmationTagMismatch is re-exported for programmatic error checking.
+var ErrConfirmationTagMismatch = group.ErrConfirmationTagMismatch
+
 // IsEpochMismatch reports whether err contains an ErrEpochMismatch.
 func IsEpochMismatch(err error) bool {
 	var target *group.ErrEpochMismatch
@@ -366,12 +402,14 @@ type Client struct {
 	// These fields are immutable after NewClient returns. Close() does not nil
 	// them because in-flight per-group operations may still reference them after
 	// the brief global lock section completes.
-	credWithKey   *credentials.CredentialWithKey
-	sigKey        *ciphersuite.SignaturePrivateKey
-	store         clientStore
-	validator     group.CredentialValidator
-	paddingSize   int
-	cacheStrategy CacheStrategy
+	credWithKey        *credentials.CredentialWithKey
+	sigKey             *ciphersuite.SignaturePrivateKey
+	store              clientStore
+	validator          group.CredentialValidator
+	credentialHandlers *CredentialHandlerRegistry
+	proposalPolicies   *ProposalPolicyRegistry
+	paddingSize        int
+	cacheStrategy      CacheStrategy
 
 	events EventHandler
 	closed bool
@@ -386,6 +424,11 @@ func (c *Client) log(level slog.Level, msg string, args ...any) {
 	if c.logger != nil {
 		c.logger.Log(context.Background(), level, msg, args...)
 	}
+}
+
+// groupHex returns a hex-encoded group ID for use in log attributes.
+func groupHex(id []byte) string {
+	return fmt.Sprintf("%x", id)
 }
 
 type pendingEntry struct {
@@ -444,18 +487,20 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 	}
 
 	return &Client{
-		identity:      clientIdentity,
-		cs:            cs,
-		credWithKey:   credWithKey,
-		sigKey:        sigKey,
-		store:         cfg.storage,
-		validator:     validator,
-		events:        cfg.eventHandler,
-		paddingSize:   cfg.paddingSize,
-		cacheStrategy: cfg.cacheStrategy,
-		logger:        logger,
-		pendingKPs:    make(map[string]*pendingEntry),
-		groupEntries:  make(map[string]*groupEntry),
+		identity:           clientIdentity,
+		cs:                 cs,
+		credWithKey:        credWithKey,
+		sigKey:             sigKey,
+		store:              cfg.storage,
+		validator:          validator,
+		credentialHandlers: cfg.credentialHandlers,
+		proposalPolicies:   cfg.proposalPolicies,
+		events:             cfg.eventHandler,
+		paddingSize:        cfg.paddingSize,
+		cacheStrategy:      cfg.cacheStrategy,
+		logger:             logger,
+		pendingKPs:         make(map[string]*pendingEntry),
+		groupEntries:       make(map[string]*groupEntry),
 	}, nil
 }
 
@@ -527,6 +572,7 @@ func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	c.groupEntries[groupCacheKey(groupID)] = entry
+	c.log(slog.LevelInfo, "group created", "group", groupHex(groupID.AsSlice()))
 	return cloneBytes(groupID.AsSlice()), nil
 }
 
@@ -591,7 +637,14 @@ func (c *Client) CreateGroupWithExternalSender(ctx context.Context, groupIDBytes
 	return c.CreateGroupWithExtensions(ctx, groupIDBytes, keyPackageBytes, []group.Extension{*genericExt})
 }
 
-// InviteMember adds a member and returns the commit bytes to broadcast plus the welcome bytes for the joiner.
+// InviteMember adds a member and returns the commit bytes to broadcast plus
+// the welcome bytes for the joiner.
+//
+// Internally this calls AddMember (RFC 9420 §12.1.1) followed by an immediate
+// Commit (§12.4). The Welcome encapsulates the group secrets encrypted to the
+// new member's init key via HPKE (§11.2). Both the commit and the welcome must
+// be delivered by the application — the commit to all current members, the
+// welcome only to the new member.
 func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageBytes []byte) (commit, welcome []byte, err error) {
 	if len(memberKeyPackageBytes) == 0 {
 		return nil, nil, ErrEmptyKeyPackage
@@ -624,14 +677,33 @@ func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageByte
 	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, nil, err
 	}
+	if err := c.reviewProposal(ctx, g, ReviewableProposal{
+		Type:   group.ProposalTypeAdd,
+		Sender: cloneBytes(c.identity),
+		Add: &AddProposalInfo{
+			KeyPackage: cloneBytes(memberKeyPackageBytes),
+			Identity:   credentialIdentityBytes(memberKP.LeafNode.Credential),
+		},
+	}); err != nil {
+		return nil, nil, fmt.Errorf("proposal policy rejected add: %w", err)
+	}
 
 	if _, err := g.AddMember(memberKP); err != nil {
 		return nil, nil, fmt.Errorf("adding member: %w", err)
 	}
-	return c.commitPendingProposals(ctx, g, entry)
+	commit, welcome, err2 := c.commitPendingProposals(ctx, g, entry)
+	if err2 == nil {
+		c.log(slog.LevelInfo, "member invited", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64(), "identity", credentialIdentityBytes(memberKP.LeafNode.Credential))
+	}
+	return commit, welcome, err2
 }
 
-// JoinGroup joins a group using the most recently generated pending KeyPackage.
+// JoinGroup joins a group from a Welcome message (RFC 9420 §11.2).
+//
+// The Welcome must have been generated for a KeyPackage produced by a prior
+// call to [Client.FreshKeyPackageBytes]. JoinGroup matches the Welcome to the
+// most recently generated pending KeyPackage — if no match is found,
+// [ErrNoPendingKeyPackage] is returned.
 func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -681,6 +753,7 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 	}
 	c.groupEntries[groupCacheKey(joinedGroup.GroupID())] = entry
 	delete(c.pendingKPs, matchKey)
+	c.log(slog.LevelInfo, "joined group", "group", groupHex(joinedGroup.GroupID().AsSlice()), "epoch", joinedGroup.Epoch().AsUint64())
 	return cloneBytes(joinedGroup.GroupID().AsSlice()), nil
 }
 
@@ -715,6 +788,16 @@ func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []
 	}
 	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, err
+	}
+	if err := c.reviewProposal(ctx, g, ReviewableProposal{
+		Type:   group.ProposalTypeAdd,
+		Sender: cloneBytes(c.identity),
+		Add: &AddProposalInfo{
+			KeyPackage: cloneBytes(memberKPBytes),
+			Identity:   credentialIdentityBytes(memberKP.LeafNode.Credential),
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("proposal policy rejected add: %w", err)
 	}
 	proposal, err := g.AddMember(memberKP)
 	if err != nil {
@@ -754,6 +837,13 @@ func (c *Client) ProposeRemoveMember(ctx context.Context, groupID, memberIdentit
 	leafIndex, err := findMemberLeafIndexByIdentity(g, memberIdentity)
 	if err != nil {
 		return nil, err
+	}
+	if err := c.reviewProposal(ctx, g, ReviewableProposal{
+		Type:   group.ProposalTypeRemove,
+		Sender: cloneBytes(c.identity),
+		Remove: &RemoveProposalInfo{RemovedIndex: uint32(leafIndex), Identity: cloneBytes(memberIdentity)},
+	}); err != nil {
+		return nil, fmt.Errorf("proposal policy rejected remove: %w", err)
 	}
 	proposal, err := g.RemoveMember(leafIndex)
 	if err != nil {
@@ -826,8 +916,11 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 	if err != nil {
 		return err
 	}
+	oldEpoch := g.Epoch().AsUint64()
+	c.log(slog.LevelDebug, "processing commit", "group", groupHex(groupID), "epoch", oldEpoch, "bytes", len(commitBytes))
 	msg, err := framing.UnmarshalMLSMessage(commitBytes)
 	if err != nil {
+		c.log(slog.LevelWarn, "processing commit failed: parse error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("parsing commit message: %w", err)
 	}
 	var ac *framing.AuthenticatedContent
@@ -839,6 +932,7 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 				g.EpochSecrets().MembershipKey,
 				g.GroupContext().Marshal(),
 			); err != nil {
+				c.log(slog.LevelWarn, "processing commit failed: membership tag", "group", groupHex(groupID), "error", err)
 				return fmt.Errorf("verifying membership tag: %w", err)
 			}
 		}
@@ -851,9 +945,11 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 		senderLeafIdx = treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
 	} else if privMsg, ok := msg.AsPrivate(); ok {
 		if g.EpochSecrets() == nil || g.EpochSecrets().SenderDataSecret == nil {
+			c.log(slog.LevelWarn, "processing private commit failed: missing sender data secret", "group", groupHex(groupID))
 			return fmt.Errorf("sender_data_secret not available for private commit")
 		}
 		if g.SecretTree() == nil {
+			c.log(slog.LevelWarn, "processing private commit failed: missing secret tree", "group", groupHex(groupID))
 			return fmt.Errorf("secret tree not available for private commit")
 		}
 		decrypted, err := framing.Decrypt(privMsg, framing.DecryptParams{
@@ -863,6 +959,7 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 			GroupContext:     g.GroupContext().Marshal(),
 		})
 		if err != nil {
+			c.log(slog.LevelWarn, "processing private commit failed: decrypt error", "group", groupHex(groupID), "error", err)
 			return fmt.Errorf("decrypting private commit: %w", err)
 		}
 		ac = decrypted
@@ -872,9 +969,15 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 		return ErrUnexpectedMessageType
 	}
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
+		c.log(slog.LevelWarn, "processing commit failed: group processing error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("processing received commit: %w", err)
 	}
-	return c.persistGroup(ctx, g, entry)
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		c.log(slog.LevelWarn, "processing commit failed: persist error", "group", groupHex(groupID), "error", err)
+		return err
+	}
+	c.log(slog.LevelDebug, "processed commit", "group", groupHex(groupID), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64())
+	return nil
 }
 
 // ProcessPublicMessage applies a proposal or commit received as a public MLS message.
@@ -898,18 +1001,43 @@ func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes
 	if err != nil {
 		return err
 	}
+	oldEpoch := g.Epoch().AsUint64()
+	c.log(slog.LevelDebug, "processing public message", "group", groupHex(groupID), "epoch", oldEpoch, "bytes", len(messageBytes))
 	msg, err := framing.UnmarshalMLSMessage(messageBytes)
 	if err != nil {
+		c.log(slog.LevelWarn, "processing public message failed: parse error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("parsing public message: %w", err)
 	}
 	pubMsg, ok := msg.AsPublic()
 	if !ok {
+		c.log(slog.LevelWarn, "processing public message failed: unexpected type", "group", groupHex(groupID))
 		return ErrUnexpectedMessageType
 	}
 	if err := g.ProcessPublicMessage(pubMsg); err != nil {
+		c.log(slog.LevelWarn, "processing public message failed: group processing error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("processing public message: %w", err)
 	}
-	return c.persistGroup(ctx, g, entry)
+	if pubMsg.Content.ContentType() == framing.ContentTypeProposal {
+		reviewable, reviewErr := c.reviewableProposalFromPublicMessage(g, pubMsg)
+		if reviewErr != nil {
+			return reviewErr
+		}
+		if err := c.reviewProposal(ctx, g, reviewable); err != nil {
+			acForRef := &framing.AuthenticatedContent{
+				WireFormat: framing.WireFormatPublicMessage,
+				Content:    pubMsg.Content,
+				Auth:       pubMsg.Auth,
+			}
+			g.RevokeProposal(group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite()))
+			return fmt.Errorf("proposal policy rejected received proposal: %w", err)
+		}
+	}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		c.log(slog.LevelWarn, "processing public message failed: persist error", "group", groupHex(groupID), "error", err)
+		return err
+	}
+	c.log(slog.LevelDebug, "processed public message", "group", groupHex(groupID), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64())
+	return nil
 }
 
 // SendMessageOption configures the behavior of a single SendMessage call.
@@ -1046,7 +1174,12 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 	return received, nil
 }
 
-// RemoveMember removes a member by credential identity and returns the commit bytes to broadcast.
+// RemoveMember removes a member by credential identity and returns the commit
+// bytes to broadcast (RFC 9420 §12.1.3).
+//
+// The removed member can no longer decrypt messages after this epoch — this is
+// the mechanism for post-compromise security when a device is lost or a member
+// is revoked. The commit advances the epoch and ratchets the key material.
 func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byte) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1071,6 +1204,13 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	if err != nil {
 		return nil, err
 	}
+	if err := c.reviewProposal(ctx, g, ReviewableProposal{
+		Type:   group.ProposalTypeRemove,
+		Sender: cloneBytes(c.identity),
+		Remove: &RemoveProposalInfo{RemovedIndex: uint32(leafIndex), Identity: cloneBytes(memberIdentity)},
+	}); err != nil {
+		return nil, fmt.Errorf("proposal policy rejected remove: %w", err)
+	}
 	if _, err := g.RemoveMember(leafIndex); err != nil {
 		return nil, fmt.Errorf("creating remove proposal: %w", err)
 	}
@@ -1078,12 +1218,19 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	if err != nil {
 		return nil, err
 	}
+	c.log(slog.LevelInfo, "member removed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "identity", memberIdentity)
 	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: memberIdentity})
 	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	return commit, nil
 }
 
-// SelfUpdate rotates the local member's leaf encryption key and returns the commit bytes to broadcast.
+// SelfUpdate rotates the local member's leaf encryption key and returns the
+// commit bytes to broadcast (RFC 9420 §12.1.2).
+//
+// A self-update is the primary mechanism for post-compromise security: it
+// replaces the member's HPKE encryption key in the ratchet tree, forcing a
+// new UpdatePath derivation that other members cannot derive from old state.
+// Applications should call SelfUpdate periodically or after suspected compromise.
 func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1111,6 +1258,7 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
+	c.log(slog.LevelInfo, "self update committed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64())
 	c.emitEvent(GroupEvent{Type: EventSelfUpdated, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
 	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	return commit, nil
@@ -1138,6 +1286,7 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) error {
 		return fmt.Errorf("deleting group state: %w", err)
 	}
 	delete(c.groupEntries, cacheKey)
+	c.log(slog.LevelInfo, "left group", "group", groupHex(groupID))
 	return nil
 }
 
@@ -1244,7 +1393,13 @@ func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo,
 	return out, nil
 }
 
-// Export derives exporter secret material for the current epoch.
+// Export derives exporter secret material for the current epoch using the
+// MLS-Exporter (RFC 9420 §8.5).
+//
+// The exporter allows applications to derive shared secrets from the group's
+// epoch secret for use outside of MLS — for example, to key a DTLS session,
+// derive an application-layer MAC key, or negotiate a sub-protocol.
+// Different (label, context) pairs produce independent secrets.
 func (c *Client) Export(ctx context.Context, groupID []byte, label string, exportContext []byte, length int) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1272,7 +1427,13 @@ func (c *Client) Export(ctx context.Context, groupID []byte, label string, expor
 	return cloneBytes(secret), nil
 }
 
-// EpochAuthenticator returns the epoch authenticator for the current epoch.
+// EpochAuthenticator returns the epoch authenticator for the current epoch
+// (RFC 9420 §8.2).
+//
+// The epoch authenticator is a per-epoch shared secret that can be used to
+// verify that two group members are in the same epoch — for example, by
+// displaying a safety number or feeding it into a channel binding protocol.
+// It changes with every commit.
 func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1296,7 +1457,13 @@ func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte
 	return cloneBytes(g.EpochAuthenticator()), nil
 }
 
-// GroupInfo returns a signed GroupInfo structure encoded as bytes.
+// GroupInfo returns a signed GroupInfo structure encoded as MLSMessage bytes
+// (RFC 9420 §12.4.3).
+//
+// GroupInfo is required for External Joins (§12.4.3.2) and can optionally
+// carry the full ratchet tree (§12.4.3.3) to avoid the joiner needing to
+// reconstruct it from the Delivery Service. Pass the bytes out-of-band to
+// a joiner who will call [Client.ExternalJoin].
 func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
 	if err := c.checkOpen(); err != nil {
@@ -1324,7 +1491,13 @@ func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) 
 	return gi.Marshal(), nil
 }
 
-// ExternalJoin performs an External Commit to join a group without a Welcome.
+// ExternalJoin performs an External Commit to join a group without a Welcome
+// (RFC 9420 §12.4.3.2).
+//
+// An external joiner uses the ExternalPub HPKE key from the GroupInfo to inject
+// fresh entropy into the key schedule without knowing any existing member's
+// private keys. The returned commit bytes must be broadcast to all current
+// members so they can process the new epoch.
 func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (groupID, commit []byte, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1558,16 +1731,21 @@ func memberInfoFromGroup(g *group.Group, member *group.Member) MemberInfo {
 }
 
 func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *groupEntry, errContext string) ([]byte, error) {
+	oldEpoch := g.Epoch().AsUint64()
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
+		c.log(slog.LevelDebug, "commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "context", errContext, "error", err)
 		return nil, fmt.Errorf("%s: %w", errContext, err)
 	}
 	if err := g.MergeCommit(staged); err != nil {
+		c.log(slog.LevelDebug, "merge commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, fmt.Errorf("merging own commit: %w", err)
 	}
 	if err := c.persistGroup(ctx, g, entry); err != nil {
+		c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, err
 	}
+	c.log(slog.LevelDebug, "commit applied", "group", groupHex(g.GroupID().AsSlice()), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64(), "context", errContext)
 	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
 		Content:       staged.AuthenticatedContent().Content,
 		Auth:          staged.AuthenticatedContent().Auth,
@@ -1672,6 +1850,9 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 
 	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.reviewStoredProposals(ctx, g); err != nil {
 		return nil, err
 	}
 
@@ -1858,6 +2039,10 @@ func (c *Client) commitPendingProposalsWithConfig(ctx context.Context, g *group.
 }
 
 func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group.Group, entry *groupEntry, opts CommitPendingProposalsOptions) (commit, welcome []byte, err error) {
+	oldEpoch := g.Epoch().AsUint64()
+	if err := c.reviewStoredProposals(ctx, g); err != nil {
+		return nil, nil, err
+	}
 	joinIdentities := make([][]byte, 0)
 	removeIdentities := make([][]byte, 0)
 	for _, stored := range g.StoredProposals() {
@@ -1880,6 +2065,7 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
+		c.log(slog.LevelDebug, "commit pending proposals failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, nil, fmt.Errorf("creating commit: %w", err)
 	}
 
@@ -1892,10 +2078,17 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	joinerSecret := staged.JoinerSecret()
 	if err := g.MergeCommit(staged); err != nil {
+		c.log(slog.LevelDebug, "merge pending proposals commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, nil, fmt.Errorf("merging own commit: %w", err)
 	}
 
-	c.log(slog.LevelInfo, "epoch advanced", "group", g.GroupID().AsSlice(), "epoch", g.Epoch().AsUint64())
+	c.log(slog.LevelDebug,
+		"epoch advanced",
+		"group", groupHex(g.GroupID().AsSlice()),
+		"from_epoch", oldEpoch,
+		"to_epoch", g.Epoch().AsUint64(),
+		"proposal_count", len(staged.Proposals()),
+	)
 
 	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
 		Content:       staged.AuthenticatedContent().Content,
@@ -1906,6 +2099,7 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	if len(newMemberKPs) == 0 {
 		if err := c.persistGroup(ctx, g, entry); err != nil {
+			c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 			return nil, nil, err
 		}
 		for _, identity := range removeIdentities {
@@ -1926,9 +2120,11 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 	}
 	welcomeObj, err := g.CreateWelcomeWithOpts(newMemberKPs, c.sigKey, welcomeOpts...)
 	if err != nil {
+		c.log(slog.LevelDebug, "creating welcome failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
 	}
 	if err := c.persistGroup(ctx, g, entry); err != nil {
+		c.log(slog.LevelDebug, "persist after welcome failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, nil, err
 	}
 	for _, identity := range joinIdentities {
@@ -1952,17 +2148,40 @@ func findMemberLeafIndexByIdentity(g *group.Group, memberIdentity []byte) (group
 }
 
 func (c *Client) validateCredential(ctx context.Context, cred *credentials.Credential) error {
-	if c.validator == nil || cred == nil {
+	if cred == nil {
 		return nil
 	}
-	if err := c.validator.ValidateCredential(ctx, cred); err != nil {
-		return fmt.Errorf("validating credential: %w", err)
+
+	switch cred.Type() {
+	case credentials.BasicCredential, credentials.X509Credential:
+		if c.validator == nil {
+			return nil
+		}
+		if err := c.validator.ValidateCredential(ctx, cred); err != nil {
+			return fmt.Errorf("validating credential: %w", err)
+		}
+		return nil
+	default:
+		if c.credentialHandlers == nil {
+			return ErrUnknownCredentialType
+		}
+		h := c.credentialHandlers.Get(cred.Type())
+		if h == nil {
+			return ErrUnknownCredentialType
+		}
+		raw := cred.Identity
+		if err := h.Validate(ctx, raw); err != nil {
+			return fmt.Errorf("validating custom credential type 0x%04x: %w", uint16(cred.Type()), err)
+		}
+		if _, err := h.Identity(raw); err != nil {
+			return fmt.Errorf("extracting custom credential identity for type 0x%04x: %w", uint16(cred.Type()), err)
+		}
+		return nil
 	}
-	return nil
 }
 
 func (c *Client) validateGroupMembers(ctx context.Context, g *group.Group) error {
-	if c.validator == nil || g == nil {
+	if g == nil {
 		return nil
 	}
 	for _, member := range g.GetMembers() {
@@ -1971,6 +2190,158 @@ func (c *Client) validateGroupMembers(ctx context.Context, g *group.Group) error
 		}
 	}
 	return nil
+}
+
+type clientGroupSnapshot struct {
+	epoch            uint64
+	memberIdentities [][]byte
+	extensions       []group.Extension
+}
+
+func (s *clientGroupSnapshot) Epoch() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.epoch
+}
+
+func (s *clientGroupSnapshot) MemberCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.memberIdentities)
+}
+
+func (s *clientGroupSnapshot) MemberIdentities() [][]byte {
+	if s == nil {
+		return nil
+	}
+	out := make([][]byte, 0, len(s.memberIdentities))
+	for _, identity := range s.memberIdentities {
+		out = append(out, cloneBytes(identity))
+	}
+	return out
+}
+
+func (s *clientGroupSnapshot) Extensions() []group.Extension {
+	if s == nil {
+		return nil
+	}
+	out := make([]group.Extension, len(s.extensions))
+	for i := range s.extensions {
+		out[i] = group.Extension{Type: s.extensions[i].Type}
+		out[i].Data = cloneBytes(s.extensions[i].Data)
+	}
+	return out
+}
+
+func newClientGroupSnapshot(g *group.Group) *clientGroupSnapshot {
+	if g == nil {
+		return nil
+	}
+	members := g.GetMembers()
+	memberIdentities := make([][]byte, 0, len(members))
+	for _, member := range members {
+		memberIdentities = append(memberIdentities, credentialIdentityBytes(member.Credential))
+	}
+
+	gc := g.GroupContext()
+	extensions := make([]group.Extension, 0)
+	if gc != nil {
+		extensions = make([]group.Extension, len(gc.Extensions))
+		for i := range gc.Extensions {
+			extensions[i] = group.Extension{Type: gc.Extensions[i].Type}
+			extensions[i].Data = cloneBytes(gc.Extensions[i].Data)
+		}
+	}
+
+	return &clientGroupSnapshot{
+		epoch:            g.Epoch().AsUint64(),
+		memberIdentities: memberIdentities,
+		extensions:       extensions,
+	}
+}
+
+func senderIdentityForLeaf(g *group.Group, sender group.LeafNodeIndex) []byte {
+	if g == nil {
+		return nil
+	}
+	member, ok := g.GetMember(sender)
+	if !ok || member == nil {
+		return nil
+	}
+	return credentialIdentityBytes(member.Credential)
+}
+
+func reviewableProposalFromProposal(g *group.Group, proposal *group.Proposal, senderIdentity []byte) ReviewableProposal {
+	reviewable := ReviewableProposal{Sender: cloneBytes(senderIdentity)}
+	if proposal == nil {
+		return reviewable
+	}
+	reviewable.Type = proposal.Type
+
+	if proposal.Type == group.ProposalTypeAdd && proposal.Add != nil && proposal.Add.KeyPackage != nil {
+		identity := []byte(nil)
+		if proposal.Add.KeyPackage.LeafNode != nil {
+			identity = credentialIdentityBytes(proposal.Add.KeyPackage.LeafNode.Credential)
+		}
+		reviewable.Add = &AddProposalInfo{Identity: identity}
+		reviewable.Add.KeyPackage = cloneBytes(proposal.Add.KeyPackage.Marshal())
+	}
+	if proposal.Type == group.ProposalTypeRemove && proposal.Remove != nil {
+		reviewable.Remove = &RemoveProposalInfo{RemovedIndex: uint32(proposal.Remove.Removed)}
+		if member, ok := g.GetMember(proposal.Remove.Removed); ok && member != nil {
+			reviewable.Remove.Identity = credentialIdentityBytes(member.Credential)
+		}
+	}
+	return reviewable
+}
+
+func (c *Client) reviewProposal(ctx context.Context, g *group.Group, proposal ReviewableProposal) error {
+	if c.proposalPolicies == nil {
+		return nil
+	}
+	snapshot := newClientGroupSnapshot(g)
+	if err := c.proposalPolicies.ReviewProposal(ctx, snapshot, proposal); err != nil {
+		return fmt.Errorf("reviewing proposal with policy hook: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) reviewStoredProposals(ctx context.Context, g *group.Group) error {
+	if c.proposalPolicies == nil {
+		return nil
+	}
+	snapshot := newClientGroupSnapshot(g)
+	for _, stored := range g.StoredProposals() {
+		if stored.Proposal == nil {
+			continue
+		}
+		reviewable := reviewableProposalFromProposal(g, stored.Proposal, senderIdentityForLeaf(g, stored.Sender))
+		if err := c.proposalPolicies.ReviewProposal(ctx, snapshot, reviewable); err != nil {
+			return fmt.Errorf("proposal policy rejected stored proposal: %w", err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) reviewableProposalFromPublicMessage(g *group.Group, pm *framing.PublicMessage) (ReviewableProposal, error) {
+	if pm == nil {
+		return ReviewableProposal{}, fmt.Errorf("public message is nil")
+	}
+	body, ok := pm.Content.Body.(framing.ProposalBody)
+	if !ok {
+		return ReviewableProposal{}, fmt.Errorf("public message is not a proposal")
+	}
+	proposal, err := group.UnmarshalProposal(body.Data)
+	if err != nil {
+		return ReviewableProposal{}, fmt.Errorf("unmarshaling proposal for policy review: %w", err)
+	}
+	senderIdentity := []byte(nil)
+	if pm.Content.Sender.Type == framing.SenderTypeMember {
+		senderIdentity = senderIdentityForLeaf(g, group.LeafNodeIndex(pm.Content.Sender.LeafIndex))
+	}
+	return reviewableProposalFromProposal(g, proposal, senderIdentity), nil
 }
 
 func (c *Client) checkOpen() error {

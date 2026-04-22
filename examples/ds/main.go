@@ -1,210 +1,235 @@
-// Package main provides a minimal MLS Delivery Service reference implementation.
-//
-// This is a demonstration implementation for learning and testing purposes.
-// It is NOT suitable for production use.
-//
-// # Features
-//
-//   - Group creation and key package registration
-//   - Welcome message delivery via SSE (Server-Sent Events)
-//   - Commit/proposal message submission
-//   - In-memory storage (no persistence)
-//
-// # Running
-//
-//	go run ./examples/ds/
-//
-// # API Endpoints
-//
-//	POST /groups              - Create a new group
-//	POST /groups/{id}/keypackages - Register a KeyPackage
-//	GET  /groups/{id}/keypackages - Get registered KeyPackages
-//	POST /groups/{id}/messages - Submit a Commit, Proposal, or Application message
-//	GET  /groups/{id}/events   - SSE stream of messages for a member
 package main
 
 import (
-	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
-
-	mls "github.com/thomas-vilte/mls-go"
-	"github.com/thomas-vilte/mls-go/ciphersuite"
-	"github.com/thomas-vilte/mls-go/framing"
 )
 
 var addr = flag.String("addr", ":8080", "HTTP server address")
 
 type deliveryService struct {
-	mu          sync.RWMutex
-	groups      map[string]*groupState
-	keyPackages map[string][]string
-	sseClients  map[string]map[chan []byte]struct{}
-	sseMu       sync.Mutex
+	mu         sync.RWMutex
+	groups     map[string]*groupState
+	sseMu      sync.Mutex
+	sseClients map[string]map[chan sseEvent]struct{}
 }
 
 type groupState struct {
-	client *mls.Client
+	keyPackages map[string][]byte
+}
+
+type sseEvent struct {
+	Sender  string `json:"sender"`
+	Message []byte `json:"message"`
+}
+
+type createGroupRequest struct {
+	GroupID string `json:"group_id"`
+}
+
+type createGroupResponse struct {
+	GroupID string `json:"group_id"`
+}
+
+type listGroupsResponse struct {
+	Groups []string `json:"groups"`
+}
+
+type registerKeyPackageRequest struct {
+	User       string `json:"user"`
+	KeyPackage []byte `json:"key_package"`
+}
+
+type keyPackageResponse struct {
+	User       string `json:"user"`
+	KeyPackage []byte `json:"key_package"`
+}
+
+type keyPackageUsersResponse struct {
+	Users []string `json:"users"`
+}
+
+type submitMessageRequest struct {
+	Sender  string `json:"sender"`
+	Message []byte `json:"message"`
 }
 
 func newDeliveryService() *deliveryService {
 	return &deliveryService{
-		groups:      make(map[string]*groupState),
-		keyPackages: make(map[string][]string),
-		sseClients:  make(map[string]map[chan []byte]struct{}),
+		groups:     make(map[string]*groupState),
+		sseClients: make(map[string]map[chan sseEvent]struct{}),
 	}
 }
 
-type CreateGroupRequest struct {
-	CipherSuite ciphersuite.CipherSuite `json:"cipher_suite"`
-}
-
-type CreateGroupResponse struct {
-	GroupID    string `json:"group_id"`
-	KeyPackage string `json:"key_package"`
-}
-
-type RegisterKPRequest struct {
-	KeyPackage string `json:"key_package"`
-}
-
-type SubmitMessageRequest struct {
-	Message string `json:"message"`
+func randomGroupID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func (ds *deliveryService) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
-	var req CreateGroupRequest
+	var req createGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	ctx := context.Background()
-	client, err := mls.NewClient([]byte("ds-user"), req.CipherSuite,
-		mls.WithLogger(slog.Default()),
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	groupID := req.GroupID
+	if groupID == "" {
+		var err error
+		groupID, err = randomGroupID()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("generating group id: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
-	groupID, err := client.CreateGroup(ctx)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	kp, err := client.FreshKeyPackageBytes(ctx)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	gidStr := string(groupID)
 	ds.mu.Lock()
-	ds.groups[gidStr] = &groupState{client: client}
-	ds.keyPackages[gidStr] = []string{string(kp)}
-	ds.sseClients[gidStr] = make(map[chan []byte]struct{})
-	ds.mu.Unlock()
-
-	resp := CreateGroupResponse{GroupID: gidStr, KeyPackage: string(kp)}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("Encode error: %v", err)
+	defer ds.mu.Unlock()
+	if _, exists := ds.groups[groupID]; exists {
+		http.Error(w, "group already exists", http.StatusConflict)
+		return
 	}
+	ds.groups[groupID] = &groupState{keyPackages: make(map[string][]byte)}
+	ds.sseClients[groupID] = make(map[chan sseEvent]struct{})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(createGroupResponse{GroupID: groupID})
 }
 
-func (ds *deliveryService) handleRegisterKP(w http.ResponseWriter, r *http.Request) {
+func (ds *deliveryService) handleListGroups(w http.ResponseWriter, _ *http.Request) {
+	ds.mu.RLock()
+	ids := make([]string, 0, len(ds.groups))
+	for id := range ds.groups {
+		ids = append(ids, id)
+	}
+	ds.mu.RUnlock()
+	sort.Strings(ids)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(listGroupsResponse{Groups: ids})
+}
+
+func (ds *deliveryService) handleRegisterKeyPackage(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 
-	var req RegisterKPRequest
+	var req registerKeyPackageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if req.User == "" {
+		http.Error(w, "user is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.KeyPackage) == 0 {
+		http.Error(w, "key_package is required", http.StatusBadRequest)
+		return
+	}
 
-	ds.mu.RLock()
+	ds.mu.Lock()
 	state, ok := ds.groups[groupID]
-	ds.mu.RUnlock()
 	if !ok {
+		ds.mu.Unlock()
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
 	}
-
-	kp, err := state.client.FreshKeyPackageBytes(context.Background())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	ds.mu.Lock()
-	ds.keyPackages[groupID] = append(ds.keyPackages[groupID], string(kp))
+	state.keyPackages[req.User] = append([]byte(nil), req.KeyPackage...)
 	ds.mu.Unlock()
 
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (ds *deliveryService) handleGetKeyPackages(w http.ResponseWriter, r *http.Request) {
+func (ds *deliveryService) handleListKeyPackageUsers(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
+	ds.mu.RLock()
+	state, ok := ds.groups[groupID]
+	if !ok {
+		ds.mu.RUnlock()
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	users := make([]string, 0, len(state.keyPackages))
+	for user := range state.keyPackages {
+		users = append(users, user)
+	}
+	ds.mu.RUnlock()
+	sort.Strings(users)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(keyPackageUsersResponse{Users: users})
+}
+
+func (ds *deliveryService) handleGetKeyPackageByUser(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	user := r.PathValue("user")
 
 	ds.mu.RLock()
-	kps, ok := ds.keyPackages[groupID]
+	state, ok := ds.groups[groupID]
+	if !ok {
+		ds.mu.RUnlock()
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	kp, ok := state.keyPackages[user]
 	ds.mu.RUnlock()
 	if !ok {
-		http.Error(w, "group not found", http.StatusNotFound)
+		http.Error(w, "key package not found for user", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string][]string{"key_packages": kps}); err != nil {
-		log.Printf("Encode error: %v", err)
+	_ = json.NewEncoder(w).Encode(keyPackageResponse{User: user, KeyPackage: kp})
+}
+
+func (ds *deliveryService) broadcast(groupID string, event sseEvent) {
+	ds.sseMu.Lock()
+	defer ds.sseMu.Unlock()
+	clients := ds.sseClients[groupID]
+	for ch := range clients {
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
 
 func (ds *deliveryService) handleSubmitMessage(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 
-	var req SubmitMessageRequest
+	var req submitMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if req.Sender == "" {
+		http.Error(w, "sender is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Message) == 0 {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
 
 	ds.mu.RLock()
-	state, ok := ds.groups[groupID]
+	_, ok := ds.groups[groupID]
 	ds.mu.RUnlock()
 	if !ok {
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
 	}
 
-	msg, err := framing.UnmarshalMLSMessage([]byte(req.Message))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	ds.sseMu.Lock()
-	for ch := range ds.sseClients[groupID] {
-		select {
-		case ch <- []byte(req.Message):
-		default:
-		}
-	}
-	ds.sseMu.Unlock()
-
-	if _, ok := msg.AsPublic(); ok {
-		if err := state.client.ProcessPublicMessage(context.Background(), []byte(groupID), []byte(req.Message)); err != nil {
-			log.Printf("ProcessPublicMessage error: %v", err)
-		}
-	}
-
+	ds.broadcast(groupID, sseEvent(req))
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -212,22 +237,23 @@ func (ds *deliveryService) handleSSE(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 
 	ds.mu.RLock()
-	if _, ok := ds.groups[groupID]; !ok {
-		ds.mu.RUnlock()
+	_, ok := ds.groups[groupID]
+	ds.mu.RUnlock()
+	if !ok {
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
 	}
-	ds.mu.RUnlock()
 
-	ch := make(chan []byte, 10)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ch := make(chan sseEvent, 32)
 	ds.sseMu.Lock()
 	ds.sseClients[groupID][ch] = struct{}{}
 	ds.sseMu.Unlock()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.(http.Flusher).Flush()
 
 	defer func() {
 		ds.sseMu.Lock()
@@ -236,12 +262,25 @@ func (ds *deliveryService) handleSSE(w http.ResponseWriter, r *http.Request) {
 		close(ch)
 	}()
 
-	for msg := range ch {
-		_, err := fmt.Fprintf(w, "data: %s\n\n", msg)
-		if err != nil {
-			break
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event := <-ch:
+			payload, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+				return
+			}
+			flusher.Flush()
 		}
-		w.(http.Flusher).Flush()
 	}
 }
 
@@ -251,9 +290,11 @@ func main() {
 	ds := newDeliveryService()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /groups", ds.handleListGroups)
 	mux.HandleFunc("POST /groups", ds.handleCreateGroup)
-	mux.HandleFunc("POST /groups/{id}/keypackages", ds.handleRegisterKP)
-	mux.HandleFunc("GET /groups/{id}/keypackages", ds.handleGetKeyPackages)
+	mux.HandleFunc("POST /groups/{id}/keypackages", ds.handleRegisterKeyPackage)
+	mux.HandleFunc("GET /groups/{id}/keypackages", ds.handleListKeyPackageUsers)
+	mux.HandleFunc("GET /groups/{id}/keypackages/{user}", ds.handleGetKeyPackageByUser)
 	mux.HandleFunc("POST /groups/{id}/messages", ds.handleSubmitMessage)
 	mux.HandleFunc("GET /groups/{id}/events", ds.handleSSE)
 

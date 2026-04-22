@@ -49,6 +49,19 @@ func WithPSKStore(store PSKStore) GroupOption {
 	}
 }
 
+// WithExtensionHandler registers a custom extension handler.
+func WithExtensionHandler(h ExtensionHandler) GroupOption {
+	return func(cfg *groupConfig) {
+		if h == nil {
+			return
+		}
+		if cfg.extensionHandlers == nil {
+			cfg.extensionHandlers = NewExtensionHandlerRegistry()
+		}
+		cfg.extensionHandlers.Register(h)
+	}
+}
+
 // WithCredentialValidator sets the credential validator for the group.
 func WithCredentialValidator(v CredentialValidator) GroupOption {
 	return func(cfg *groupConfig) {
@@ -57,6 +70,8 @@ func WithCredentialValidator(v CredentialValidator) GroupOption {
 }
 
 // ExtensionHandlerRegistryOption registers custom extension handlers.
+//
+// Deprecated: use WithExtensionHandler for incremental registration.
 func ExtensionHandlerRegistryOption(r *ExtensionHandlerRegistry) GroupOption {
 	return func(cfg *groupConfig) {
 		cfg.extensionHandlers = r

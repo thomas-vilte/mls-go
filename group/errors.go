@@ -120,6 +120,7 @@ var (
 	ErrWelcomePSKNotFound         = errors.New("group: PSK not found in store")
 	ErrWelcomeInvalidPSK          = errors.New("group: PSK is invalid")
 	ErrWelcomeInvalidGroupSecrets = errors.New("group: invalid group secrets")
+	ErrWelcomeJoinerSecretMissing = errors.New("group: joiner secret is nil")
 	ErrGroupInfoUnmarshal         = errors.New("group: cannot unmarshal group info")
 	ErrRatchetTreeUnmarshal       = errors.New("group: cannot unmarshal ratchet tree")
 	ErrLeafNodeInvalid            = errors.New("group: leaf node is invalid")

@@ -385,92 +385,7 @@ func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byt
 	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
 }
 
-// CreateWelcomeOptions configures Welcome message creation.
-//
-// The Welcome message allows new members to join an existing group by providing
-// them with the necessary cryptographic state to participate in the group.
-//
-// # Welcome Message Structure (RFC 9420 §11.2.2)
-//
-//	┌─────────────────────────────────────────────────────────────────┐
-//	│                    Welcome Message                               │
-//	├─────────────────────────────────────────────────────────────────┤
-//	│  ProtocolVersion version = mls10                                │
-//	│  CipherSuite cipher_suite                                       │
-//	│  EncryptedGroupSecrets secrets<V>                               │
-//	│    ├─ opaque key_package_ref<V>     - Hash of member's KeyPkg   │
-//	│    └─ HPKECiphertext encrypted_group_secrets                    │
-//	│  opaque encrypted_group_info<V>     - Encrypted GroupInfo       │
-//	└─────────────────────────────────────────────────────────────────┘
-//
-// # Key Schedule for Welcome (RFC 9420 §8, §12.4.3.1)
-//
-//	joiner_secret (from UpdatePath)
-//	    │
-//	    │  HKDF-Extract(joiner_secret, psk_secret=0^Nh)
-//	    ▼
-//	member_secret
-//	    │
-//	    │  DeriveSecret("welcome")
-//	    ▼
-//	welcome_secret
-//	    │
-//	    ├─► KdfExpandLabel("key")   ──► welcome_key (AES-128-GCM key)
-//	    └─► KdfExpandLabel("nonce")  ──► welcome_nonce (12 bytes)
-//
-// # Encryption Flow
-//
-//	┌─────────────────────────────────────────────────────────────────┐
-//	│              Welcome Encryption Process                         │
-//	├─────────────────────────────────────────────────────────────────┤
-//	│                                                                 │
-//	│  1. Derive welcome_secret from joiner_secret                    │
-//	│                                                                 │
-//	│  2. Encrypt GroupInfo:                                          │
-//	│     encrypted_group_info = AES-GCM-Seal(                        │
-//	│       welcome_key, welcome_nonce, GroupInfo, aad=[]            │
-//	│     )                                                           │
-//	│                                                                 │
-//	│  3. For each new member:                                        │
-//	│     a. Build GroupSecrets {joiner_secret, path_secret, psks}   │
-//	│     b. Encrypt with HPKE using member's InitKey:               │
-//	│        HPKE.Encrypt(init_key, "Welcome", encrypted_group_info)  │
-//	│     c. Add to secrets vector with key_package_ref              │
-//	│                                                                 │
-//	└─────────────────────────────────────────────────────────────────┘
-//
-// Parameters:
-//   - newMemberKeyPackages: KeyPackages of members being added
-//   - joinerSecret: joiner_secret from the commit's UpdatePath
-//   - pathSecret: Optional path_secret for the joining members
-//   - signerPrivKey: Private key to sign the GroupInfo
-//   - pskIDs: PreSharedKeyID entries for all PSK proposals in this commit
-//   - pskSecret: The psk_secret used in the key schedule (0^Nh if no PSKs)
-//
-// Returns:
-//   - Welcome message ready to send to new members
-//   - Error if key derivation or encryption fails
-//
-// RFC 9420 References:
-//   - §11.2.2: Welcome Message Structure
-//   - §12.4.3.1: Creating a Welcome
-//   - §8: Key Schedule for Welcome
-type CreateWelcomeOptions struct {
-	JoinerSecret  *ciphersuite.Secret
-	PathSecret    []byte
-	SignerPrivKey *ciphersuite.SignaturePrivateKey
-	PskIDs        []PskID
-	PskSecret     *ciphersuite.Secret
-	StagedCommit  *StagedCommit
-	// GroupInfoOption values to customize GroupInfo extension inclusion.
-	GroupInfoOptions []GroupInfoOption
-	// GroupInfo controls which extensions are included in the GroupInfo.
-	// By default, all RFC 9420 extensions are included.
-	//
-	// Deprecated: use GroupInfoOptions.
-	GroupInfoOpts GroupInfoOptions
-}
-
+// createWelcomeConfig stores CreateWelcomeWithOpts settings.
 type createWelcomeConfig struct {
 	joinerSecret  *ciphersuite.Secret
 	pathSecret    []byte
@@ -530,18 +445,6 @@ func defaultCreateWelcomeConfig(signerPrivKey *ciphersuite.SignaturePrivateKey) 
 	return createWelcomeConfig{signerPrivKey: signerPrivKey}
 }
 
-func createWelcomeConfigFromLegacy(opts CreateWelcomeOptions) createWelcomeConfig {
-	cfg := defaultCreateWelcomeConfig(opts.SignerPrivKey)
-	cfg.joinerSecret = opts.JoinerSecret
-	cfg.pathSecret = append([]byte(nil), opts.PathSecret...)
-	cfg.pskIDs = append([]PskID(nil), opts.PskIDs...)
-	cfg.pskSecret = opts.PskSecret
-	cfg.stagedCommit = opts.StagedCommit
-	cfg.groupInfoOpts = legacyGroupInfoOptions(opts.GroupInfoOpts)
-	cfg.groupInfoOpts = append(cfg.groupInfoOpts, opts.GroupInfoOptions...)
-	return cfg
-}
-
 func applyCreateWelcomeOptions(cfg *createWelcomeConfig, opts ...CreateWelcomeOption) {
 	for _, opt := range opts {
 		if opt != nil {
@@ -568,26 +471,6 @@ func (g *Group) CreateWelcomeWithOpts(
 		cfg.pskSecret,
 		cfg.stagedCommit,
 		cfg.groupInfoOpts...,
-	)
-}
-
-// CreateWelcomeWithOptions creates a Welcome message using an options struct.
-//
-// Deprecated: prefer CreateWelcomeWithOpts.
-func (g *Group) CreateWelcomeWithOptions(
-	newMemberKeyPackages []*keypackages.KeyPackage,
-	opts CreateWelcomeOptions,
-) (*Welcome, error) {
-	legacy := createWelcomeConfigFromLegacy(opts)
-	return g.createWelcome(
-		newMemberKeyPackages,
-		legacy.joinerSecret,
-		legacy.pathSecret,
-		legacy.signerPrivKey,
-		legacy.pskIDs,
-		legacy.pskSecret,
-		legacy.stagedCommit,
-		legacy.groupInfoOpts...,
 	)
 }
 
@@ -630,10 +513,10 @@ func (g *Group) createWelcome(
 	groupInfoOpts ...GroupInfoOption,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
-		return nil, fmt.Errorf("group not operational: %w", ErrInvalidGroupState)
+		return nil, fmt.Errorf("create welcome: %w", ErrGroupNotOperational)
 	}
 	if joinerSecret == nil {
-		return nil, fmt.Errorf("joiner secret is nil")
+		return nil, ErrWelcomeJoinerSecretMissing
 	}
 
 	// Compute welcome_secret per RFC 9420 §8, §12.4.3.1:

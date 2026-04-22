@@ -6,6 +6,18 @@
 
 Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420).
 
+## Performance
+
+Benchmarked on Intel Core i3-9100F (4 cores), linux/amd64, Go toolchain used by this repo.
+UpdatePath path-secret encryption runs in parallel (one goroutine per filtered copath level).
+
+| Operation       | 2 members | 10 members | 50 members | 100 members | 500 members |
+|-----------------|-----------|------------|------------|-------------|-------------|
+| Commit          | 468 us    | 1.15 ms    | 3.48 ms    | 6.80 ms     | 34.7 ms     |
+| JoinFromWelcome | 693 us    | 1.92 ms    | 8.08 ms    | 15.8 ms     | 77.7 ms     |
+
+Run with: `go test ./group/... -run=^$ -bench=BenchmarkCommit -benchmem -count=5` and `go test ./group/... -run=^$ -bench=BenchmarkJoinFromWelcome -benchmem -count=5`.
+
 **Current status:** `v1.2.0` — stable, interop-verified.
 
 ## Why This Exists
