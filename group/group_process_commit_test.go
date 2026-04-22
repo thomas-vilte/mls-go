@@ -70,11 +70,12 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 	// Create Welcome for Bob using the real joiner_secret from the StagedCommit (RFC 9420 §8).
 	joinerSecret := stagedCommit.JoinerSecret()
 
-	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: aliceSigPriv,
-		StagedCommit:  stagedCommit,
-	})
+	welcome, err := aliceGroup.CreateWelcomeWithOpts(
+		[]*keypackages.KeyPackage{bobKP},
+		aliceSigPriv,
+		WithJoinerSecret(joinerSecret),
+		WithStagedCommit(stagedCommit),
+	)
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
@@ -99,7 +100,7 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 	return aliceGroup, bobGroup, alicePriv, bobPriv
 }
 
-func TestCreateWelcomeWithOptions(t *testing.T) {
+func TestCreateWelcomeWithOpts_Basic(t *testing.T) {
 	aliceGroup, _, alicePriv, _ := setupTwoMemberGroup(t)
 	bobCred, _, err := credentials.GenerateCredentialWithKey([]byte("Bob2"))
 	if err != nil {
@@ -126,25 +127,26 @@ func TestCreateWelcomeWithOptions(t *testing.T) {
 		t.Fatalf("MergeCommit: %v", err)
 	}
 
-	welcomeFromOptions, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bobKP}, CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: aliceSigPriv,
-		StagedCommit:  sc,
-	})
+	welcomeFromOptions, err := aliceGroup.CreateWelcomeWithOpts(
+		[]*keypackages.KeyPackage{bobKP},
+		aliceSigPriv,
+		WithJoinerSecret(joinerSecret),
+		WithStagedCommit(sc),
+	)
 	if err != nil {
-		t.Fatalf("CreateWelcomeWithOptions: %v", err)
+		t.Fatalf("CreateWelcomeWithOpts: %v", err)
 	}
 
 	if len(welcomeFromOptions.Marshal()) == 0 {
-		t.Fatal("CreateWelcomeWithOptions() returned an empty Welcome")
+		t.Fatal("CreateWelcomeWithOpts() returned an empty Welcome")
 	}
 
 	joinedGroup, err := JoinFromWelcome(welcomeFromOptions, bobKP, bobPriv, nil)
 	if err != nil {
-		t.Fatalf("JoinFromWelcome(CreateWelcomeWithOptions): %v", err)
+		t.Fatalf("JoinFromWelcome(CreateWelcomeWithOpts): %v", err)
 	}
 	if joinedGroup == nil {
-		t.Fatal("JoinFromWelcome(CreateWelcomeWithOptions) returned nil group")
+		t.Fatal("JoinFromWelcome(CreateWelcomeWithOpts) returned nil group")
 	}
 }
 

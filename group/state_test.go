@@ -282,13 +282,14 @@ func TestUnmarshalGroupState_RebuildsProposalByRef(t *testing.T) {
 
 	// Verify Carol can join using the Welcome produced from the restored group.
 	joinerSecret := sc.JoinerSecret()
-	welcome, err := restored.CreateWelcomeWithOptions([]*keypackages.KeyPackage{carolKP}, CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: aliceSigPriv,
-		StagedCommit:  sc,
-	})
+	welcome, err := restored.CreateWelcomeWithOpts(
+		[]*keypackages.KeyPackage{carolKP},
+		aliceSigPriv,
+		WithJoinerSecret(joinerSecret),
+		WithStagedCommit(sc),
+	)
 	if err != nil {
-		t.Fatalf("CreateWelcomeWithOptions: %v", err)
+		t.Fatalf("CreateWelcomeWithOpts: %v", err)
 	}
 	carolGroup, err := JoinFromWelcome(welcome, carolKP, carolPriv, nil)
 	if err != nil {

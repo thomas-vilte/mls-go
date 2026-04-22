@@ -209,15 +209,16 @@ func BenchmarkJoinFromWelcome(b *testing.B) {
 			if err := creatorGroup.MergeCommit(staged); err != nil {
 				b.Fatalf("MergeCommit: %v", err)
 			}
-			welcomeObj, err := creatorGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{joinerKP}, CreateWelcomeOptions{
-				JoinerSecret:  joinerSecret,
-				SignerPrivKey: creatorSig,
-				PskIDs:        staged.PskIDs(),
-				PskSecret:     staged.RawPskSecret(),
-				StagedCommit:  staged,
-			})
+			welcomeObj, err := creatorGroup.CreateWelcomeWithOpts(
+				[]*keypackages.KeyPackage{joinerKP},
+				creatorSig,
+				WithJoinerSecret(joinerSecret),
+				WithPSKIDs(staged.PskIDs()),
+				WithPSKSecret(staged.RawPskSecret()),
+				WithStagedCommit(staged),
+			)
 			if err != nil {
-				b.Fatalf("CreateWelcomeWithOptions: %v", err)
+				b.Fatalf("CreateWelcomeWithOpts: %v", err)
 			}
 			welcomeMsg := &framing.MLSMessage{Welcome: welcomeObj.Marshal()}
 			parsedWelcome, err := UnmarshalWelcome(welcomeMsg.Welcome)

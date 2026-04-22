@@ -62,11 +62,12 @@ func makeTwoMemberGroups(t *testing.T) (aliceGroup, bobGroup *Group, alice, bob 
 	if err = aliceGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit: %v", err)
 	}
-	welcome, err := aliceGroup.CreateWelcomeWithOptions([]*keypackages.KeyPackage{bob.kp}, CreateWelcomeOptions{
-		JoinerSecret:  joinerSecret,
-		SignerPrivKey: alice.sigPriv,
-		StagedCommit:  sc,
-	})
+	welcome, err := aliceGroup.CreateWelcomeWithOpts(
+		[]*keypackages.KeyPackage{bob.kp},
+		alice.sigPriv,
+		WithJoinerSecret(joinerSecret),
+		WithStagedCommit(sc),
+	)
 	if err != nil {
 		t.Fatalf("CreateWelcome: %v", err)
 	}
