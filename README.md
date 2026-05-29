@@ -143,7 +143,7 @@ client.InviteMember(ctx, groupID, memberKPBytes)        // → commit, welcome
 client.JoinGroup(ctx, welcomeBytes)                     // → groupID
 client.ExternalJoin(ctx, groupInfoBytes)                // → groupID, commit
 client.RemoveMember(ctx, groupID, memberIdentity)       // → commit
-client.LeaveGroup(ctx, groupID)                         // local-only state cleanup
+client.LeaveGroup(ctx, groupID)                         // local-only - see note below
 
 // Proposals (batch flow)
 client.ProposeAddMember(ctx, groupID, memberKPBytes)    // → signed PublicMessage
@@ -172,6 +172,13 @@ client.GroupInfo(ctx, groupID)                          // signed GroupInfo byte
 // Process incoming
 client.ProcessCommit(ctx, groupID, commitBytes)
 ```
+
+> **Note - `LeaveGroup` is local-only.** It deletes this client's persisted
+> state but sends no commit to other members. Other members will keep this
+> client's leaf in the ratchet tree until an admin calls `RemoveMember` and
+> broadcasts the resulting commit. Until then the group cannot advance epochs
+> that require a path secret to be decrypted by this leaf. Use `RemoveMember`
+> (called by an admin) as the correct leave mechanism.
 
 ### Options
 
@@ -219,17 +226,27 @@ g.MarshalState() / group.UnmarshalGroupState()   // persist / restore
 ## Storage
 
 ```go
-// In-memory (tests / demos)
+// In-memory (tests / demos - state is lost on restart)
 store := memorystore.NewStore()
 
-// File-backed (durable)
+// File-backed (durable - see security note below)
 store, err := filestore.NewStore("/var/lib/myapp/mls")
 
-// Encrypted file-backed (recommended for production)
-encStore, err := storage.NewEncryptedStore(store, encryptionKey)
+// Encrypted file-backed (required for production)
+encStore, err := storage.NewEncryptedStore(store, encryptionKey) // 32-byte AES-256 key
 
 client, err := mls.NewClient(identity, cs, mls.WithStorage(encStore, encStore))
 ```
+
+> **Security - encrypt group state at rest.** `MarshalState` serializes the
+> complete MLS epoch state to JSON, including epoch secrets, leaf encryption
+> keys, and the ratchet tree. If this data is stored unencrypted an attacker
+> with file-system access can impersonate group members and decrypt past
+> messages.
+>
+> Always wrap the file store with `storage.NewEncryptedStore` (AES-256-GCM) in
+> production. The in-memory store is safe for tests and ephemeral processes
+> where state is never written to disk.
 
 ## Build And Test
 

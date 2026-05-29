@@ -81,7 +81,6 @@ func (h *HKDF) Extract(salt, ikm []byte) []byte {
 // Returns:
 //   - OKM: Output Keying Material
 //   - error: if length is too large (> 255 * HashLen per RFC 5869 §2.3)
-//
 func (h *HKDF) Expand(prk, info []byte, length int) ([]byte, error) {
 	maxLen := 255 * h.hashNew().Size()
 	if length > maxLen {

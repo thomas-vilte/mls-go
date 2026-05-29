@@ -53,7 +53,6 @@ func NewProposalPolicyRegistry() *ProposalPolicyRegistry {
 }
 
 // Register adds a proposal policy to the registry.
-// Register adds a proposal policy to the registry.
 func (r *ProposalPolicyRegistry) Register(p ProposalPolicy) {
 	if r == nil || p == nil {
 		return

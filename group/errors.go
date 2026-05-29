@@ -8,7 +8,7 @@ import (
 // Typed errors for semantic error handling
 // These errors contain context about the failure.
 
-// ErrEpochMismatch se retorna cuando un mensaje es de una epoch incorrecta.
+// ErrEpochMismatch is returned when a message belongs to the wrong epoch.
 type ErrEpochMismatch struct {
 	Got  uint64
 	Want uint64
@@ -18,7 +18,7 @@ func (e *ErrEpochMismatch) Error() string {
 	return fmt.Sprintf("group: epoch mismatch: message has %d, group is at %d", e.Got, e.Want)
 }
 
-// ErrGroupIDMismatch se retorna cuando un mensaje tiene un GroupID incorrecto.
+// ErrGroupIDMismatch is returned when a message carries an incorrect GroupID.
 type ErrGroupIDMismatch struct {
 	Got  []byte
 	Want []byte
@@ -28,7 +28,7 @@ func (e *ErrGroupIDMismatch) Error() string {
 	return fmt.Sprintf("group: group ID mismatch: message has %x, group is at %x", e.Got, e.Want)
 }
 
-// ErrInvalidSignature se retorna cuando una firma no verifica.
+// ErrInvalidSignature is returned when a signature does not verify.
 type ErrInvalidSignature struct {
 	Context string
 	Err     error
@@ -45,7 +45,7 @@ func (e *ErrInvalidSignature) Unwrap() error {
 	return e.Err
 }
 
-// ErrUnknownMember se retorna cuando el leaf index no existe en el árbol.
+// ErrUnknownMember is returned when the leaf index does not exist in the tree.
 type ErrUnknownMember struct {
 	LeafIndex uint32
 }
@@ -54,8 +54,8 @@ func (e *ErrUnknownMember) Error() string {
 	return fmt.Sprintf("group: unknown member or out of bounds leaf index: %d", e.LeafIndex)
 }
 
-// ErrDecryptionFailed se retorna cuando el descifrado AEAD falla.
-// Puede indicar un mensaje adulterado, una clave incorrecta o un replay.
+// ErrDecryptionFailed is returned when AEAD decryption fails.
+// This may indicate a tampered message, a wrong key, or a replay.
 type ErrDecryptionFailed struct {
 	Reason string
 	Err    error
