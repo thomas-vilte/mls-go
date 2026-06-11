@@ -62,6 +62,7 @@ jobs:
           files: docker/docker-compose.yml
           targets: mls-go,test-runner
           load: true
+          allow: fs.read=..
           set: |
             *.cache-from=type=gha,scope=interop-self
             *.cache-to=type=gha,scope=interop-self,mode=max
@@ -91,6 +92,7 @@ jobs:
           files: docker/docker-compose.yml
           targets: mls-go,test-runner
           load: true
+          allow: fs.read=..
           set: |
             *.cache-from=type=gha,scope=interop-cross
             *.cache-to=type=gha,scope=interop-cross,mode=max
@@ -124,6 +126,7 @@ jobs:
           files: docker/docker-compose.yml
           targets: mls-go,test-runner
           load: true
+          allow: fs.read=..
           set: |
             *.cache-from=type=gha,scope=interop-cross
             *.cache-to=type=gha,scope=interop-cross,mode=max
