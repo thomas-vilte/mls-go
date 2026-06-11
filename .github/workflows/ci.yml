@@ -103,12 +103,12 @@ jobs:
   bench:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
           cache: true
 
       - name: Run Benchmarks

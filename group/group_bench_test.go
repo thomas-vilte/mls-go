@@ -100,15 +100,16 @@ func BenchmarkCommit(b *testing.B) {
 
 func BenchmarkAddMember(b *testing.B) {
 	memberKp := benchMemberKP(b)
+	g, _ := setupBenchGroup(b, 2)
 
 	for b.Loop() {
-		b.StopTimer()
-		g, _ := setupBenchGroup(b, 2)
-		b.StartTimer()
-
 		if _, err := g.AddMember(memberKp); err != nil {
 			b.Fatalf("AddMember: %v", err)
 		}
+		// AddMember only stores a proposal; clear it (negligible cost, left
+		// in the timed portion) so the next iteration doesn't fail
+		// uniqueness validation against the same key package.
+		g.proposals.Clear()
 	}
 }
 

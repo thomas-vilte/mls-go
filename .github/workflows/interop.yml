@@ -59,7 +59,7 @@ jobs:
         uses: docker/bake-action@v5
         with:
           source: .
-          files: docker/docker-compose.yml
+          files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
           allow: fs.read=..
@@ -89,7 +89,8 @@ jobs:
         uses: docker/bake-action@v5
         with:
           source: .
-          files: docker/docker-compose.yml
+          workdir: docker
+          files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
           allow: fs.read=..
@@ -123,7 +124,8 @@ jobs:
         uses: docker/bake-action@v5
         with:
           source: .
-          files: docker/docker-compose.yml
+          workdir: docker
+          files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
           allow: fs.read=..

@@ -17,7 +17,6 @@
 //
 //	info = Serialize(VL("MLS 1.0 " + label) || VL(context))
 //
-//
 // # Supported Cipher Suites
 //
 //   - MLS_128_DHKEMP256_AES128GCM_SHA256_P256 (0x0002) - Mandatory for MLS 1.0
