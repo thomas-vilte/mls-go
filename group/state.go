@@ -35,21 +35,32 @@ import (
 //   - Members: Map of member state data
 //   - CachedPsks: Cached pre-shared keys for future epochs
 //   - MyLeafEncryptionKey: This member's current leaf encryption key
+//   - PathNodePrivKeys: Private HPKE keys for copath ancestor nodes derived from
+//     past UpdatePaths (RFC 9420 §12.4.2/§12.4.3.1), needed to decrypt path
+//     secrets in future commits where one of these nodes appears in the
+//     resolution. Without this, callers using CacheNone (which round-trips
+//     every group through Marshal/UnmarshalGroupState) lose this material and
+//     ProcessCommit can fail with ErrOwnLeafNotFound.
+//   - PendingUpdatePrivKey: Private HPKE key for a self-generated Update
+//     proposal (SelfUpdate) not yet committed; needed to decrypt the UpdatePath
+//     of the commit that merges this proposal.
 type GroupStateData struct {
-	GroupID               []byte                      `json:"group_id"`
-	Epoch                 uint64                      `json:"epoch"`
-	CipherSuite           uint16                      `json:"cipher_suite"`
-	OwnLeafIndex          uint32                      `json:"own_leaf_index"`
-	RatchetTree           []byte                      `json:"ratchet_tree"`
-	GroupContext          []byte                      `json:"group_context"`
-	InterimTranscriptHash []byte                      `json:"interim_transcript_hash"`
-	ConfirmationTag       []byte                      `json:"confirmation_tag"`
-	EpochSecrets          *schedule.EpochSecretsData  `json:"epoch_secrets"`
-	SecretTree            *secrettree.TreeState       `json:"secret_tree,omitempty"`
-	Members               map[uint32]*MemberStateData `json:"members"`
-	StoredProposals       []*StoredProposalStateData  `json:"stored_proposals,omitempty"`
-	CachedPsks            map[string][]byte           `json:"cached_psks"`
-	MyLeafEncryptionKey   []byte                      `json:"my_leaf_encryption_key"`
+	GroupID               []byte                        `json:"group_id"`
+	Epoch                 uint64                        `json:"epoch"`
+	CipherSuite           uint16                        `json:"cipher_suite"`
+	OwnLeafIndex          uint32                        `json:"own_leaf_index"`
+	RatchetTree           []byte                        `json:"ratchet_tree"`
+	GroupContext          []byte                        `json:"group_context"`
+	InterimTranscriptHash []byte                        `json:"interim_transcript_hash"`
+	ConfirmationTag       []byte                        `json:"confirmation_tag"`
+	EpochSecrets          *schedule.EpochSecretsData    `json:"epoch_secrets"`
+	SecretTree            *secrettree.TreeState         `json:"secret_tree,omitempty"`
+	Members               map[uint32]*MemberStateData   `json:"members"`
+	StoredProposals       []*StoredProposalStateData    `json:"stored_proposals,omitempty"`
+	CachedPsks            map[string][]byte             `json:"cached_psks"`
+	MyLeafEncryptionKey   []byte                        `json:"my_leaf_encryption_key"`
+	PathNodePrivKeys      map[treesync.NodeIndex][]byte `json:"path_node_priv_keys,omitempty"`
+	PendingUpdatePrivKey  []byte                        `json:"pending_update_priv_key,omitempty"`
 }
 
 // MemberStateData represents a group member in serialized state.
@@ -107,6 +118,8 @@ func (g *Group) MarshalState() ([]byte, error) {
 		Members:               make(map[uint32]*MemberStateData),
 		CachedPsks:            g.cachedPsks,
 		MyLeafEncryptionKey:   g.myLeafEncryptionKey,
+		PathNodePrivKeys:      g.pathNodePrivKeys,
+		PendingUpdatePrivKey:  g.pendingUpdatePrivKey,
 	}
 
 	// Serialize tree
@@ -240,6 +253,8 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		members:               make(map[LeafNodeIndex]*Member),
 		cachedPsks:            state.CachedPsks,
 		myLeafEncryptionKey:   state.MyLeafEncryptionKey,
+		pathNodePrivKeys:      state.PathNodePrivKeys,
+		pendingUpdatePrivKey:  state.PendingUpdatePrivKey,
 		proposals:             NewProposalStore(),
 		proposalByRef:         make(map[string]*Proposal),
 		state:                 StateOperational,
