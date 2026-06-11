@@ -1,0 +1,137 @@
+name: Interop
+
+# Validates interoperability (RFC 9420 wire format) against other MLS
+# implementations. The mlspp/openmls images are pulled prebuilt from GHCR
+# (published by build-interop-images.yml), so a full run takes ~5-10 min.
+#
+# Runs on PRs and pushes that touch protocol-relevant code; doc-only changes
+# skip it. Also nightly (catches upstream drift) and manually. The weekly
+# Saturday run additionally executes the deep_random stress configs, which
+# take hours and are excluded from regular runs.
+on:
+  schedule:
+    - cron: '0 4 * * *' # nightly at 04:00 UTC
+    - cron: '0 6 * * 6' # weekly stress run on Saturday at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      cross_target:
+        description: 'Cross-interop target'
+        required: false
+        default: 'mlspp'
+        type: choice
+        options: [mlspp, openmls]
+  push:
+    branches: [main, dev]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'docker/**'
+      - 'interop/**'
+      - '.github/workflows/interop.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'docker/**'
+      - 'interop/**'
+      - '.github/workflows/interop.yml'
+
+concurrency:
+  group: interop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-interop:
+    name: Self-interop (mls-go vs mls-go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build the compose services with the GitHub Actions layer cache so the
+      # mls-go and test-runner images are only rebuilt when their inputs change.
+      - name: Build images (cached)
+        uses: docker/bake-action@v5
+        with:
+          source: .
+          files: docker/docker-compose.yml
+          targets: mls-go,test-runner
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=interop-self
+            *.cache-to=type=gha,scope=interop-self,mode=max
+
+      - name: Run self-interop
+        run: ./docker/run-interop.sh self
+
+  cross-interop:
+    name: Cross-interop (mls-go vs ${{ inputs.cross_target || 'mlspp' }})
+    runs-on: ubuntu-latest
+    # Image is pulled prebuilt from GHCR; the suite itself runs in minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v3
+
+      # mls-go and test-runner are cheap to build; mlspp/openmls are pulled
+      # prebuilt from GHCR (published by the build-interop-images workflow),
+      # so this job never compiles C++/Rust.
+      - name: Build mls-go images (cached)
+        uses: docker/bake-action@v5
+        with:
+          source: .
+          files: docker/docker-compose.yml
+          targets: mls-go,test-runner
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=interop-cross
+            *.cache-to=type=gha,scope=interop-cross,mode=max
+
+      - name: Pull cross-target image from GHCR
+        run: docker compose -f docker/docker-compose.yml pull ${{ inputs.cross_target || 'mlspp' }}
+
+      - name: Run cross-interop
+        env:
+          CROSS_TARGET: ${{ inputs.cross_target || 'mlspp' }}
+        run: ./docker/run-interop.sh cross
+
+  # Weekly stress run: includes the deep_random configs (hours-long) that are
+  # excluded from regular runs. Only fires on the Saturday cron.
+  stress:
+    name: Stress interop (deep_random)
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * 6'
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build mls-go images (cached)
+        uses: docker/bake-action@v5
+        with:
+          source: .
+          files: docker/docker-compose.yml
+          targets: mls-go,test-runner
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=interop-cross
+            *.cache-to=type=gha,scope=interop-cross,mode=max
+
+      - name: Pull mlspp image from GHCR
+        run: docker compose -f docker/docker-compose.yml pull mlspp
+
+      - name: Run stress interop
+        env:
+          RUN_STRESS: '1'
+        run: ./docker/run-interop.sh all

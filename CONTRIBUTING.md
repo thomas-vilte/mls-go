@@ -56,7 +56,7 @@ go test ./group/... -run TestPassiveClientCommitVectors -v
 
 ## Pull requests
 
-1. Branch off `dev`, not `master`
+1. Branch off `dev`, not `main`
 2. Write tests
 3. Update relevant docs if the behavior changes
 4. PR description in English with a short explanation of what and why

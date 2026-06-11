@@ -19,6 +19,7 @@ services:
       start_period: 5s
 
   mlspp:
+    image: ghcr.io/thomas-vilte/mls-go/mlspp-interop:latest
     build:
       context: .
       dockerfile: Dockerfile.mlspp
@@ -37,6 +38,7 @@ services:
           memory: 2G
 
   openmls:
+    image: ghcr.io/thomas-vilte/mls-go/openmls-interop:latest
     build:
       context: .
       dockerfile: Dockerfile.openmls

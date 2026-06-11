@@ -1,5 +1,10 @@
 #!/bin/bash
-# MLSWG interoperability test runner
+# MLSWG interoperability test runner (local/manual use only).
+#
+# The supported path for interop testing is Docker: ./docker/run-interop.sh
+# (see interop/README.md). This script runs the server directly on the host
+# and is kept for quick local debugging against a locally built test-runner.
+#
 # Usage: ./run-interop-test.sh [config_name]
 # Example: ./run-interop-test.sh welcome_join
 

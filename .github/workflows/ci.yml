@@ -1,115 +1,115 @@
-#name: CI
-#
-#on:
-#  push:
-#    branches: [master, dev]
-#  pull_request:
-#    branches: [master, dev]
-#  schedule:
-#    - cron: '0 6 * * 0' # weekly on Sunday at 06:00 UTC (fuzz tests)
-#
-#jobs:
-#  test:
-#    name: Build & Test
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#        with:
-#          submodules: recursive
-#
-#      - uses: actions/setup-go@v5
-#        with:
-#          go-version: '1.26'
-#          cache: true
-#
-#      - name: Verify go.mod is tidy
-#        run: |
-#          go mod tidy
-#          git diff --exit-code go.mod go.sum
-#
-#      - name: Build
-#        run: go build ./...
-#
-#      - name: Test (race + coverage)
-#        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
-#
-#      - name: Upload coverage
-#        uses: codecov/codecov-action@v5
-#        with:
-#          files: ./coverage.txt
-#          flags: unittests
-#          fail_ci_if_error: false
-#
-#  lint:
-#    name: Lint
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - uses: actions/setup-go@v5
-#        with:
-#          go-version: '1.26'
-#          cache: true
-#
-#      - name: golangci-lint
-#        uses: golangci/golangci-lint-action@v6
-#        with:
-#          version: latest
-#          args: --timeout=5m
-#
-#  vet:
-#    name: Vet
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - uses: actions/setup-go@v5
-#        with:
-#          go-version: '1.26'
-#          cache: true
-#
-#      - run: go vet ./...
-#
-#  fuzz:
-#    name: Fuzz Tests
-#    runs-on: ubuntu-latest
-#    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - uses: actions/setup-go@v5
-#        with:
-#          go-version: '1.26'
-#          cache: true
-#
-#      - name: Fuzz ProcessReceivedCommit
-#        run: go test -fuzz=FuzzProcessReceivedCommit -fuzztime=30s ./group/
-#
-#      - name: Fuzz JoinFromWelcome
-#        run: go test -fuzz=FuzzJoinFromWelcome -fuzztime=30s ./group/
-#
-#      - name: Fuzz UnmarshalPrivateMessage
-#        run: go test -fuzz=FuzzUnmarshalPrivateMessage -fuzztime=30s ./framing/
-#
-#      - name: Fuzz UnmarshalPublicMessage
-#        run: go test -fuzz=FuzzUnmarshalPublicMessage -fuzztime=30s ./framing/
-#
-#      - name: Fuzz UnmarshalTreeFromExtension
-#        run: go test -fuzz=FuzzUnmarshalRatchetTree -fuzztime=30s ./treesync/
-#
-#      - name: Fuzz AEAD
-#        run: go test -fuzz=FuzzAEAD -fuzztime=30s ./ciphersuite/
-#
-#  bench:
-#    name: Performance Benchmarks
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - uses: actions/setup-go@v5
-#        with:
-#          go-version: '1.26'
-#          cache: true
-#
-#      - name: Run Benchmarks
-#        run: go test -bench=. -benchtime=5s ./group/ ./ciphersuite/
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  schedule:
+    - cron: '0 6 * * 0' # weekly on Sunday at 06:00 UTC (fuzz tests)
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race + coverage)
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          flags: unittests
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - run: go vet ./...
+
+  fuzz:
+    name: Fuzz Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Fuzz ProcessReceivedCommit
+        run: go test -fuzz=FuzzProcessReceivedCommit -fuzztime=30s ./group/
+
+      - name: Fuzz JoinFromWelcome
+        run: go test -fuzz=FuzzJoinFromWelcome -fuzztime=30s ./group/
+
+      - name: Fuzz UnmarshalPrivateMessage
+        run: go test -fuzz=FuzzUnmarshalPrivateMessage -fuzztime=30s ./framing/
+
+      - name: Fuzz UnmarshalPublicMessage
+        run: go test -fuzz=FuzzUnmarshalPublicMessage -fuzztime=30s ./framing/
+
+      - name: Fuzz UnmarshalTreeFromExtension
+        run: go test -fuzz=FuzzUnmarshalRatchetTree -fuzztime=30s ./treesync/
+
+      - name: Fuzz AEAD
+        run: go test -fuzz=FuzzAEAD -fuzztime=30s ./ciphersuite/
+
+  bench:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Run Benchmarks
+        run: go test -bench=. -benchtime=5s ./group/ ./ciphersuite/

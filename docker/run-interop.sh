@@ -9,7 +9,6 @@ MODE="${1:-all}"
 CONFIG_ARG="${2:-all}"
 SUITES="${SUITES:-1 2 3}"
 RUN_STRESS="${RUN_STRESS:-}"
-WAIT_SECS="${WAIT_SECS:-8}"
 CROSS_TARGET="${CROSS_TARGET:-mlspp}"
 # SEQUENTIAL=1 runs one cipher suite at a time instead of all in parallel.
 # Required for targets that don't handle concurrent gRPC connections well (e.g. OpenMLS).
@@ -167,12 +166,10 @@ printf "Summary: [%s] %s/%s passed\n" "$KIND" "$passed" "$total"
 
 echo -e "${YELLOW}Starting Docker services...${NC}"
 if [ "$MODE" = "self" ]; then
-    docker compose -f "$COMPOSE_FILE" up -d mls-go >/dev/null
+    docker compose -f "$COMPOSE_FILE" up -d --wait mls-go >/dev/null
 else
-    docker compose -f "$COMPOSE_FILE" up -d mls-go "$CROSS_TARGET" >/dev/null
+    docker compose -f "$COMPOSE_FILE" up -d --wait mls-go "$CROSS_TARGET" >/dev/null
 fi
-
-sleep "$WAIT_SECS"
 
 if [ "$MODE" = "all" ] || [ "$MODE" = "self" ]; then
     declare -a selected_self
