@@ -422,7 +422,12 @@ type Client struct {
 	paddingSize        int
 	cacheStrategy      CacheStrategy
 
-	events EventHandler
+	// eventsMu protects events. It is separate from mu because emitEvent
+	// must be safe to call while c.mu is held (e.g. from ExternalJoin) and
+	// because Close clears events after releasing mu (see Close).
+	eventsMu sync.RWMutex
+	events   EventHandler
+
 	closed bool
 	logger *slog.Logger
 
@@ -1589,8 +1594,11 @@ func (c *Client) Close() error {
 	c.identity = nil
 	c.pendingKPs = nil
 	c.groupEntries = nil
-	c.events = nil
 	c.mu.Unlock()
+
+	c.eventsMu.Lock()
+	c.events = nil
+	c.eventsMu.Unlock()
 
 	// Wait for all outstanding PendingCommitHandles to finish. We release c.mu
 	// first so that Confirm/Discard can still acquire entry.mu and call Done().
@@ -1720,10 +1728,15 @@ func groupCacheKeyBytes(groupID []byte) string {
 }
 
 func (c *Client) emitEvent(event GroupEvent) {
-	if c == nil || c.events == nil {
+	if c == nil {
 		return
 	}
+	c.eventsMu.RLock()
 	handler := c.events
+	c.eventsMu.RUnlock()
+	if handler == nil {
+		return
+	}
 	cloned := GroupEvent{
 		Type:           event.Type,
 		GroupID:        cloneBytes(event.GroupID),
