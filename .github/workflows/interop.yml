@@ -59,6 +59,7 @@ jobs:
         uses: docker/bake-action@v5
         with:
           source: .
+          workdir: docker
           files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
