@@ -331,7 +331,6 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	if err != nil {
 		return nil, fmt.Errorf("framing: getting leaf secret: %w", err)
 	}
-	leaf.SetSequenceNumber(uint64(senderData.Generation))
 
 	// Build PrivateContentAAD and decrypt content
 	aad := buildPrivateContentAAD(pm.GroupID, pm.Epoch, pm.ContentType, pm.AuthenticatedData)

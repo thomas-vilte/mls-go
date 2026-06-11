@@ -54,6 +54,15 @@ linters:
     godot:
       scope: declarations  # only exported declarations, not all comments
 
+  exclusions:
+    rules:
+      # test files get a bit more slack
+      - path: '_test\.go'
+        linters:
+          - errcheck
+          - gosec
+          - godot
+
 formatters:
   enable:
     - gofmt       # standard formatter
@@ -62,10 +71,3 @@ formatters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # test files get a bit more slack
-    - path: '_test\.go'
-      linters:
-        - errcheck
-        - gosec
-        - godot
