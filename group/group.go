@@ -447,11 +447,18 @@ func (g *Group) cacheOldEpoch(
 		CipherSuite:      oldCipherSuite,
 	}
 
-	// Evict entries older than maxCachedEpochs.
-	if oldEpoch >= maxCachedEpochs {
-		cutoff := oldEpoch - uint64(maxCachedEpochs)
+	// Evict entries that fall outside the retention window.
+	//
+	// After inserting oldEpoch the map holds up to oldEpoch+1 entries
+	// (epochs 0..oldEpoch). We want to keep exactly maxCachedEpochs of them,
+	// so any entry with epoch < oldEpoch-maxCachedEpochs+1 must go.
+	//
+	// The guard prevents uint64 underflow: when oldEpoch < maxCachedEpochs the
+	// map is still filling up and nothing needs to be evicted yet.
+	if oldEpoch >= uint64(maxCachedEpochs) {
+		cutoff := oldEpoch - uint64(maxCachedEpochs) + 1
 		for ep := range g.epochHistory {
-			if ep <= cutoff {
+			if ep < cutoff {
 				delete(g.epochHistory, ep)
 			}
 		}

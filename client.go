@@ -62,6 +62,9 @@ type clientConfig struct {
 	logger              *slog.Logger
 	credentialHandlers  *CredentialHandlerRegistry
 	proposalPolicies    *ProposalPolicyRegistry
+	// x509CredErr holds any error produced by WithX509Credential so that
+	// NewClient can surface it rather than silently falling back to Basic credentials.
+	x509CredErr error
 }
 
 // ClientOption configures optional Client behavior.
@@ -103,6 +106,7 @@ func WithPaddingSize(n int) ClientOption {
 // WithX509Credential configures the client to use an X.509 credential instead of a basic credential.
 //
 // This currently supports cipher suites that use ECDSA P-256 signatures.
+// If the certificate or key is invalid, NewClient will return an error.
 func WithX509Credential(certDER []byte, privKey *ecdsa.PrivateKey) ClientOption {
 	return func(cfg *clientConfig) {
 		if cfg == nil || len(certDER) == 0 || privKey == nil {
@@ -110,6 +114,13 @@ func WithX509Credential(certDER []byte, privKey *ecdsa.PrivateKey) ClientOption 
 		}
 		credWithKey, err := credentials.GenerateX509CredentialWithKey(certDER, privKey)
 		if err != nil {
+			cfg.x509CredErr = fmt.Errorf("WithX509Credential: %w", err)
+			return
+		}
+		// Eagerly validate the certificate DER so NewClient surfaces parse
+		// errors immediately rather than deferring them to the first operation.
+		if err := credWithKey.Credential.Validate(); err != nil {
+			cfg.x509CredErr = fmt.Errorf("WithX509Credential: %w", err)
 			return
 		}
 		cfg.credentialWithKey = credWithKey
@@ -411,9 +422,18 @@ type Client struct {
 	paddingSize        int
 	cacheStrategy      CacheStrategy
 
-	events EventHandler
+	// eventsMu protects events. It is separate from mu because emitEvent
+	// must be safe to call while c.mu is held (e.g. from ExternalJoin) and
+	// because Close clears events after releasing mu (see Close).
+	eventsMu sync.RWMutex
+	events   EventHandler
+
 	closed bool
 	logger *slog.Logger
+
+	// pendingHandles tracks how many PendingCommitHandles are outstanding.
+	// Close waits for all of them to be resolved before closing the store.
+	pendingHandles sync.WaitGroup
 
 	pendingKPs   map[string]*pendingEntry
 	groupEntries map[string]*groupEntry
@@ -444,6 +464,10 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 		if opt != nil {
 			opt(&cfg)
 		}
+	}
+	// Surface errors deferred by option functions (e.g. invalid X.509 certificate).
+	if cfg.x509CredErr != nil {
+		return nil, cfg.x509CredErr
 	}
 	if cfg.storage == nil {
 		cfg.storage = memorystore.NewStore()
@@ -1266,8 +1290,19 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 
 // LeaveGroup deletes the local persisted state for the group.
 //
-// The low-level group package currently rejects self-remove proposals from the
-// committer, so this helper performs a local leave only. No commit is produced.
+// WARNING: This is a LOCAL-ONLY operation. No commit is sent to the Delivery
+// Service and no other group member is notified that this client has left.
+// Other members will continue to include this identity in commits and will be
+// unable to advance past epochs where this client's leaf is expected to
+// decrypt UpdatePath secrets.
+//
+// RFC 9420 §12.1.3 describes the correct leave sequence: another member sends
+// a Remove proposal for this client's leaf, followed by a Commit. Until that
+// support is added, applications should coordinate out-of-band to have an
+// admin member remove this client before calling LeaveGroup.
+//
+// TODO: implement self-initiated Remove + Commit once the lower-level group
+// package lifts its restriction on the committer removing their own leaf.
 func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1544,17 +1579,31 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 
 // Close releases all resources held by the Client.
 // After Close, the Client must not be used.
+//
+// Close waits for any outstanding PendingCommitHandles to be resolved via
+// ConfirmPendingCommit or DiscardPendingCommit before closing the underlying
+// store. This prevents a race where a handle's persistGroup call races with
+// the store being closed.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
 	c.identity = nil
 	c.pendingKPs = nil
 	c.groupEntries = nil
+	c.mu.Unlock()
+
+	c.eventsMu.Lock()
 	c.events = nil
+	c.eventsMu.Unlock()
+
+	// Wait for all outstanding PendingCommitHandles to finish. We release c.mu
+	// first so that Confirm/Discard can still acquire entry.mu and call Done().
+	c.pendingHandles.Wait()
+
 	if closer, ok := any(c.store).(io.Closer); ok {
 		if err := closer.Close(); err != nil {
 			return err
@@ -1679,17 +1728,32 @@ func groupCacheKeyBytes(groupID []byte) string {
 }
 
 func (c *Client) emitEvent(event GroupEvent) {
-	if c == nil || c.events == nil {
+	if c == nil {
 		return
 	}
+	c.eventsMu.RLock()
 	handler := c.events
+	c.eventsMu.RUnlock()
+	if handler == nil {
+		return
+	}
 	cloned := GroupEvent{
 		Type:           event.Type,
 		GroupID:        cloneBytes(event.GroupID),
 		Epoch:          event.Epoch,
 		MemberIdentity: cloneBytes(event.MemberIdentity),
 	}
-	go handler(cloned)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// The EventHandler panicked. Log it if a logger is available,
+				// then swallow the panic - a misbehaving handler must not crash
+				// the calling goroutine or leave the Client in an inconsistent state.
+				c.log(slog.LevelWarn, "event handler panicked", "panic", r)
+			}
+		}()
+		handler(cloned)
+	}()
 }
 
 func isGroupStateNotFound(err error) bool {
@@ -1807,6 +1871,7 @@ func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.G
 // The application MUST call either ConfirmPendingCommit or DiscardPendingCommit
 // exactly once to release the group from StatePendingCommit.
 type PendingCommitHandle struct {
+	c                *Client
 	g                *group.Group
 	entry            *groupEntry
 	staged           *group.StagedCommit
@@ -1901,7 +1966,11 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 	// without re-loading from storage (which only stores StateOperational state).
 	entry.group = g
 
+	// Track outstanding handle so Close() can wait for it to be resolved.
+	c.pendingHandles.Add(1)
+
 	return &PendingCommitHandle{
+		c:                c,
 		g:                g,
 		entry:            entry,
 		staged:           staged,
@@ -1967,6 +2036,11 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 		handle.entry.group = nil
 	}
 
+	// Signal that this handle has been resolved so Close() can proceed.
+	if handle.c != nil {
+		handle.c.pendingHandles.Done()
+	}
+
 	return welcomeBytes, nil
 }
 
@@ -1997,6 +2071,11 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 
 	if c.cacheStrategy != CacheAlways {
 		handle.entry.group = nil
+	}
+
+	// Signal that this handle has been resolved so Close() can proceed.
+	if handle.c != nil {
+		handle.c.pendingHandles.Done()
 	}
 
 	return nil
