@@ -73,7 +73,6 @@ func Exporter(exporterSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite, la
 //
 //	authentication_key = HKDF-Expand(authentication_secret, "authentication_key", 32)
 //
-
 // Returns the 32-byte authentication key, or an error if authentication_secret is nil.
 func DeriveAuthenticationKey(authenticationSecret *ciphersuite.Secret) ([]byte, error) {
 	if authenticationSecret == nil {

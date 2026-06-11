@@ -386,7 +386,6 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 //
 //	After sending a message with generation j, the sender SHOULD advance
 //	the ratchet to generation j+1 and delete the secrets for generation j.
-//
 func (ls *LeafSecret) Advance() error {
 	return ls.ratchetTo(uint32(ls.generation) + 1)
 }
