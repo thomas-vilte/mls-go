@@ -472,12 +472,12 @@ func (ks *KeySchedule) WelcomeKeyNonce() (welcomeKey, welcomeNonce []byte, err e
 	}
 
 	// RFC 9420 §8: welcome_key/nonce use ExpandWithLabel (KdfExpandLabel)
-	key, err := ks.welcomeSecret.KdfExpandLabel("key", []byte{}, ks.ciphersuite.AeadKeyLength())
+	key, err := ks.welcomeSecret.KdfExpandLabel("key", []byte{}, ks.ciphersuite.AEADKeyLength())
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving welcome_key: %w", err)
 	}
 
-	nonce, err := ks.welcomeSecret.KdfExpandLabel("nonce", []byte{}, ks.ciphersuite.AeadNonceLength())
+	nonce, err := ks.welcomeSecret.KdfExpandLabel("nonce", []byte{}, ks.ciphersuite.AEADNonceLength())
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving welcome_nonce: %w", err)
 	}

@@ -10,7 +10,7 @@ import (
 // UpdatePath represents a path through the tree used in Commit messages.
 type UpdatePath struct {
 	LeafNode *LeafNodeData
-	Nodes    []ciphersuite.HpkeCiphertext
+	Nodes    []ciphersuite.HPKECiphertext
 }
 
 // PathSecret represents a secret derived from a path node.
@@ -19,7 +19,7 @@ type PathSecret struct {
 }
 
 // NewUpdatePath creates a new UpdatePath.
-func NewUpdatePath(leafNode *LeafNodeData, nodes []ciphersuite.HpkeCiphertext) *UpdatePath {
+func NewUpdatePath(leafNode *LeafNodeData, nodes []ciphersuite.HPKECiphertext) *UpdatePath {
 	return &UpdatePath{
 		LeafNode: leafNode,
 		Nodes:    nodes,
@@ -38,7 +38,7 @@ func (u *UpdatePath) Marshal() []byte {
 
 	nodesBuf := tls.NewWriter()
 	for _, node := range u.Nodes {
-		// Manual serialization of HpkeCiphertext
+		// Manual serialization of HPKECiphertext
 		ctBuf := tls.NewWriter()
 		ctBuf.WriteVLBytes(node.KEMOutput)
 		ctBuf.WriteVLBytes(node.Ciphertext)
@@ -74,7 +74,7 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 	}
 
 	nodesBuf := tls.NewReader(nodesBytes)
-	var nodes []ciphersuite.HpkeCiphertext
+	var nodes []ciphersuite.HPKECiphertext
 
 	for nodesBuf.Remaining() > 0 {
 		ctData, err := nodesBuf.ReadVLBytes()
@@ -92,7 +92,7 @@ func UnmarshalUpdatePath(data []byte) (*UpdatePath, error) {
 			return nil, err
 		}
 
-		nodes = append(nodes, ciphersuite.HpkeCiphertext{
+		nodes = append(nodes, ciphersuite.HPKECiphertext{
 			KEMOutput:  kemOutput,
 			Ciphertext: ciphertext,
 		})

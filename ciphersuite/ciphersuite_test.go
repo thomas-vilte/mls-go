@@ -51,9 +51,9 @@ func TestCipherSuite_HashAlgorithm(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_AeadAlgorithm tests AEAD algorithms.
-func TestCipherSuite_AeadAlgorithm(t *testing.T) {
-	aeadAlgo := MLS128DHKEMP256.AeadAlgorithm()
+// TestCipherSuite_AEADAlgorithm tests AEAD algorithms.
+func TestCipherSuite_AEADAlgorithm(t *testing.T) {
+	aeadAlgo := MLS128DHKEMP256.AEADAlgorithm()
 	if aeadAlgo != AES128GCM {
 		t.Errorf("MLS128DHKEMP256 should use AES128GCM, got %v", aeadAlgo)
 	}
@@ -75,17 +75,17 @@ func TestCipherSuite_HashLength(t *testing.T) {
 	}
 }
 
-// TestCipherSuite_AeadKeyLength tests AEAD key lengths.
-func TestCipherSuite_AeadKeyLength(t *testing.T) {
-	keyLen := MLS128DHKEMP256.AeadKeyLength()
+// TestCipherSuite_AEADKeyLength tests AEAD key lengths.
+func TestCipherSuite_AEADKeyLength(t *testing.T) {
+	keyLen := MLS128DHKEMP256.AEADKeyLength()
 	if keyLen != 16 {
 		t.Errorf("MLS128DHKEMP256 AEAD key length should be 16, got %d", keyLen)
 	}
 }
 
-// TestCipherSuite_AeadNonceLength tests nonce lengths.
-func TestCipherSuite_AeadNonceLength(t *testing.T) {
-	nonceLen := MLS128DHKEMP256.AeadNonceLength()
+// TestCipherSuite_AEADNonceLength tests nonce lengths.
+func TestCipherSuite_AEADNonceLength(t *testing.T) {
+	nonceLen := MLS128DHKEMP256.AEADNonceLength()
 	if nonceLen != 12 {
 		t.Errorf("MLS128DHKEMP256 AEAD nonce length should be 12, got %d", nonceLen)
 	}
@@ -138,8 +138,8 @@ func TestHashAlgorithm_String(t *testing.T) {
 	}
 }
 
-// TestAeadAlgorithm_KeyLength tests AEAD key lengths.
-func TestAeadAlgorithm_KeyLength(t *testing.T) {
+// TestAEADAlgorithm_KeyLength tests AEAD key lengths.
+func TestAEADAlgorithm_KeyLength(t *testing.T) {
 	keyLen128 := AES128GCM.KeyLength()
 	if keyLen128 != 16 {
 		t.Errorf("AES128GCM key length should be 16, got %d", keyLen128)
@@ -197,8 +197,8 @@ func TestEqualCT(t *testing.T) {
 	}
 
 	// Empty
-	e := []byte{}
-	f := []byte{}
+	var e []byte
+	var f []byte
 	if !EqualCT(e, f) {
 		t.Error("EqualCT should return true for empty slices")
 	}

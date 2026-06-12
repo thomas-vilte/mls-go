@@ -238,13 +238,13 @@ func Encrypt(p EncryptParams) (*PrivateMessage, error) {
 	}
 
 	// Derive sender_data key/nonce using KdfExpandLabel with ciphertext_sample (RFC §6.3.2)
-	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AeadKeyLength())
+	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_key: %w", err)
 	}
 	defer sdKey.SecureZero()
 
-	sdNonce, err := p.SenderDataSecret.KdfExpandLabel("nonce", sample, p.CipherSuite.AeadNonceLength())
+	sdNonce, err := p.SenderDataSecret.KdfExpandLabel("nonce", sample, p.CipherSuite.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_nonce: %w", err)
 	}
@@ -299,13 +299,13 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	}
 
 	// Derive sender_data key/nonce with KdfExpandLabel (RFC §6.3.2)
-	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AeadKeyLength())
+	sdKey, err := p.SenderDataSecret.KdfExpandLabel("key", sample, p.CipherSuite.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_key: %w", err)
 	}
 	defer sdKey.SecureZero()
 
-	sdNonce, err := p.SenderDataSecret.KdfExpandLabel("nonce", sample, p.CipherSuite.AeadNonceLength())
+	sdNonce, err := p.SenderDataSecret.KdfExpandLabel("nonce", sample, p.CipherSuite.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("framing: deriving sender_data_nonce: %w", err)
 	}

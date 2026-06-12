@@ -43,12 +43,12 @@ func TestHash_UnsupportedSuite(t *testing.T) {
 }
 
 // ============================================================================
-// AeadAlgorithm.String()
+// AEADAlgorithm.String()
 // ============================================================================
 
-func TestAeadAlgorithm_String(t *testing.T) {
+func TestAEADAlgorithm_String(t *testing.T) {
 	cases := []struct {
-		alg  AeadAlgorithm
+		alg  AEADAlgorithm
 		want string
 	}{
 		{AES128GCM, "AES-128-GCM"},
@@ -57,7 +57,7 @@ func TestAeadAlgorithm_String(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := tc.alg.String(); got != tc.want {
-			t.Errorf("AeadAlgorithm(%d).String() = %q, want %q", tc.alg, got, tc.want)
+			t.Errorf("AEADAlgorithm(%d).String() = %q, want %q", tc.alg, got, tc.want)
 		}
 	}
 }

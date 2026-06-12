@@ -426,7 +426,7 @@ func (ls *LeafSecret) ApplicationKey(generation uint32) ([]byte, error) {
 			return nil, fmt.Errorf("application key for generation %d not in cache", generation)
 		}
 	}
-	key, err := secret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AeadKeyLength())
+	key, err := secret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving application key: %w", err)
 	}
@@ -460,7 +460,7 @@ func (ls *LeafSecret) ApplicationNonce(generation uint32) ([]byte, error) {
 			return nil, fmt.Errorf("application nonce for generation %d not in cache", generation)
 		}
 	}
-	nonce, err := secret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AeadNonceLength())
+	nonce, err := secret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving application nonce: %w", err)
 	}
@@ -498,7 +498,7 @@ func (ls *LeafSecret) HandshakeKey(generation uint32) ([]byte, error) {
 			return nil, fmt.Errorf("handshake key for generation %d not in cache", generation)
 		}
 	}
-	key, err := secret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AeadKeyLength())
+	key, err := secret.KdfExpandLabel("key", uint32ToBytes(generation), ls.cs.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving handshake key: %w", err)
 	}
@@ -532,7 +532,7 @@ func (ls *LeafSecret) HandshakeNonce(generation uint32) ([]byte, error) {
 			return nil, fmt.Errorf("handshake nonce for generation %d not in cache", generation)
 		}
 	}
-	nonce, err := secret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AeadNonceLength())
+	nonce, err := secret.KdfExpandLabel("nonce", uint32ToBytes(generation), ls.cs.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving handshake nonce: %w", err)
 	}
