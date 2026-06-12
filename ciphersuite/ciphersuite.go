@@ -184,8 +184,8 @@ func (cs CipherSuite) HashAlgorithm() HashAlgorithm {
 	}
 }
 
-// AeadAlgorithm returns the AEAD algorithm for the cipher suite.
-func (cs CipherSuite) AeadAlgorithm() AeadAlgorithm {
+// AEADAlgorithm returns the AEAD algorithm for the cipher suite.
+func (cs CipherSuite) AEADAlgorithm() AEADAlgorithm {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256:
 		return AES128GCM
@@ -258,8 +258,8 @@ func (cs CipherSuite) HashLength() int {
 	}
 }
 
-// AeadKeyLength returns the AEAD key length in bytes.
-func (cs CipherSuite) AeadKeyLength() int {
+// AEADKeyLength returns the AEAD key length in bytes.
+func (cs CipherSuite) AEADKeyLength() int {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMP256:
 		return 16 // AES-128
@@ -272,8 +272,8 @@ func (cs CipherSuite) AeadKeyLength() int {
 	}
 }
 
-// AeadNonceLength returns the AEAD nonce length in bytes (12 for all supported algorithms).
-func (cs CipherSuite) AeadNonceLength() int {
+// AEADNonceLength returns the AEAD nonce length in bytes (12 for all supported algorithms).
+func (cs CipherSuite) AEADNonceLength() int {
 	return 12 // Both AES-GCM and ChaCha20-Poly1305 use 12-byte nonces
 }
 
@@ -357,24 +357,24 @@ func (h HashAlgorithm) Size() int {
 	}
 }
 
-// AeadAlgorithm identifies AEAD algorithms as defined in RFC 9420 §5.1.
-type AeadAlgorithm uint16
+// AEADAlgorithm identifies AEAD algorithms as defined in RFC 9420 §5.1.
+type AEADAlgorithm uint16
 
 const (
 	// AES128GCM is AES-128-GCM (16-byte key, 12-byte nonce)
 	// RFC 9420 §5.1: Used by cipher suites 1 and 2
-	AES128GCM AeadAlgorithm = 0x0001
+	AES128GCM AEADAlgorithm = 0x0001
 
 	// AES256GCM is AES-256-GCM (32-byte key, 12-byte nonce)
 	// RFC 9420 §5.1: Used by cipher suites 4 and 5 (not implemented)
-	AES256GCM AeadAlgorithm = 0x0002
+	AES256GCM AEADAlgorithm = 0x0002
 
 	// ChaCha20Poly1305 is ChaCha20-Poly1305 (32-byte key, 12-byte nonce)
 	// RFC 9420 §5.1: Used by cipher suites 3, 6, and 7
-	ChaCha20Poly1305 AeadAlgorithm = 0x0003
+	ChaCha20Poly1305 AEADAlgorithm = 0x0003
 )
 
-func (a AeadAlgorithm) String() string {
+func (a AEADAlgorithm) String() string {
 	switch a {
 	case AES128GCM:
 		return "AES-128-GCM"
@@ -388,7 +388,7 @@ func (a AeadAlgorithm) String() string {
 }
 
 // KeyLength returns the key length in bytes for the AEAD algorithm.
-func (a AeadAlgorithm) KeyLength() int {
+func (a AEADAlgorithm) KeyLength() int {
 	switch a {
 	case AES128GCM:
 		return 16
@@ -400,7 +400,7 @@ func (a AeadAlgorithm) KeyLength() int {
 }
 
 // NonceLength returns the nonce length in bytes (12 for all AEAD algorithms).
-func (a AeadAlgorithm) NonceLength() int {
+func (a AEADAlgorithm) NonceLength() int {
 	return 12
 }
 
@@ -462,12 +462,13 @@ func (s SignatureScheme) HashFunction() func() hash.Hash {
 type HPKEConfig struct {
 	KEM  KEMAlgorithm
 	KDF  KDFAlgorithm
-	AEAD AeadAlgorithm
+	AEAD AEADAlgorithm
 }
 
 // KEMAlgorithm identifies KEM algorithms for HPKE as defined in RFC 9180 §4.1.
 type KEMAlgorithm uint16
 
+//goland:noinspection ALL
 const (
 	// DHKEM_P256_HKDF_SHA256 is DHKEM with P-256 and HKDF-SHA256
 	// RFC 9180 §4.1: Used by cipher suite 2 (mandatory for MLS 1.0)
@@ -501,6 +502,7 @@ func (k KEMAlgorithm) String() string {
 // KDFAlgorithm identifies KDF algorithms for HPKE as defined in RFC 9180 §4.1.
 type KDFAlgorithm uint16
 
+//goland:noinspection ALL
 const (
 	// HKDF_SHA256 is HKDF-SHA256 (32 bytes output)
 	// RFC 9180 §4.1: Used by cipher suites 1, 2, and 3
@@ -524,8 +526,8 @@ func (k KDFAlgorithm) String() string {
 	}
 }
 
-// HpkeCiphertext represents an HPKE ciphertext.
-type HpkeCiphertext struct {
+// HPKECiphertext represents an HPKE ciphertext.
+type HPKECiphertext struct {
 	KEMOutput  []byte
 	Ciphertext []byte
 }

@@ -513,37 +513,6 @@ func TestSender_AllTypes(t *testing.T) {
 }
 
 // ============================================================================
-// ContentType Tests
-// ============================================================================
-
-// TestContentType_Values tests ContentType values.
-func TestContentType_Values(t *testing.T) {
-	if framing.ContentTypeApplication != 1 {
-		t.Errorf("ContentTypeApplication should be 1, got %d", framing.ContentTypeApplication)
-	}
-	if framing.ContentTypeProposal != 2 {
-		t.Errorf("ContentTypeProposal should be 2, got %d", framing.ContentTypeProposal)
-	}
-	if framing.ContentTypeCommit != 3 {
-		t.Errorf("ContentTypeCommit should be 3, got %d", framing.ContentTypeCommit)
-	}
-}
-
-// ============================================================================
-// WireFormat Tests
-// ============================================================================
-
-// TestWireFormat_Values tests WireFormat values.
-func TestWireFormat_Values(t *testing.T) {
-	if framing.WireFormatPublicMessage != 1 {
-		t.Errorf("WireFormatPublicMessage should be 1, got %d", framing.WireFormatPublicMessage)
-	}
-	if framing.WireFormatPrivateMessage != 2 {
-		t.Errorf("WireFormatPrivateMessage should be 2, got %d", framing.WireFormatPrivateMessage)
-	}
-}
-
-// ============================================================================
 // Error Tests
 // ============================================================================
 

@@ -165,7 +165,11 @@ func (tvg *TestVectorGenerator) GenerateOneToOneJoin() (*TestVector, error) {
 		})
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	gc := aliceGroup.GroupContext()
+	if gc == nil {
+		return nil, fmt.Errorf("group context is nil after merge")
+	}
+	tv.ExpectedTreeHash = hex.EncodeToString(gc.TreeHash)
 	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 
@@ -281,7 +285,11 @@ func (tvg *TestVectorGenerator) GenerateThreePartyJoin() (*TestVector, error) {
 		return nil, fmt.Errorf("merging commit 2: %w", err)
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	gc := aliceGroup.GroupContext()
+	if gc == nil {
+		return nil, fmt.Errorf("group context is nil after merge")
+	}
+	tv.ExpectedTreeHash = hex.EncodeToString(gc.TreeHash)
 	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 
@@ -404,7 +412,11 @@ func (tvg *TestVectorGenerator) GenerateMemberRemoval() (*TestVector, error) {
 		return nil, fmt.Errorf("merging commit 3: %w", err)
 	}
 
-	tv.ExpectedTreeHash = hex.EncodeToString(aliceGroup.GroupContext().TreeHash)
+	gc := aliceGroup.GroupContext()
+	if gc == nil {
+		return nil, fmt.Errorf("group context is nil after merge")
+	}
+	tv.ExpectedTreeHash = hex.EncodeToString(gc.TreeHash)
 	tv.ExpectedEpoch = aliceGroup.Epoch().AsUint64()
 	tv.ExpectedNumMembers = aliceGroup.MemberCount()
 

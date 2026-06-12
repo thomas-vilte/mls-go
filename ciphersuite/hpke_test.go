@@ -91,7 +91,7 @@ func TestHPKE_TamperedCiphertext(t *testing.T) {
 	}
 
 	// Tamper with ciphertext
-	tampered := &HpkeCiphertext{
+	tampered := &HPKECiphertext{
 		KEMOutput:  make([]byte, len(ciphertext.KEMOutput)),
 		Ciphertext: make([]byte, len(ciphertext.Ciphertext)),
 	}

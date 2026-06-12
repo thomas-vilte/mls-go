@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
@@ -16,113 +16,183 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/thomas-vilte/mls-go/interop/server/proto"
 )
 
-// /
-// / Configuration
-// /
+// ClientMode represents the mode for assigning clients to roles.
 type ClientMode string
+
+// HandshakeMode represents the mode for handshake message encryption.
 type HandshakeMode string
+
+// ScriptAction represents a type of action in a test script.
 type ScriptAction string
 
 const (
-	ClientModeAll    ClientMode = "allCombinations"
+	// ClientModeAll runs all combinations of client-to-role assignments.
+	ClientModeAll ClientMode = "allCombinations"
+	// ClientModeRandom runs a single random assignment of clients to roles.
 	ClientModeRandom ClientMode = "random"
 
-	HandshakeModeAll     HandshakeMode = "all"
+	// HandshakeModeAll runs both encrypted and plaintext handshakes.
+	HandshakeModeAll HandshakeMode = "all"
+	// HandshakeModePrivate runs only encrypted handshakes.
 	HandshakeModePrivate HandshakeMode = "private"
-	HandshakeModePublic  HandshakeMode = "public"
+	// HandshakeModePublic runs only plaintext handshakes.
+	HandshakeModePublic HandshakeMode = "public"
 
-	ActionCreateGroup                    ScriptAction = "createGroup"
-	ActionCreateKeyPackage               ScriptAction = "createKeyPackage"
-	ActionJoinGroup                      ScriptAction = "joinGroup"
-	ActionExternalJoin                   ScriptAction = "externalJoin"
-	ActionInstallExternalPSK             ScriptAction = "installExternalPSK"
-	ActionGroupInfo                      ScriptAction = "groupInfo"
-	ActionAddProposal                    ScriptAction = "addProposal"
-	ActionUpdateProposal                 ScriptAction = "updateProposal"
-	ActionRemoveProposal                 ScriptAction = "removeProposal"
-	ActionExternalPSKProposal            ScriptAction = "externalPSKProposal"
-	ActionResumptionPSKProposal          ScriptAction = "resumptionPSKProposal"
+	// ActionCreateGroup creates a group with the specified members.
+	ActionCreateGroup ScriptAction = "createGroup"
+	// ActionCreateKeyPackage creates a key package for a client.
+	ActionCreateKeyPackage ScriptAction = "createKeyPackage"
+	// ActionJoinGroup joins a group using a welcome message.
+	ActionJoinGroup ScriptAction = "joinGroup"
+	// ActionExternalJoin performs an external join.
+	ActionExternalJoin ScriptAction = "externalJoin"
+	// ActionInstallExternalPSK installs an external PSK for specified clients.
+	ActionInstallExternalPSK ScriptAction = "installExternalPSK"
+	// ActionGroupInfo retrieves group information.
+	ActionGroupInfo ScriptAction = "groupInfo"
+	// ActionAddProposal creates an add proposal.
+	ActionAddProposal ScriptAction = "addProposal"
+	// ActionUpdateProposal creates an update proposal.
+	ActionUpdateProposal ScriptAction = "updateProposal"
+	// ActionRemoveProposal creates a remove proposal.
+	ActionRemoveProposal ScriptAction = "removeProposal"
+	// ActionExternalPSKProposal creates an external PSK proposal.
+	ActionExternalPSKProposal ScriptAction = "externalPSKProposal"
+	// ActionResumptionPSKProposal creates a resumption PSK proposal.
+	ActionResumptionPSKProposal ScriptAction = "resumptionPSKProposal"
+	// ActionGroupContextExtensionsProposal creates a group context extensions proposal.
 	ActionGroupContextExtensionsProposal ScriptAction = "groupContextExtensionsProposal"
-	ActionFullCommit                     ScriptAction = "fullCommit"
-	ActionCommit                         ScriptAction = "commit"
-	ActionHandleCommit                   ScriptAction = "handleCommit"
-	ActionHandlePendingCommit            ScriptAction = "handlePendingCommit"
-	ActionProtect                        ScriptAction = "protect"
-	ActionUnprotect                      ScriptAction = "unprotect"
-	ActionReInit                         ScriptAction = "reinit"
-	ActionBranch                         ScriptAction = "branch"
-	ActionNewMemberAddProposal           ScriptAction = "newMemberAddProposal"
-	ActionAddExternalSigner              ScriptAction = "addExternalSigner"
-	ActionExternalSignerProposal         ScriptAction = "externalSignerProposal"
+	// ActionFullCommit creates a commit and applies it to all members and joiners.
+	ActionFullCommit ScriptAction = "fullCommit"
+	// ActionCommit creates a commit without applying it.
+	ActionCommit ScriptAction = "commit"
+	// ActionHandleCommit handles an incoming commit.
+	ActionHandleCommit ScriptAction = "handleCommit"
+	// ActionHandlePendingCommit handles a pending commit at the committer.
+	ActionHandlePendingCommit ScriptAction = "handlePendingCommit"
+	// ActionProtect encrypts application data.
+	ActionProtect ScriptAction = "protect"
+	// ActionUnprotect decrypts application data.
+	ActionUnprotect ScriptAction = "unprotect"
+	// ActionReInit reinitializes a group.
+	ActionReInit ScriptAction = "reinit"
+	// ActionBranch branches a group into a new group.
+	ActionBranch ScriptAction = "branch"
+	// ActionNewMemberAddProposal creates a self-signed add proposal from a new member.
+	ActionNewMemberAddProposal ScriptAction = "newMemberAddProposal"
+	// ActionAddExternalSigner adds an external signer to a group.
+	ActionAddExternalSigner ScriptAction = "addExternalSigner"
+	// ActionExternalSignerProposal creates a proposal signed by an external signer.
+	ActionExternalSignerProposal ScriptAction = "externalSignerProposal"
 
+	// TimeoutSeconds is the default timeout for RPC calls.
 	TimeoutSeconds = 120
 )
 
+// ScriptStep represents a single step in a test script.
 type ScriptStep struct {
-	Actor  string       `json:"actor"`
+	// Actor is the name of the actor performing this step.
+	Actor string `json:"actor"`
+	// Action is the action to perform.
 	Action ScriptAction `json:"action"`
-	Raw    []byte       `json:"raw"`
+	// Raw is the raw JSON of the step parameters.
+	Raw []byte `json:"raw"`
 }
 
+// CreateGroupStepParams contains parameters for creating a group.
 type CreateGroupStepParams struct {
+	// Members is the list of initial members to add.
 	Members []string `json:"members"`
 }
 
+// JoinGroupStepParams contains parameters for joining a group.
 type JoinGroupStepParams struct {
+	// Welcome is the index of the welcome message.
 	Welcome int `json:"welcome"`
 }
 
+// ExternalJoinStepParams contains parameters for an external join.
 type ExternalJoinStepParams struct {
-	Joiner       string   `json:"joiner"`
-	Members      []string `json:"members"`
-	ExternalTree bool     `json:"externalTree"`
-	RemovePrior  bool     `json:"removePrior"`
-	PSKs         []int    `json:"psks"`
+	// Joiner is the name of the joiner.
+	Joiner string `json:"joiner"`
+	// Members is the list of existing members.
+	Members []string `json:"members"`
+	// ExternalTree indicates whether to use an external ratchet tree.
+	ExternalTree bool `json:"externalTree"`
+	// RemovePrior indicates whether to remove prior members.
+	RemovePrior bool `json:"removePrior"`
+	// PSKs is the list of PSK indices.
+	PSKs []int `json:"psks"`
 }
 
+// GroupInfoStepParams contains parameters for retrieving group info.
 type GroupInfoStepParams struct {
+	// ExternalTree indicates whether to include an external ratchet tree.
 	ExternalTree bool `json:"externalTree"`
 }
 
+// InstallExternalPSKStepParams contains parameters for installing an external PSK.
 type InstallExternalPSKStepParams struct {
+	// Clients is the list of clients to install the PSK on.
 	Clients []string `json:"clients"`
 }
 
+// AddProposalStepParams contains parameters for an add proposal.
 type AddProposalStepParams struct {
+	// KeyPackage is the index of the key package.
 	KeyPackage int `json:"keyPackage"`
 }
 
+// RemoveProposalStepParams contains parameters for a remove proposal.
 type RemoveProposalStepParams struct {
+	// Removed is the name of the member to remove.
 	Removed string `json:"removed"`
 }
 
+// ExternalPSKProposalStepParams contains parameters for an external PSK proposal.
 type ExternalPSKProposalStepParams struct {
+	// PskId is the index of the PSK ID.
 	PskId int `json:"pskID"`
 }
 
+// ResumptionPSKProposalStepParams contains parameters for a resumption PSK proposal.
 type ResumptionPSKProposalStepParams struct {
+	// EpochId is the epoch ID for the resumption PSK.
 	EpochId int `json:"epochID"`
 }
 
+// GroupContextExtensionsProposalStepParams contains parameters for a group context extensions proposal.
 type GroupContextExtensionsProposalStepParams struct {
+	// Extensions is the list of extensions to propose.
 	Extensions []*pb.Extension `json:"extensions"`
 }
 
+// ProposalDescription describes a proposal to include in a commit.
 type ProposalDescription struct {
-	ProposalType      string          `json:"proposalType"`
-	KeyPackage        int             `json:"keyPackage"`
-	Removed           string          `json:"removed"`
-	PskId             int             `json:"pskID"`
-	EpochId           int             `json:"epochID"`
-	Extensions        []*pb.Extension `json:"extensions"`
-	ChangeGroupId     bool            `json:"changeGroupID"`
-	ChangeCipherSuite bool            `json:"changeCipherSuite"`
+	// ProposalType is the type of proposal (e.g. "add", "remove").
+	ProposalType string `json:"proposalType"`
+	// KeyPackage is the index of the key package (for add proposals).
+	KeyPackage int `json:"keyPackage"`
+	// Removed is the name of the member to remove (for remove proposals).
+	Removed string `json:"removed"`
+	// PskId is the index of the PSK ID (for external PSK proposals).
+	PskId int `json:"pskID"`
+	// EpochId is the epoch ID (for resumption PSK proposals).
+	EpochId int `json:"epochID"`
+	// Extensions is the list of extensions (for GCE proposals).
+	Extensions []*pb.Extension `json:"extensions"`
+	// ChangeGroupId indicates whether to generate a new group ID.
+	ChangeGroupId bool `json:"changeGroupID"`
+	// ChangeCipherSuite indicates whether to change the ciphersuite.
+	ChangeCipherSuite bool `json:"changeCipherSuite"`
 }
 
+// ProposalDescriptionToProto converts a ProposalDescription to a protobuf ProposalDescription.
 func (proposalDescription *ProposalDescription) ProposalDescriptionToProto(config *ScriptActorConfig) (*pb.ProposalDescription, error) {
 	proposalDescProto := &pb.ProposalDescription{ProposalType: []byte(proposalDescription.ProposalType)}
 	var err error
@@ -160,66 +230,109 @@ func (proposalDescription *ProposalDescription) ProposalDescriptionToProto(confi
 	return proposalDescProto, nil
 }
 
+// FullCommitStepParams contains parameters for a full commit step.
 type FullCommitStepParams struct {
-	ByReference  []int                 `json:"byReference"`
-	ByValue      []ProposalDescription `json:"byValue"`
-	Members      []string              `json:"members"`
-	Joiners      []string              `json:"joiners"`
-	ForcePath    bool                  `json:"force_path"`
-	ExternalTree bool                  `json:"external_tree"`
+	// ByReference is the list of proposal indices to include by reference.
+	ByReference []int `json:"byReference"`
+	// ByValue is the list of proposals to include by value.
+	ByValue []ProposalDescription `json:"byValue"`
+	// Members is the list of existing members to apply the commit to.
+	Members []string `json:"members"`
+	// Joiners is the list of new members to join after the commit.
+	Joiners []string `json:"joiners"`
+	// ForcePath indicates whether to force a path update.
+	ForcePath bool `json:"force_path"`
+	// ExternalTree indicates whether to use an external ratchet tree.
+	ExternalTree bool `json:"external_tree"`
 }
 
+// CommitStepParams contains parameters for a commit step.
 type CommitStepParams struct {
-	ByReference  []int                 `json:"byReference"`
-	ByValue      []ProposalDescription `json:"byValue"`
-	ForcePath    bool                  `json:"force_path"`
-	ExternalTree bool                  `json:"external_tree"`
+	// ByReference is the list of proposal indices to include by reference.
+	ByReference []int `json:"byReference"`
+	// ByValue is the list of proposals to include by value.
+	ByValue []ProposalDescription `json:"byValue"`
+	// ForcePath indicates whether to force a path update.
+	ForcePath bool `json:"force_path"`
+	// ExternalTree indicates whether to use an external ratchet tree.
+	ExternalTree bool `json:"external_tree"`
 }
 
+// HandleCommitStepParams contains parameters for handling a commit.
 type HandleCommitStepParams struct {
-	Commit      int   `json:"commit"`
+	// Commit is the index of the commit message.
+	Commit int `json:"commit"`
+	// ByReference is the list of proposal indices referenced in the commit.
 	ByReference []int `json:"byReference"`
 }
 
+// ProtectStepParams contains parameters for encrypting application data.
 type ProtectStepParams struct {
+	// AuthenticatedData is the authenticated data.
 	AuthenticatedData string `json:"authenticatedData"`
-	Plaintext         string `json:"plaintext"`
+	// Plaintext is the plaintext to encrypt.
+	Plaintext string `json:"plaintext"`
 }
 
+// UnprotectStepParams contains parameters for decrypting application data.
 type UnprotectStepParams struct {
+	// Ciphertext is the index of the ciphertext to decrypt.
 	Ciphertext int `json:"ciphertext"`
 }
 
+// ReInitStepParams contains parameters for reinitializing a group.
 type ReInitStepParams struct {
-	Proposer               string          `json:"proposer"`
-	Committer              string          `json:"committer"`
-	Welcomer               string          `json:"welcomer"`
-	Members                []string        `json:"members"`
-	ChangeCipherSuite      bool            `json:"changeCipherSuite"`
-	ChangeGroupID          bool            `json:"changeGroupID"`
-	Extensions             []*pb.Extension `json:"extensions"`
-	ForcePath              bool            `json:"forcePath"`
-	ExternalTree           bool            `json:"externalTree"`
-	ExternalReinitProposal int             `json:"externalReinitProposal"`
+	// Proposer is the name of the proposer (empty if using external proposal).
+	Proposer string `json:"proposer"`
+	// Committer is the name of the committer.
+	Committer string `json:"committer"`
+	// Welcomer is the name of the welcomer.
+	Welcomer string `json:"welcomer"`
+	// Members is the list of existing members.
+	Members []string `json:"members"`
+	// ChangeCipherSuite indicates whether to change the ciphersuite.
+	ChangeCipherSuite bool `json:"changeCipherSuite"`
+	// ChangeGroupID indicates whether to change the group ID.
+	ChangeGroupID bool `json:"changeGroupID"`
+	// Extensions is the list of extensions for the new group.
+	Extensions []*pb.Extension `json:"extensions"`
+	// ForcePath indicates whether to force a path update.
+	ForcePath bool `json:"forcePath"`
+	// ExternalTree indicates whether to use an external ratchet tree.
+	ExternalTree bool `json:"externalTree"`
+	// ExternalReinitProposal is the index of an external reinit proposal.
+	ExternalReinitProposal int `json:"externalReinitProposal"`
 }
 
+// BranchStepParams contains parameters for branching a group.
 type BranchStepParams struct {
-	Members      []string        `json:"members"`
-	ForcePath    bool            `json:"force_path"`
-	ExternalTree bool            `json:"external_tree"`
-	Extensions   []*pb.Extension `json:"extensions"`
+	// Members is the list of members to include in the branch.
+	Members []string `json:"members"`
+	// ForcePath indicates whether to force a path update.
+	ForcePath bool `json:"force_path"`
+	// ExternalTree indicates whether to use an external ratchet tree.
+	ExternalTree bool `json:"external_tree"`
+	// Extensions is the list of extensions for the new branch.
+	Extensions []*pb.Extension `json:"extensions"`
 }
 
+// NewMemberAddProposalStepParams contains parameters for a new member add proposal.
 type NewMemberAddProposalStepParams struct {
+	// Joiner is the name of the joining member.
 	Joiner string `json:"joiner"`
 }
 
+// AddExternalSignerStepParams contains parameters for adding an external signer.
 type AddExternalSignerStepParams struct {
+	// Signer is the name of the external signer.
 	Signer string `json:"signer"`
 }
 
+// ExternalSignerProposalStepParams contains parameters for creating a proposal signed by an external signer.
 type ExternalSignerProposalStepParams struct {
-	Member      string              `json:"member"`
+	// Member is the name of the group member providing group info.
+	Member string `json:"member"`
+	// Description is the proposal description.
 	Description ProposalDescription `json:"description"`
 }
 
@@ -233,7 +346,7 @@ func (step *ScriptStep) UnmarshalJSON(data []byte) error {
 	if action, ok := parsed["action"]; ok {
 		step.Action = ScriptAction(action.(string))
 	} else {
-		return fmt.Errorf("Incomplete step: Missing action")
+		return fmt.Errorf("incomplete step: Missing action")
 	}
 
 	if actor, ok := parsed["actor"]; ok {
@@ -246,6 +359,7 @@ func (step *ScriptStep) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Script is a sequence of script steps.
 type Script []ScriptStep
 
 func (s Script) Actors() []string {
@@ -308,42 +422,59 @@ func (s Script) Actors() []string {
 	return actors
 }
 
+// RunConfig represents the test runner configuration.
 type RunConfig struct {
-	Mode    ClientMode        `json:"mode",omitempty`
-	Scripts map[string]Script `json:"scripts",omitempty`
+	// Mode is the client assignment mode.
+	Mode ClientMode `json:"mode,omitempty"`
+	// Scripts is a map of script names to script steps.
+	Scripts map[string]Script `json:"scripts,omitempty"`
 }
 
 // /
 // / Results
 // /
 
+// RPCTranscriptEntry records a single RPC call in a script execution.
 type RPCTranscriptEntry struct {
-	Actor    string      `json:"actor"`
-	RPC      string      `json:"rpc"`
-	Request  interface{} `json:"request"`
+	// Actor is the name of the actor.
+	Actor string `json:"actor"`
+	// RPC is the name of the RPC method.
+	RPC string `json:"rpc"`
+	// Request is the request payload.
+	Request interface{} `json:"request"`
+	// Response is the response payload.
 	Response interface{} `json:"response"`
 }
 
+// ScriptResult holds the result of running a script with a specific configuration.
 type ScriptResult struct {
-	CipherSuite      uint32            `json:"cipher_suite"`
-	Actors           map[string]string `json:"actors"`
-	EncryptHandshake bool              `json:"encrypt_flag"`
+	// CipherSuite is the ciphersuite used.
+	CipherSuite uint32 `json:"cipher_suite"`
+	// Actors maps actor names to client names.
+	Actors map[string]string `json:"actors"`
+	// EncryptHandshake indicates whether handshake messages were encrypted.
+	EncryptHandshake bool `json:"encrypt_flag"`
 
-	Transcript     []RPCTranscriptEntry `json:"transcript,omitempty"`
-	Error          interface{}          `json:"error,omitempty"`
-	FailedStep     *int                 `json:"failed_step,omitempty"`
-	FailedStepJSON string               `json:"failed_step_json,omitempty"`
+	// Transcript is the RPC transcript (only populated on failure).
+	Transcript []RPCTranscriptEntry `json:"transcript,omitempty"`
+	// Error is the error message if the script failed.
+	Error interface{} `json:"error,omitempty"`
+	// FailedStep is the index of the step that failed.
+	FailedStep *int `json:"failed_step,omitempty"`
+	// FailedStepJSON is the raw JSON of the failed step.
+	FailedStepJSON string `json:"failed_step_json,omitempty"`
 }
 
+// ScriptResults is a list of script results.
 type ScriptResults []ScriptResult
 
+// TestResults holds results for all scripts.
 type TestResults struct {
+	// Scripts maps script names to their results.
 	Scripts map[string]ScriptResults `json:"scripts"`
 }
 
-// /
-// / Clients
-// /
+// Client represents a connection to an MLS client.
 type Client struct {
 	conn      *grpc.ClientConn
 	rpc       pb.MLSClientClient
@@ -352,21 +483,26 @@ type Client struct {
 }
 
 func ctx() context.Context {
-	c, _ := context.WithTimeout(context.Background(), time.Second*TimeoutSeconds)
-	return c
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*TimeoutSeconds)
+	go func() {
+		<-ctx.Done()
+		cancel()
+	}()
+	return ctx
 }
 
+// NewClient creates a new Client connected to the given address.
 func NewClient(addr string) (*Client, error) {
 	c := &Client{}
 	var err error
 
 	defer func() {
 		if err != nil && c.conn != nil {
-			c.conn.Close()
+			_ = c.conn.Close()
 		}
 	}()
 
-	c.conn, err = grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
+	c.conn, err = grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
@@ -376,11 +512,13 @@ func NewClient(addr string) (*Client, error) {
 	// Get the client's name and supported ciphersuites
 	nr, err := c.rpc.Name(ctx(), &pb.NameRequest{})
 	if err != nil {
+		_ = c.conn.Close()
 		return nil, err
 	}
 
 	scr, err := c.rpc.SupportedCiphersuites(ctx(), &pb.SupportedCiphersuitesRequest{})
 	if err != nil {
+		_ = c.conn.Close()
 		return nil, err
 	}
 
@@ -393,11 +531,13 @@ func NewClient(addr string) (*Client, error) {
 	return c, nil
 }
 
+// ClientPool manages a pool of connected MLS clients.
 type ClientPool struct {
 	clients      []*Client
 	suiteSupport map[uint32][]int
 }
 
+// NewClientPool creates a ClientPool from a list of client addresses.
 func NewClientPool(configs []string) (*ClientPool, error) {
 	p := &ClientPool{
 		clients:      make([]*Client, len(configs)),
@@ -408,6 +548,7 @@ func NewClientPool(configs []string) (*ClientPool, error) {
 	for i, addr := range configs {
 		p.clients[i], err = NewClient(addr)
 		if err != nil {
+			p.Close()
 			return nil, err
 		}
 
@@ -421,7 +562,7 @@ func NewClientPool(configs []string) (*ClientPool, error) {
 
 func (p *ClientPool) Close() {
 	for _, c := range p.clients {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 }
 
@@ -453,14 +594,17 @@ func combinationsInner(vals int, slots int, base [][]int) [][]int {
 	return combinationsInner(vals, slots-1, out)
 }
 
-// Each script is run for each combination of:
-// * Ciphersuite
-// * Assignment of clients to roles
-// * Encrypted or plaintext handshake
+// ScriptActorConfig represents the configuration for running a single script iteration.
+// Each script is run for each combination of ciphersuite, client-to-role assignment,
+// and encrypted or plaintext handshake.
+// ScriptActorConfig holds the configuration for running a script with specific actors.
 type ScriptActorConfig struct {
-	CipherSuite      uint32
+	// CipherSuite is the ciphersuite to use.
+	CipherSuite uint32
+	// EncryptHandshake indicates whether to encrypt handshake messages.
 	EncryptHandshake bool
-	ActorClients     map[string]*Client
+	// ActorClients maps actor names to client connections.
+	ActorClients map[string]*Client
 
 	stateID       map[string]uint32
 	transactionID map[string]uint32
@@ -485,7 +629,7 @@ func (config *ScriptActorConfig) StoreMessage(index int, key string, message []b
 func (config *ScriptActorConfig) GetMessage(index int, key string) ([]byte, error) {
 	messageHex, ok := config.messageCache[index][key]
 	if !ok {
-		return nil, fmt.Errorf("No message for key %s at step %d", key, index)
+		return nil, fmt.Errorf("no message for key %s at step %d", key, index)
 	}
 
 	message, err := hex.DecodeString(messageHex)
@@ -659,7 +803,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "JoinGroup", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Joiner [%s] failed to agree on epoch authenticator", member)
+				return fmt.Errorf("joiner [%s] failed to agree on epoch authenticator", member)
 			}
 
 			config.stateID[member] = resp.StateId
@@ -695,7 +839,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 
 		txID, ok := config.transactionID[step.Actor]
 		if !ok {
-			return fmt.Errorf("Malformed step: No transaction for %s", step.Actor)
+			return fmt.Errorf("malformed step: No transaction for %s", step.Actor)
 		}
 
 		req := &pb.JoinGroupRequest{
@@ -720,8 +864,8 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 		// Get a GroupInfo and maybe a ratchet tree from the adder
-		groupInfo := []byte{}
-		ratchetTree := []byte{}
+		var groupInfo []byte
+		var ratchetTree []byte
 		{
 			client := config.ActorClients[step.Actor]
 			req := &pb.GroupInfoRequest{
@@ -742,8 +886,8 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		config.StoreMessage(index, "ratchet_tree", ratchetTree)
 
 		// Create an external Commit
-		commit := []byte{}
-		epochAuthenticator := []byte{}
+		var commit []byte
+		var epochAuthenticator []byte
 		{
 			psks := make([]*pb.PreSharedKey, len(params.PSKs))
 			for i, pskIx := range params.PSKs {
@@ -799,7 +943,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "HandleCommit", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Member [%s] failed to agree on epoch authenticator", member)
+				return fmt.Errorf("member [%s] failed to agree on epoch authenticator", member)
 			}
 
 			config.stateID[member] = resp.StateId
@@ -813,11 +957,15 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 		pskID := make([]byte, 32)
-		rand.Read(pskID)
+		if _, err := cryptorand.Read(pskID); err != nil {
+			return err
+		}
 		config.StoreMessage(index, "psk_id", pskID)
 
 		pskSecret := make([]byte, 32)
-		rand.Read(pskSecret)
+		if _, err := cryptorand.Read(pskSecret); err != nil {
+			return err
+		}
 		config.StoreMessage(index, "psk_secret", pskSecret)
 
 		for _, clientName := range params.Clients {
@@ -1000,7 +1148,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		// Create the Commit [ActionCommit]
 		byRef := make([][]byte, len(params.ByReference))
 		for i, ix64 := range params.ByReference {
-			byRef[i], err = config.GetMessage(int(ix64), "proposal")
+			byRef[i], err = config.GetMessage(ix64, "proposal")
 			if err != nil {
 				return err
 			}
@@ -1034,7 +1182,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 		// Apply it at the committer [ActionHandlePendingCommit]
-		epochAuthenticator := []byte{}
+		var epochAuthenticator []byte
 		{
 			req := &pb.HandlePendingCommitRequest{
 				StateId: config.stateID[step.Actor],
@@ -1066,7 +1214,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "HandleCommit", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Member [%s] failed to agree on epoch authenticator", member)
+				return fmt.Errorf("member [%s] failed to agree on epoch authenticator", member)
 			}
 
 			config.stateID[member] = resp.StateId
@@ -1076,7 +1224,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		for _, joiner := range params.Joiners {
 			txID, ok := config.transactionID[joiner]
 			if !ok {
-				return fmt.Errorf("Malformed step: No transaction for %s", joiner)
+				return fmt.Errorf("malformed step: No transaction for %s", joiner)
 			}
 
 			client := config.ActorClients[joiner]
@@ -1099,7 +1247,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(joiner, "JoinGroup", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Joiner [%s] failed to agree on epoch authenticator", joiner)
+				return fmt.Errorf("joiner [%s] failed to agree on epoch authenticator", joiner)
 			}
 
 			config.stateID[joiner] = resp.StateId
@@ -1115,7 +1263,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 
 		byRef := make([][]byte, len(params.ByReference))
 		for i, ix64 := range params.ByReference {
-			byRef[i], err = config.GetMessage(int(ix64), "proposal")
+			byRef[i], err = config.GetMessage(ix64, "proposal")
 			if err != nil {
 				return err
 			}
@@ -1207,11 +1355,11 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 		if !bytes.Equal(authenticatedData, resp.AuthenticatedData) {
-			return fmt.Errorf("Incorrect authenticated data")
+			return fmt.Errorf("incorrect authenticated data")
 		}
 
 		if !bytes.Equal(plaintext, resp.Plaintext) {
-			return fmt.Errorf("Incorrect plaintext")
+			return fmt.Errorf("incorrect plaintext")
 		}
 
 		config.StoreMessage(index, "authenticatedData", resp.AuthenticatedData)
@@ -1232,7 +1380,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 
 		byRef := make([][]byte, len(params.ByReference))
 		for i, ix64 := range params.ByReference {
-			byRef[i], err = config.GetMessage(int(ix64), "proposal")
+			byRef[i], err = config.GetMessage(ix64, "proposal")
 			if err != nil {
 				return err
 			}
@@ -1331,8 +1479,8 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		// Have the committer commit the Proposal and advance their state
 		// XXX(RLB): This only supports committing ReInit by reference.  We might
 		// want to refactor so that it can be done by value as well.
-		commit := []byte{}
-		epochAuthenticator := []byte{}
+		var commit []byte
+		var epochAuthenticator []byte
 		reinitIDs := map[string]uint32{}
 		keyPackages := map[string][]byte{}
 		{
@@ -1378,7 +1526,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "HandleReInitCommit", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Member [%s] failed to agree on epoch authenticator", member)
+				return fmt.Errorf("member [%s] failed to agree on epoch authenticator", member)
 			}
 
 			reinitIDs[member] = resp.ReinitId
@@ -1390,9 +1538,9 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		// as a side effect of `ReInitWelcome()`
 		var welcome []byte
 		var ratchetTree []byte
-		reinitEpochAuthenticator := []byte{}
+		var reinitEpochAuthenticator []byte
 		{
-			keyPackageList := [][]byte{}
+			var keyPackageList [][]byte
 			for member := range notWelcomer {
 				keyPackageList = append(keyPackageList, keyPackages[member])
 			}
@@ -1433,7 +1581,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "HandleReInitWelcome", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, reinitEpochAuthenticator) {
-				return fmt.Errorf("Member [%s] failed to agree on reinit epoch authenticator", member)
+				return fmt.Errorf("member [%s] failed to agree on reinit epoch authenticator", member)
 			}
 
 			config.stateID[member] = resp.StateId
@@ -1454,7 +1602,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 
 		// Get KeyPackages from the members
 		transactionIDs := map[string]uint32{}
-		keyPackages := [][]byte{}
+		var keyPackages [][]byte
 		for _, member := range params.Members {
 			client := config.ActorClients[member]
 			req := &pb.CreateKeyPackageRequest{
@@ -1501,7 +1649,6 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 		// Apply the Welcome at each other member
-		oldStateID := map[string]uint32{}
 		for _, member := range params.Members {
 			client := config.ActorClients[member]
 			req := &pb.HandleBranchRequest{
@@ -1517,25 +1664,10 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 			config.Log(member, "HandleBranch", req, resp)
 
 			if !bytes.Equal(resp.EpochAuthenticator, epochAuthenticator) {
-				return fmt.Errorf("Member [%s] failed to agree on epoch authenticator", member)
+				return fmt.Errorf("member [%s] failed to agree on epoch authenticator", member)
 			}
 
-			oldStateID[member] = config.stateID[member]
 			config.stateID[member] = resp.StateId
-		}
-
-		// Clean up the old branch state
-		// TODO(RLB): This block should be deleted once we have the ability to test
-		// operations on the old branch.
-		for member, stateID := range oldStateID {
-			client := config.ActorClients[member]
-			req := &pb.FreeRequest{
-				StateId: stateID,
-			}
-			_, err := client.rpc.Free(ctx(), req)
-			if err != nil {
-				return err
-			}
 		}
 
 	case ActionNewMemberAddProposal:
@@ -1672,7 +1804,7 @@ func (config *ScriptActorConfig) RunStep(index int, step ScriptStep) error {
 		}
 
 	default:
-		return fmt.Errorf("Unknown action: %s", step.Action)
+		return fmt.Errorf("unknown action: %s", step.Action)
 	}
 
 	return nil
@@ -1734,7 +1866,7 @@ func (config *ScriptActorConfig) Run(script Script) ScriptResult {
 
 func (p *ClientPool) ScriptMatrix(actors []string, clientMode ClientMode, suite int, hsMode HandshakeMode) []ScriptActorConfig {
 	suite32 := uint32(suite)
-	suites := []uint32{}
+	var suites []uint32
 	if suite == 0 {
 		suites = []uint32{}
 		for suite, clients := range p.suiteSupport {
@@ -1761,12 +1893,12 @@ func (p *ClientPool) ScriptMatrix(actors []string, clientMode ClientMode, suite 
 		encryptOptions = []bool{false}
 	}
 
-	configs := []ScriptActorConfig{}
+	var configs []ScriptActorConfig
 	for _, suite := range suites {
 		clients := p.suiteSupport[suite]
 
 		for _, encrypt := range encryptOptions {
-			combos := [][]int{}
+			var combos [][]int
 			// Fall back to random if allCombinations would explode (vals^slots > threshold).
 			effectiveMode := clientMode
 			if effectiveMode == ClientModeAll && len(actors) > 10 {
@@ -1800,7 +1932,7 @@ func (p *ClientPool) ScriptMatrix(actors []string, clientMode ClientMode, suite 
 	return configs
 }
 
-func (p *ClientPool) RunScript(name string, clientMode ClientMode, suite int, hsMode HandshakeMode, script Script, failFast bool) ScriptResults {
+func (p *ClientPool) RunScript(_ string, clientMode ClientMode, suite int, hsMode HandshakeMode, script Script, failFast bool) ScriptResults {
 	actors := script.Actors()
 	configs := p.ScriptMatrix(actors, clientMode, suite, hsMode)
 
@@ -1820,6 +1952,7 @@ func (p *ClientPool) RunScript(name string, clientMode ClientMode, suite int, hs
 // / Main logic
 // /
 
+// stringListFlag is a flag value that accumulates multiple string values.
 type stringListFlag []string
 
 func (i *stringListFlag) String() string {
@@ -1854,18 +1987,6 @@ func init() {
 	flag.Parse()
 }
 
-var (
-	testVectorParams = struct {
-		NLeaves      uint32
-		NGenerations uint32
-		NEpochs      uint32
-	}{
-		NLeaves:      10,
-		NGenerations: 10,
-		NEpochs:      10,
-	}
-)
-
 func main() {
 	// Determine the operating modes
 	clientMode := ClientModeAll
@@ -1881,10 +2002,7 @@ func main() {
 	}
 
 	// Load and parse the config
-	jsonFile, err := os.Open(configOpt)
-	chk("Failure to open config file", err)
-
-	jsonData, err := ioutil.ReadAll(jsonFile)
+	jsonData, err := os.ReadFile(configOpt)
 	chk("Failure to read config file", err)
 
 	config := new(RunConfig)
@@ -1920,6 +2038,7 @@ func main() {
 	}
 }
 
+// chk logs a fatal error if err is not nil.
 func chk(message string, err error) {
 	if err != nil {
 		log.Fatalf("Error: %s - %v", message, err)

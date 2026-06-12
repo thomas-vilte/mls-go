@@ -292,8 +292,7 @@ func TestValidateLeafNodeSignature_BadSig(t *testing.T) {
 
 func TestValidateLeafNodeSignature_TooShort(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
-	leaf := createTestLeafExt(t, "signed")
-	if err := ValidateLeafNodeSignature(&leaf, []byte{0x01, 0x02}, cs); err == nil {
+	if err := ValidateLeafNodeSignature(new(createTestLeafExt(t, "signed")), []byte{0x01, 0x02}, cs); err == nil {
 		t.Fatal("expected error for short signature")
 	}
 }
@@ -309,8 +308,7 @@ func TestValidateLeafNodeSignature_NilKey(t *testing.T) {
 
 func TestValidateLeafNodeSignature_EmptySig(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
-	leaf := createTestLeafExt(t, "signed")
-	if err := ValidateLeafNodeSignature(&leaf, nil, cs); err == nil {
+	if err := ValidateLeafNodeSignature(new(createTestLeafExt(t, "signed")), nil, cs); err == nil {
 		t.Fatal("expected error for empty signature")
 	}
 }
@@ -655,8 +653,7 @@ func TestTruncateTrailingBlanks(t *testing.T) {
 // ============================================================================
 
 func TestUpdatePath_MarshalUnmarshal(t *testing.T) {
-	leaf := createTestLeafExt(t, "sender")
-	up := NewUpdatePath(&leaf, nil)
+	up := NewUpdatePath(new(createTestLeafExt(t, "sender")), nil)
 
 	data := up.Marshal()
 	if len(data) == 0 {
@@ -683,12 +680,11 @@ func TestUpdatePath_Validate_NilLeafNode(t *testing.T) {
 }
 
 func TestUpdatePath_MarshalUnmarshal_WithNodes(t *testing.T) {
-	leaf := createTestLeafExt(t, "sender")
-	nodes := []ciphersuite.HpkeCiphertext{
+	nodes := []ciphersuite.HPKECiphertext{
 		{KEMOutput: []byte{0x01, 0x02}, Ciphertext: []byte{0x03, 0x04}},
 		{KEMOutput: []byte{0xAA}, Ciphertext: []byte{0xBB, 0xCC, 0xDD}},
 	}
-	up := NewUpdatePath(&leaf, nodes)
+	up := NewUpdatePath(new(createTestLeafExt(t, "sender")), nodes)
 
 	data := up.Marshal()
 	got, err := UnmarshalUpdatePath(data)
@@ -855,10 +851,9 @@ func TestLeafNodeData_Clone_Nil(t *testing.T) {
 }
 
 func TestNode_clone(t *testing.T) {
-	leaf := createTestLeafExt(t, "leaf")
 	n := Node{
 		State:          NodeStatePresent,
-		LeafData:       &leaf,
+		LeafData:       new(createTestLeafExt(t, "leaf")),
 		ParentHash:     []byte{0x01, 0x02},
 		UnmergedLeaves: []LeafIndex{1, 2},
 	}
@@ -888,8 +883,7 @@ func TestNode_Validate_PresentLeafNilData(t *testing.T) {
 }
 
 func TestNode_Validate_PresentLeafValid(t *testing.T) {
-	leaf := createTestLeafExt(t, "x")
-	n := Node{State: NodeStatePresent, LeafData: &leaf}
+	n := Node{State: NodeStatePresent, LeafData: new(createTestLeafExt(t, "x"))}
 	if err := n.Validate(NodeIndex(0), 4); err != nil {
 		t.Fatalf("Validate() failed: %v", err)
 	}

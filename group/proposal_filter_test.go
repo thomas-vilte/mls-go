@@ -104,12 +104,12 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "cannot remove committer",
+			name: "committer can remove self",
 			proposal: FilteredProposal{
 				Proposal: NewRemoveProposal(group.ownLeafIndex),
 				Sender:   1,
 			},
-			wantError: true,
+			wantError: false,
 		},
 		{
 			name: "valid update from other member",

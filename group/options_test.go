@@ -37,7 +37,7 @@ func (testPSKStore) GetPSK(_ []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func mustNewGroupInputs(t *testing.T) (*GroupID, *keypackages.KeyPackage, *keypackages.KeyPackagePrivateKeys) {
+func mustNewGroupInputs(t *testing.T) (*ID, *keypackages.KeyPackage, *keypackages.KeyPackagePrivateKeys) {
 	t.Helper()
 
 	credWithKey, _, err := credentials.GenerateCredentialWithKey([]byte("OptionsUser"))
@@ -84,6 +84,9 @@ func TestNewGroupAppliesOptions(t *testing.T) {
 	}
 
 	ctx := g.GroupContext()
+	if ctx == nil {
+		t.Fatalf("GroupContext() returned nil")
+	}
 	if len(ctx.Extensions) != 1 {
 		t.Fatalf("len(GroupContext.Extensions) = %d, want 1", len(ctx.Extensions))
 	}
@@ -104,13 +107,17 @@ func TestNewGroupWithExtensionsIsWrapper(t *testing.T) {
 	groupID, kp, kpPriv := mustNewGroupInputs(t)
 	exts := []Extension{{Type: mlsext.ExtensionTypeApplicationID, Data: []byte("app-b")}}
 
-	g, err := NewGroupWithExtensions(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv, exts)
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv, WithExtensions(exts))
 	if err != nil {
 		t.Fatalf("NewGroupWithExtensions failed: %v", err)
 	}
+	gc := g.GroupContext()
+	if gc == nil {
+		t.Fatalf("GroupContext() returned nil")
+	}
 
-	if len(g.GroupContext().Extensions) != 1 {
-		t.Fatalf("len(GroupContext.Extensions) = %d, want 1", len(g.GroupContext().Extensions))
+	if len(gc.Extensions) != 1 {
+		t.Fatalf("len(GroupContext.Extensions) = %d, want 1", len(gc.Extensions))
 	}
 	if !bytes.Equal(g.GroupContext().Extensions[0].Data, []byte("app-b")) {
 		t.Fatalf("extension data = %x, want %x", g.GroupContext().Extensions[0].Data, []byte("app-b"))
