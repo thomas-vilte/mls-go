@@ -186,7 +186,7 @@ func TestUnmarshalGroupState_FailsOnTreeHashMismatch(t *testing.T) {
 		t.Fatalf("MarshalState failed: %v", err)
 	}
 
-	var state GroupStateData
+	var state StateData
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestUnmarshalGroupState_FailsOnOwnLeafOutOfBounds(t *testing.T) {
 		t.Fatalf("MarshalState failed: %v", err)
 	}
 
-	var state GroupStateData
+	var state StateData
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestUnmarshalGroupState_FailsOnConfirmationTagMismatch(t *testing.T) {
 		t.Fatalf("MarshalState failed: %v", err)
 	}
 
-	var state GroupStateData
+	var state StateData
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}

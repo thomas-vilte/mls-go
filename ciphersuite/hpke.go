@@ -59,7 +59,7 @@ func EncryptWithLabel(
 	context []byte,
 	plaintext []byte,
 	cs CipherSuite,
-) (*HpkeCiphertext, error) {
+) (*HPKECiphertext, error) {
 	curve := cs.Curve()
 	if curve == nil {
 		return nil, fmt.Errorf("%w: %d", ErrUnsupportedSuite, cs)
@@ -114,7 +114,7 @@ func encryptWithLabelNative(
 	curve ecdh.Curve,
 	kdf hpke.KDF,
 	aead hpke.AEAD,
-) (*HpkeCiphertext, error) {
+) (*HPKECiphertext, error) {
 	// Build info = Serialize(VL("MLS 1.0 " + label) || VL(context))
 	// Per RFC 9420 §5.1.3, both fields are length-prefixed
 	encContext := NewEncryptContext(label, context)
@@ -146,7 +146,7 @@ func encryptWithLabelNative(
 		return nil, fmt.Errorf("HPKE output too short: %d bytes", len(encapsulatedAndCt))
 	}
 
-	return &HpkeCiphertext{
+	return &HPKECiphertext{
 		KEMOutput:  encapsulatedAndCt[:kemOutputLen],
 		Ciphertext: encapsulatedAndCt[kemOutputLen:],
 	}, nil
@@ -169,7 +169,7 @@ func DecryptWithLabel(
 	privateKey []byte,
 	label string,
 	context []byte,
-	ciphertext *HpkeCiphertext,
+	ciphertext *HPKECiphertext,
 	cs CipherSuite,
 ) ([]byte, error) {
 	curve := cs.Curve()
@@ -215,7 +215,7 @@ func decryptWithLabelNative(
 	privateKey []byte,
 	label string,
 	context []byte,
-	ciphertext *HpkeCiphertext,
+	ciphertext *HPKECiphertext,
 	curve ecdh.Curve,
 	kdf hpke.KDF,
 	aead hpke.AEAD,
@@ -281,7 +281,7 @@ func DeriveKeyPair(cs CipherSuite, ikm []byte) (*ecdh.PrivateKey, error) {
 
 // hpkeAEAD returns the crypto/hpke AEAD algorithm for the cipher suite (RFC 9420 §5.1.3).
 func hpkeAEAD(cs CipherSuite) (hpke.AEAD, error) {
-	switch cs.AeadAlgorithm() {
+	switch cs.AEADAlgorithm() {
 	case AES128GCM:
 		return hpke.AES128GCM(), nil
 	case AES256GCM:

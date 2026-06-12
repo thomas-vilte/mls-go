@@ -145,13 +145,13 @@ func peekSenderData(pm *framing.PrivateMessage, senderDataSecret *ciphersuite.Se
 		sample = sample[:nh]
 	}
 
-	sdKey, err := senderDataSecret.KdfExpandLabel("key", sample, cs.AeadKeyLength())
+	sdKey, err := senderDataSecret.KdfExpandLabel("key", sample, cs.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("derive sender_data_key: %w", err)
 	}
 	defer sdKey.SecureZero()
 
-	sdNonce, err := senderDataSecret.KdfExpandLabel("nonce", sample, cs.AeadNonceLength())
+	sdNonce, err := senderDataSecret.KdfExpandLabel("nonce", sample, cs.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("derive sender_data_nonce: %w", err)
 	}
@@ -242,7 +242,11 @@ func testDecryptPrivateMessage(
 				return nil
 			}
 		}
-		return fmt.Errorf("Decrypt (leaf=%d gen=%d): %w", senderData.LeafIndex, senderData.Generation, decryptErr)
+		return fmt.Errorf("decrypt (leaf=%d gen=%d): %w", senderData.LeafIndex, senderData.Generation, decryptErr)
+	}
+
+	if ac == nil {
+		return fmt.Errorf("no successful decryption (leaf=%d)", senderLeafIndex)
 	}
 
 	if gotType := ac.Content.ContentType(); gotType != wantType {

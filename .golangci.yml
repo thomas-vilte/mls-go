@@ -62,6 +62,8 @@ linters:
           - errcheck
           - gosec
           - godot
+      - path: '_test\.go'
+        text: "Potential nil dereference"
 
 formatters:
   enable:

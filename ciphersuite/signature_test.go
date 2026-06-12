@@ -88,7 +88,7 @@ func TestSignature_TamperedSignature(t *testing.T) {
 func TestSignature_EmptyData(t *testing.T) {
 	privKey, _ := GenerateSignaturePrivateKey()
 
-	data := []byte{}
+	var data []byte
 
 	// Sign empty data
 	signature, err := privKey.Sign(data)

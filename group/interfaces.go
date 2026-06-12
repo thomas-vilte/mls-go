@@ -20,9 +20,9 @@ type CredentialValidator interface {
 // The library's MarshalState and UnmarshalGroupState helpers make this easy to
 // back with files, databases, or secret storage systems.
 type GroupStorage interface {
-	SaveGroupState(ctx context.Context, groupID *GroupID, state []byte) error
-	LoadGroupState(ctx context.Context, groupID *GroupID) ([]byte, error)
-	DeleteGroupState(ctx context.Context, groupID *GroupID) error
+	SaveGroupState(ctx context.Context, groupID *ID, state []byte) error
+	LoadGroupState(ctx context.Context, groupID *ID) ([]byte, error)
+	DeleteGroupState(ctx context.Context, groupID *ID) error
 }
 
 // KeyStore provides application-managed private key material for MLS state.
@@ -30,8 +30,8 @@ type GroupStorage interface {
 // This interface is intentionally minimal so callers can back it with HSMs,
 // KMS systems, encrypted files, or in-memory test doubles.
 type KeyStore interface {
-	StoreSignatureKey(ctx context.Context, groupID *GroupID, key *ciphersuite.SignaturePrivateKey) error
-	LoadSignatureKey(ctx context.Context, groupID *GroupID) (*ciphersuite.SignaturePrivateKey, error)
-	StoreLeafEncryptionKey(ctx context.Context, groupID *GroupID, leafIndex LeafNodeIndex, key []byte) error
-	LoadLeafEncryptionKey(ctx context.Context, groupID *GroupID, leafIndex LeafNodeIndex) ([]byte, error)
+	StoreSignatureKey(ctx context.Context, groupID *ID, key *ciphersuite.SignaturePrivateKey) error
+	LoadSignatureKey(ctx context.Context, groupID *ID) (*ciphersuite.SignaturePrivateKey, error)
+	StoreLeafEncryptionKey(ctx context.Context, groupID *ID, leafIndex LeafNodeIndex, key []byte) error
+	LoadLeafEncryptionKey(ctx context.Context, groupID *ID, leafIndex LeafNodeIndex) ([]byte, error)
 }

@@ -484,7 +484,7 @@ func NewClient(identity []byte, cs ciphersuite.CipherSuite, opts ...ClientOption
 	)
 	if cfg.credentialWithKey != nil {
 		if cs.SignatureScheme() != ciphersuite.ECDSA_SECP256R1_SHA256 {
-			return nil, fmt.Errorf("X.509 credentials require an ECDSA P-256 cipher suite")
+			return nil, fmt.Errorf("x509 credentials require an ECDSA P-256 cipher suite")
 		}
 		credWithKey = cfg.credentialWithKey
 		sigKey = cfg.sigKey
@@ -775,10 +775,10 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 	if err := c.persistGroup(ctx, joinedGroup, entry); err != nil {
 		return nil, err
 	}
-	c.groupEntries[groupCacheKey(joinedGroup.GroupID())] = entry
+	c.groupEntries[groupCacheKey(joinedGroup.ID())] = entry
 	delete(c.pendingKPs, matchKey)
-	c.log(slog.LevelInfo, "joined group", "group", groupHex(joinedGroup.GroupID().AsSlice()), "epoch", joinedGroup.Epoch().AsUint64())
-	return cloneBytes(joinedGroup.GroupID().AsSlice()), nil
+	c.log(slog.LevelInfo, "joined group", "group", groupHex(joinedGroup.ID().AsSlice()), "epoch", joinedGroup.Epoch().AsUint64())
+	return cloneBytes(joinedGroup.ID().AsSlice()), nil
 }
 
 // ProposeAddMember stores an Add proposal locally and returns a signed PublicMessage.
@@ -1191,7 +1191,7 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 	}
 	c.emitEvent(GroupEvent{
 		Type:           EventMessageReceived,
-		GroupID:        g.GroupID().AsSlice(),
+		GroupID:        g.ID().AsSlice(),
 		Epoch:          g.Epoch().AsUint64(),
 		MemberIdentity: received.SenderIdentity,
 	})
@@ -1242,9 +1242,9 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	if err != nil {
 		return nil, err
 	}
-	c.log(slog.LevelInfo, "member removed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "identity", memberIdentity)
-	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: memberIdentity})
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	c.log(slog.LevelInfo, "member removed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64(), "identity", memberIdentity)
+	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: memberIdentity})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	return commit, nil
 }
 
@@ -1282,47 +1282,62 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	c.log(slog.LevelInfo, "self update committed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64())
-	c.emitEvent(GroupEvent{Type: EventSelfUpdated, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	c.log(slog.LevelInfo, "self update committed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64())
+	c.emitEvent(GroupEvent{Type: EventSelfUpdated, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	return commit, nil
 }
 
-// LeaveGroup deletes the local persisted state for the group.
+// LeaveGroup removes the caller from the group and returns the commit bytes to
+// broadcast (RFC 9420 §12.1.3).
 //
-// WARNING: This is a LOCAL-ONLY operation. No commit is sent to the Delivery
-// Service and no other group member is notified that this client has left.
-// Other members will continue to include this identity in commits and will be
-// unable to advance past epochs where this client's leaf is expected to
-// decrypt UpdatePath secrets.
+// The commit advances the epoch and ratchets the key material, ensuring the
+// departing member can no longer decrypt future messages. The returned commit
+// must be delivered to all remaining group members via the Delivery Service.
 //
-// RFC 9420 §12.1.3 describes the correct leave sequence: another member sends
-// a Remove proposal for this client's leaf, followed by a Commit. Until that
-// support is added, applications should coordinate out-of-band to have an
-// admin member remove this client before calling LeaveGroup.
-//
-// TODO: implement self-initiated Remove + Commit once the lower-level group
-// package lifts its restriction on the committer removing their own leaf.
-func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) error {
+// After a successful leave, the local group state is deleted.
+func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
-		return err
+		c.mu.Unlock()
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		c.mu.Unlock()
+		return nil, err
 	}
 	if len(groupID) == 0 {
-		return ErrEmptyGroupID
+		c.mu.Unlock()
+		return nil, ErrEmptyGroupID
 	}
-	cacheKey := groupCacheKeyBytes(groupID)
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, err
+	}
+	ownLeaf := g.OwnLeafIndex()
+	if _, err := g.RemoveMember(ownLeaf); err != nil {
+		return nil, fmt.Errorf("creating self-remove proposal: %w", err)
+	}
+	commit, err := c.commitCurrentState(ctx, g, entry, "creating leave commit")
+	if err != nil {
+		return nil, err
+	}
+	// Delete local state now that the commit has been created.
 	gID := group.NewGroupID(cloneBytes(groupID))
 	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
-		return fmt.Errorf("deleting group state: %w", err)
+		return nil, fmt.Errorf("deleting group state: %w", err)
 	}
-	delete(c.groupEntries, cacheKey)
-	c.log(slog.LevelInfo, "left group", "group", groupHex(groupID))
-	return nil
+	delete(c.groupEntries, groupCacheKeyBytes(groupID))
+	c.log(slog.LevelInfo, "left group", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64())
+	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	return commit, nil
 }
 
 // Epoch returns the current epoch number of the group.
@@ -1568,13 +1583,13 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 	if err := c.persistGroup(ctx, g, entry); err != nil {
 		return nil, nil, err
 	}
-	c.groupEntries[groupCacheKey(g.GroupID())] = entry
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	c.groupEntries[groupCacheKey(g.ID())] = entry
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	pm := &framing.PublicMessage{
 		Content: staged.AuthenticatedContent().Content,
 		Auth:    staged.AuthenticatedContent().Auth,
 	}
-	return cloneBytes(g.GroupID().AsSlice()), framing.NewMLSMessagePublic(pm).Marshal(), nil
+	return cloneBytes(g.ID().AsSlice()), framing.NewMLSMessagePublic(pm).Marshal(), nil
 }
 
 // Close releases all resources held by the Client.
@@ -1661,7 +1676,7 @@ func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupE
 	if err != nil {
 		return fmt.Errorf("marshaling group state: %w", err)
 	}
-	groupID := g.GroupID()
+	groupID := g.ID()
 	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
 		return fmt.Errorf("saving group state: %w", err)
 	}
@@ -1716,7 +1731,7 @@ func keyPackageFingerprint(kpBytes []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func groupCacheKey(groupID *group.GroupID) string {
+func groupCacheKey(groupID *group.ID) string {
 	if groupID == nil {
 		return ""
 	}
@@ -1798,18 +1813,18 @@ func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *
 	oldEpoch := g.Epoch().AsUint64()
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
-		c.log(slog.LevelDebug, "commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "context", errContext, "error", err)
+		c.log(slog.LevelDebug, "commit failed", "group", groupHex(g.ID().AsSlice()), "epoch", oldEpoch, "context", errContext, "error", err)
 		return nil, fmt.Errorf("%s: %w", errContext, err)
 	}
 	if err := g.MergeCommit(staged); err != nil {
-		c.log(slog.LevelDebug, "merge commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
+		c.log(slog.LevelDebug, "merge commit failed", "group", groupHex(g.ID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, fmt.Errorf("merging own commit: %w", err)
 	}
 	if err := c.persistGroup(ctx, g, entry); err != nil {
-		c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
+		c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, err
 	}
-	c.log(slog.LevelDebug, "commit applied", "group", groupHex(g.GroupID().AsSlice()), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64(), "context", errContext)
+	c.log(slog.LevelDebug, "commit applied", "group", groupHex(g.ID().AsSlice()), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64(), "context", errContext)
 	commitMsg := framing.NewMLSMessagePublic(&framing.PublicMessage{
 		Content:       staged.AuthenticatedContent().Content,
 		Auth:          staged.AuthenticatedContent().Auth,
@@ -1822,23 +1837,19 @@ func (c *Client) commitCurrentState(ctx context.Context, g *group.Group, entry *
 type CommitPendingProposalsOptions struct {
 	// GroupInfoOptions controls which extensions are included in the Welcome's GroupInfo.
 	// By default, all RFC 9420 extensions are included.
-	GroupInfoOptions []group.GroupInfoOption
-
-	// Deprecated: use GroupInfoOptions.
-	// Kept for backward compatibility with code that still passes this field.
-	GroupInfoOpts group.GroupInfoOptions //nolint:staticcheck // backward compatibility shim
+	GroupInfoOptions []group.InfoOption
 }
 
 // commitPendingConfig holds the configuration for commit operations.
 type commitPendingConfig struct {
-	groupInfoOpts []group.GroupInfoOption
+	groupInfoOpts []group.InfoOption
 }
 
 // CommitPendingProposalOption configures CommitPendingProposals behavior.
 type CommitPendingProposalOption func(*commitPendingConfig)
 
 // WithGroupInfoParams controls which extensions are included in the Welcome's GroupInfo.
-func WithGroupInfoParams(opts ...group.GroupInfoOption) CommitPendingProposalOption {
+func WithGroupInfoParams(opts ...group.InfoOption) CommitPendingProposalOption {
 	return func(cfg *commitPendingConfig) {
 		cfg.groupInfoOpts = append(cfg.groupInfoOpts, opts...)
 	}
@@ -1849,19 +1860,8 @@ func defaultCommitPendingConfig() commitPendingConfig {
 }
 
 // commitPendingOptionsForCommit produces GroupInfoOption slice from CommitPendingProposalsOptions.
-// Used by legacy code that passes the struct.
-func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.GroupInfoOption {
-	out := append([]group.GroupInfoOption(nil), opts.GroupInfoOptions...)
-	if opts.GroupInfoOpts == (group.GroupInfoOptions{}) { //nolint:staticcheck // backward compatibility shim
-		return out
-	}
-	if opts.GroupInfoOpts.IncludeRatchetTree != nil { //nolint:staticcheck // backward compatibility shim
-		out = append(out, group.WithRatchetTree(*opts.GroupInfoOpts.IncludeRatchetTree))
-	}
-	if opts.GroupInfoOpts.IncludeExternalPub != nil { //nolint:staticcheck // backward compatibility shim
-		out = append(out, group.WithExternalPub(*opts.GroupInfoOpts.IncludeExternalPub))
-	}
-	return out
+func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.InfoOption {
+	return append([]group.InfoOption(nil), opts.GroupInfoOptions...)
 }
 
 // PendingCommitHandle represents a commit that has been generated but not yet
@@ -2024,12 +2024,12 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 	}
 
 	for _, identity := range handle.joinIdentities {
-		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
 	}
 	for _, identity := range handle.removeIdentities {
-		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
 	}
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 
 	// For CacheNone strategy, clear the pinned group so subsequent loads use storage.
 	if c.cacheStrategy != CacheAlways {
@@ -2144,7 +2144,7 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
 	if err != nil {
-		c.log(slog.LevelDebug, "commit pending proposals failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
+		c.log(slog.LevelDebug, "commit pending proposals failed", "group", groupHex(g.ID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, nil, fmt.Errorf("creating commit: %w", err)
 	}
 
@@ -2157,13 +2157,13 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	joinerSecret := staged.JoinerSecret()
 	if err := g.MergeCommit(staged); err != nil {
-		c.log(slog.LevelDebug, "merge pending proposals commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", oldEpoch, "error", err)
+		c.log(slog.LevelDebug, "merge pending proposals commit failed", "group", groupHex(g.ID().AsSlice()), "epoch", oldEpoch, "error", err)
 		return nil, nil, fmt.Errorf("merging own commit: %w", err)
 	}
 
 	c.log(slog.LevelDebug,
 		"epoch advanced",
-		"group", groupHex(g.GroupID().AsSlice()),
+		"group", groupHex(g.ID().AsSlice()),
 		"from_epoch", oldEpoch,
 		"to_epoch", g.Epoch().AsUint64(),
 		"proposal_count", len(staged.Proposals()),
@@ -2178,13 +2178,13 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 
 	if len(newMemberKPs) == 0 {
 		if err := c.persistGroup(ctx, g, entry); err != nil {
-			c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
+			c.log(slog.LevelWarn, "persist after commit failed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 			return nil, nil, err
 		}
 		for _, identity := range removeIdentities {
-			c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+			c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
 		}
-		c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+		c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 		return commitBytes, nil, nil
 	}
 
@@ -2199,20 +2199,20 @@ func (c *Client) commitPendingProposalsWithOptions(ctx context.Context, g *group
 	}
 	welcomeObj, err := g.CreateWelcomeWithOpts(newMemberKPs, c.sigKey, welcomeOpts...)
 	if err != nil {
-		c.log(slog.LevelDebug, "creating welcome failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
+		c.log(slog.LevelDebug, "creating welcome failed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, nil, fmt.Errorf("creating welcome: %w", err)
 	}
 	if err := c.persistGroup(ctx, g, entry); err != nil {
-		c.log(slog.LevelDebug, "persist after welcome failed", "group", groupHex(g.GroupID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
+		c.log(slog.LevelDebug, "persist after welcome failed", "group", groupHex(g.ID().AsSlice()), "epoch", g.Epoch().AsUint64(), "error", err)
 		return nil, nil, err
 	}
 	for _, identity := range joinIdentities {
-		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+		c.emitEvent(GroupEvent{Type: EventMemberJoined, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
 	}
 	for _, identity := range removeIdentities {
-		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
+		c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: identity})
 	}
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.GroupID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	welcomeMsg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
 	return commitBytes, welcomeMsg.Marshal(), nil
 }

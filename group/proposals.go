@@ -95,10 +95,10 @@ type ExternalInitProposal struct {
 	KemOutput []byte
 }
 
-// GroupContextExtensionsProposal updates group extensions per RFC 9420 §12.1.7.
+// ContextExtensionsProposal updates group extensions per RFC 9420 §12.1.7.
 //
 // This modifies the group's extensions in the GroupContext, affecting all members.
-type GroupContextExtensionsProposal struct {
+type ContextExtensionsProposal struct {
 	Extensions []Extension
 }
 
@@ -177,7 +177,7 @@ func NewReInitProposal(
 func NewGroupContextExtensionsProposal(extensions []Extension) *Proposal {
 	return &Proposal{
 		Type: ProposalTypeGroupContextExtensions,
-		GroupContextExtensions: &GroupContextExtensionsProposal{
+		GroupContextExtensions: &ContextExtensionsProposal{
 			Extensions: extensions,
 		},
 	}
@@ -304,7 +304,7 @@ func validateExternalInitProposal(ext *ExternalInitProposal) error {
 }
 
 // validateGroupContextExtensionsProposal validates a GroupContextExtensions proposal.
-func validateGroupContextExtensionsProposal(ext *GroupContextExtensionsProposal) error {
+func validateGroupContextExtensionsProposal(ext *ContextExtensionsProposal) error {
 	if ext == nil {
 		return ErrNilGroupContextExtensionsProposal
 	}

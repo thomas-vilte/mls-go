@@ -260,7 +260,7 @@ func TestTranscriptHash_Chain(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 
 	// Epoch 0: Initial hashes = "" (empty)
-	interim0 := []byte{}
+	var interim0 []byte
 
 	// Epoch 1: A commit arrives
 	ac := &framing.AuthenticatedContent{

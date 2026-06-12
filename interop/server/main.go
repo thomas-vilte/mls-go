@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" //nolint:gosec // intentional pprof endpoint for profiling
 	"runtime/debug"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -27,10 +29,15 @@ func main() {
 	go func() {
 		pprofPort := *port + 1000
 		log.Printf("pprof on :%d", pprofPort)
-		http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), nil)
+		srv := &http.Server{
+			Addr:              fmt.Sprintf(":%d", pprofPort),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		_ = srv.ListenAndServe()
 	}()
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	mls "github.com/thomas-vilte/mls-go"
+	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 

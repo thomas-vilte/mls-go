@@ -30,8 +30,8 @@ import (
 type GroupContext struct {
 	Version                 keypackages.ProtocolVersion
 	CipherSuite             ciphersuite.CipherSuite
-	GroupID                 *GroupID
-	Epoch                   GroupEpoch
+	GroupID                 *ID
+	Epoch                   Epoch
 	TreeHash                []byte
 	ConfirmedTranscriptHash []byte
 	Extensions              []Extension

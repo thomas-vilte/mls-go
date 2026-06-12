@@ -117,7 +117,7 @@
 //   - §4:  Ratchet Tree — binary tree structure, leaf and parent nodes
 //   - §7:  Tree Operations — blank nodes, resolution, tree hashing (§7.8), parent hash (§7.9)
 //   - §8:  Key Schedule — epoch secret derivation chain
-//   - §11: Group Creation — Welcome, GroupInfo, initial tree
+//   - §11: Group Creation — Welcome, Info, initial tree
 //   - §12: Group Evolution — proposals (§12.1), commits (§12.4), UpdatePath (§12.4.2)
 //   - §14: Handling Message Loss — staged commit and DS conflict model
 //   - §16: Security Considerations — FS, PCS, deniability limitations

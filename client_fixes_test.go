@@ -12,6 +12,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func TestWithX509Credential_InvalidDER(t *testing.T) {
 	}
 
 	// The error must come from the X.509 path, not be the generic ErrEmptyIdentity.
-	if err == ErrEmptyIdentity {
+	if errors.Is(err, ErrEmptyIdentity) {
 		t.Fatalf("got ErrEmptyIdentity - the certificate error was swallowed and "+
 			"NewClient fell through to the Basic credential path: %v", err)
 	}

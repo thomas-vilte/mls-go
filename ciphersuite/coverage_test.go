@@ -70,7 +70,6 @@ func TestHashReferenceMarshal(t *testing.T) {
 
 	hashRef := NewHashReference(data)
 
-	// HashReference no tiene método Marshal, usamos AsSlice
 	marshaled := hashRef.AsSlice()
 	if len(marshaled) == 0 {
 		t.Error("AsSlice() returned empty data")
@@ -134,8 +133,9 @@ func TestMac(t *testing.T) {
 		t.Fatalf("ComputeMac() error = %v", err)
 	}
 	if computedMac == nil {
-		t.Error("ComputeMac() returned nil")
+		t.Fatal("ComputeMac() returned nil")
 	}
+
 	if len(computedMac.AsSlice()) == 0 {
 		t.Error("ComputeMac() returned empty MAC")
 	}
@@ -272,8 +272,8 @@ func TestSentinelErrors(t *testing.T) {
 	}
 }
 
-// TestAeadAlgorithmMethods verifies AeadAlgorithm methods.
-func TestAeadAlgorithmMethods(t *testing.T) {
+// TestAEADAlgorithmMethods verifies AEADAlgorithm methods.
+func TestAEADAlgorithmMethods(t *testing.T) {
 	// NonceLength
 	nonceLen := AES128GCM.NonceLength()
 	if nonceLen != 12 {
@@ -306,9 +306,9 @@ func TestKDFAlgorithmMethods(t *testing.T) {
 	}
 }
 
-// TestHpkeCiphertext verifies HpkeCiphertext.
-func TestHpkeCiphertext(t *testing.T) {
-	ciphertext := &HpkeCiphertext{
+// TestHPKECiphertext verifies HPKECiphertext.
+func TestHPKECiphertext(t *testing.T) {
+	ciphertext := &HPKECiphertext{
 		KEMOutput:  []byte("kem output"),
 		Ciphertext: []byte("ciphertext"),
 	}

@@ -68,12 +68,3 @@ func WithCredentialValidator(v CredentialValidator) GroupOption {
 		cfg.credentialValidator = v
 	}
 }
-
-// ExtensionHandlerRegistryOption registers custom extension handlers.
-//
-// Deprecated: use WithExtensionHandler for incremental registration.
-func ExtensionHandlerRegistryOption(r *ExtensionHandlerRegistry) GroupOption {
-	return func(cfg *groupConfig) {
-		cfg.extensionHandlers = r
-	}
-}

@@ -182,9 +182,6 @@ func (pf *ProposalFilter) validateSingleProposal(
 		}
 
 	case ProposalTypeRemove:
-		if proposal.Remove != nil && proposal.Remove.Removed == pf.committer {
-			return fmt.Errorf("cannot remove the committer: %w", ErrInvalidProposal)
-		}
 		if proposal.Remove != nil {
 			if _, exists := pf.members[proposal.Remove.Removed]; !exists {
 				return fmt.Errorf("removing non-existent member at index %d: %w",

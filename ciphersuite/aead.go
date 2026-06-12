@@ -91,18 +91,18 @@ func AES256Decrypt(key, nonce, ciphertext, aad []byte) ([]byte, error) {
 //
 // Selects AES-128-GCM (CS1, CS2) or ChaCha20-Poly1305 (CS3) as defined in RFC 9420 §5.1.
 //
-// key must be cs.AeadKeyLength() bytes; nonce must be cs.AeadNonceLength() bytes (12).
+// key must be cs.AEADKeyLength() bytes; nonce must be cs.AEADNonceLength() bytes (12).
 // Returns [ErrInvalidKeyLength] or [ErrInvalidNonceLength] for wrong sizes.
 func EncryptWithCipherSuite(key, nonce, plaintext, aad []byte, cs CipherSuite) ([]byte, error) {
-	if keyLen := cs.AeadKeyLength(); keyLen == 0 {
+	if keyLen := cs.AEADKeyLength(); keyLen == 0 {
 		return nil, fmt.Errorf("unsupported cipher suite %d", cs)
 	} else if len(key) != keyLen {
 		return nil, fmt.Errorf("%w: cipher suite %d requires %d bytes, got %d", ErrInvalidKeyLength, cs, keyLen, len(key))
 	}
-	if nonceLen := cs.AeadNonceLength(); len(nonce) != nonceLen {
+	if nonceLen := cs.AEADNonceLength(); len(nonce) != nonceLen {
 		return nil, fmt.Errorf("%w: requires %d bytes, got %d", ErrInvalidNonceLength, nonceLen, len(nonce))
 	}
-	switch cs.AeadAlgorithm() {
+	switch cs.AEADAlgorithm() {
 	case AES128GCM:
 		return AESEncrypt(key, nonce, plaintext, aad)
 	case AES256GCM:
@@ -122,19 +122,19 @@ func EncryptWithCipherSuite(key, nonce, plaintext, aad []byte, cs CipherSuite) (
 //
 // Selects AES-128-GCM (CS1, CS2) or ChaCha20-Poly1305 (CS3) as defined in RFC 9420 §5.1.
 //
-// key must be cs.AeadKeyLength() bytes; nonce must be cs.AeadNonceLength() bytes (12).
+// key must be cs.AEADKeyLength() bytes; nonce must be cs.AEADNonceLength() bytes (12).
 // Returns [ErrInvalidKeyLength] or [ErrInvalidNonceLength] for wrong sizes.
 // Returns [ErrAeadDecryption] if the ciphertext has been tampered with or the key is wrong.
 func DecryptWithCipherSuite(key, nonce, ciphertext, aad []byte, cs CipherSuite) ([]byte, error) {
-	if keyLen := cs.AeadKeyLength(); keyLen == 0 {
+	if keyLen := cs.AEADKeyLength(); keyLen == 0 {
 		return nil, fmt.Errorf("unsupported cipher suite %d", cs)
 	} else if len(key) != keyLen {
 		return nil, fmt.Errorf("%w: cipher suite %d requires %d bytes, got %d", ErrInvalidKeyLength, cs, keyLen, len(key))
 	}
-	if nonceLen := cs.AeadNonceLength(); len(nonce) != nonceLen {
+	if nonceLen := cs.AEADNonceLength(); len(nonce) != nonceLen {
 		return nil, fmt.Errorf("%w: requires %d bytes, got %d", ErrInvalidNonceLength, nonceLen, len(nonce))
 	}
-	switch cs.AeadAlgorithm() {
+	switch cs.AEADAlgorithm() {
 	case AES128GCM:
 		return AESDecrypt(key, nonce, ciphertext, aad)
 	case AES256GCM:

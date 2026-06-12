@@ -5,7 +5,7 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
-	keypackages "github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/keypackages"
 )
 
 // TestMemoryZeroing_AfterCommit verifies that after a commit the old epoch's

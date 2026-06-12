@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -137,14 +138,14 @@ func (s *Server) propagateEncryptHandshake(fromID, toID uint32) {
 }
 
 // Name returns the implementation name
-func (s *Server) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
+func (s *Server) Name(_ context.Context, _ *proto.NameRequest) (*proto.NameResponse, error) {
 	return &proto.NameResponse{
 		Name: "mls-go",
 	}, nil
 }
 
 // SupportedCiphersuites returns supported cipher suite IDs
-func (s *Server) SupportedCiphersuites(ctx context.Context, req *proto.SupportedCiphersuitesRequest) (*proto.SupportedCiphersuitesResponse, error) {
+func (s *Server) SupportedCiphersuites(_ context.Context, _ *proto.SupportedCiphersuitesRequest) (*proto.SupportedCiphersuitesResponse, error) {
 	return &proto.SupportedCiphersuitesResponse{
 		Ciphersuites: []uint32{
 			uint32(ciphersuite.MLS128DHKEMX25519),         // CS1
@@ -155,23 +156,32 @@ func (s *Server) SupportedCiphersuites(ctx context.Context, req *proto.Supported
 	}, nil
 }
 
-// CreateGroup creates a new group
-func (s *Server) CreateGroup(ctx context.Context, req *proto.CreateGroupRequest) (*proto.CreateGroupResponse, error) {
-	cs := ciphersuite.CipherSuite(req.CipherSuite)
+// generateCredentialAndKeyPackage is a helper that validates the ciphersuite,
+// generates a credential and key package. Shared by CreateGroup and CreateKeyPackage.
+func generateCredentialAndKeyPackage(identity []byte, cs ciphersuite.CipherSuite) (*credentials.CredentialWithKey, *ciphersuite.SignaturePrivateKey, *keypackages.KeyPackage, *keypackages.KeyPackagePrivateKeys, error) {
 	if !cs.IsSupported() {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported cipher suite: %d", req.CipherSuite)
+		return nil, nil, nil, nil, status.Errorf(codes.InvalidArgument, "unsupported cipher suite: %d", uint16(cs))
 	}
 
-	// Generate credential
-	credWithKey, sigPrivKey, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
+	credWithKey, sigPrivKey, err := credentials.GenerateCredentialWithKeyForCS(identity, cs)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generating credential: %v", err)
+		return nil, nil, nil, nil, status.Errorf(codes.Internal, "generating credential: %v", err)
 	}
 
-	// Generate key package
 	kp, privKeys, err := keypackages.Generate(credWithKey, cs)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generating key package: %v", err)
+		return nil, nil, nil, nil, status.Errorf(codes.Internal, "generating key package: %v", err)
+	}
+
+	return credWithKey, sigPrivKey, kp, privKeys, nil
+}
+
+// CreateGroup creates a new group
+func (s *Server) CreateGroup(_ context.Context, req *proto.CreateGroupRequest) (*proto.CreateGroupResponse, error) {
+	cs := ciphersuite.CipherSuite(req.CipherSuite)
+	_, sigPrivKey, kp, privKeys, err := generateCredentialAndKeyPackage(req.Identity, cs)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create group
@@ -199,22 +209,11 @@ func (s *Server) CreateGroup(ctx context.Context, req *proto.CreateGroupRequest)
 }
 
 // CreateKeyPackage generates a key package
-func (s *Server) CreateKeyPackage(ctx context.Context, req *proto.CreateKeyPackageRequest) (*proto.CreateKeyPackageResponse, error) {
+func (s *Server) CreateKeyPackage(_ context.Context, req *proto.CreateKeyPackageRequest) (*proto.CreateKeyPackageResponse, error) {
 	cs := ciphersuite.CipherSuite(req.CipherSuite)
-	if !cs.IsSupported() {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported cipher suite: %d", req.CipherSuite)
-	}
-
-	// Generate credential
-	credWithKey, _, err := credentials.GenerateCredentialWithKeyForCS(req.Identity, cs)
+	_, _, kp, privKeys, err := generateCredentialAndKeyPackage(req.Identity, cs)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generating credential: %v", err)
-	}
-
-	// Generate key package
-	kp, privKeys, err := keypackages.Generate(credWithKey, cs)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generating key package: %v", err)
+		return nil, err
 	}
 
 	// Marshal key package as MLSMessage (wire_format=5) for cross-implementation compatibility.
@@ -226,11 +225,15 @@ func (s *Server) CreateKeyPackage(ctx context.Context, req *proto.CreateKeyPacka
 		// Ed25519: use the ed25519 private key (64 bytes)
 		sigKeyBytes = privKeys.Ed25519SignatureKey
 	} else {
-		// ECDSA P-256: use the ecdsa private key
+		// ECDSA P-256: use the ecdsa private key via ECDH
 		if privKeys.SignatureKey == nil {
 			return nil, status.Errorf(codes.Internal, "ECDSA signature key is nil")
 		}
-		sigKeyBytes = privKeys.SignatureKey.D.Bytes()
+		ecdhKey, err := privKeys.SignatureKey.ECDH()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "converting ECDSA key to ECDH: %v", err)
+		}
+		sigKeyBytes = ecdhKey.Bytes()
 	}
 
 	txID := s.generateTransactionID()
@@ -249,7 +252,7 @@ func (s *Server) CreateKeyPackage(ctx context.Context, req *proto.CreateKeyPacka
 }
 
 // JoinGroup joins via Welcome
-func (s *Server) JoinGroup(ctx context.Context, req *proto.JoinGroupRequest) (*proto.JoinGroupResponse, error) {
+func (s *Server) JoinGroup(_ context.Context, req *proto.JoinGroupRequest) (*proto.JoinGroupResponse, error) {
 	// Get transaction
 	txVal, ok := s.transactions.Load(req.TransactionId)
 	if !ok {
@@ -322,7 +325,7 @@ func (s *Server) collectResumptionPSKs() map[string][]byte {
 }
 
 // GroupInfo returns the GroupInfo for a group
-func (s *Server) GroupInfo(ctx context.Context, req *proto.GroupInfoRequest) (*proto.GroupInfoResponse, error) {
+func (s *Server) GroupInfo(_ context.Context, req *proto.GroupInfoRequest) (*proto.GroupInfoResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -355,7 +358,7 @@ func (s *Server) GroupInfo(ctx context.Context, req *proto.GroupInfoRequest) (*p
 }
 
 // StateAuth returns the state authentication secret (epoch authenticator)
-func (s *Server) StateAuth(ctx context.Context, req *proto.StateAuthRequest) (*proto.StateAuthResponse, error) {
+func (s *Server) StateAuth(_ context.Context, req *proto.StateAuthRequest) (*proto.StateAuthResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -368,7 +371,7 @@ func (s *Server) StateAuth(ctx context.Context, req *proto.StateAuthRequest) (*p
 }
 
 // Export exports a secret using the MLS exporter
-func (s *Server) Export(ctx context.Context, req *proto.ExportRequest) (*proto.ExportResponse, error) {
+func (s *Server) Export(_ context.Context, req *proto.ExportRequest) (*proto.ExportResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -386,7 +389,7 @@ func (s *Server) Export(ctx context.Context, req *proto.ExportRequest) (*proto.E
 }
 
 // Protect encrypts an application message for the group (RFC 9420 §6.3).
-func (s *Server) Protect(ctx context.Context, req *proto.ProtectRequest) (*proto.ProtectResponse, error) {
+func (s *Server) Protect(_ context.Context, req *proto.ProtectRequest) (*proto.ProtectResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -410,7 +413,7 @@ func (s *Server) Protect(ctx context.Context, req *proto.ProtectRequest) (*proto
 }
 
 // Unprotect decrypts an application message (RFC 9420 §6.3).
-func (s *Server) Unprotect(ctx context.Context, req *proto.UnprotectRequest) (*proto.UnprotectResponse, error) {
+func (s *Server) Unprotect(_ context.Context, req *proto.UnprotectRequest) (*proto.UnprotectResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -440,7 +443,7 @@ func (s *Server) Unprotect(ctx context.Context, req *proto.UnprotectRequest) (*p
 
 // StorePSK stores a pre-shared key so it is available when the group commits
 // or when a joiner processes a Welcome that references the PSK.
-func (s *Server) StorePSK(ctx context.Context, req *proto.StorePSKRequest) (*proto.StorePSKResponse, error) {
+func (s *Server) StorePSK(_ context.Context, req *proto.StorePSKRequest) (*proto.StorePSKResponse, error) {
 	id := req.StateOrTransactionId
 	// Check transactions first to avoid collision with group state IDs.
 	// Transactions are transient and should be resolved before conflicts arise.
@@ -469,7 +472,7 @@ func (s *Server) freeState(stateID uint32) {
 	s.encryptHandshake.Delete(stateID)
 }
 
-func (s *Server) Free(ctx context.Context, req *proto.FreeRequest) (*proto.FreeResponse, error) {
+func (s *Server) Free(_ context.Context, req *proto.FreeRequest) (*proto.FreeResponse, error) {
 	s.freeState(req.StateId)
 	return &proto.FreeResponse{}, nil
 }
@@ -478,7 +481,7 @@ func (s *Server) Free(ctx context.Context, req *proto.FreeRequest) (*proto.FreeR
 //
 // ExternalCommit generates its own HPKE key material internally; the caller
 // only needs a signature key and the GroupInfo (with optional ratchet tree).
-func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinRequest) (*proto.ExternalJoinResponse, error) {
+func (s *Server) ExternalJoin(_ context.Context, req *proto.ExternalJoinRequest) (*proto.ExternalJoinResponse, error) {
 	groupInfo, err := unmarshalGroupInfoAnyFormat(req.GroupInfo)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "parsing group info: %v", err)
@@ -530,9 +533,8 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 				if leaf == nil || leaf.LeafData == nil || leaf.LeafData.Credential == nil {
 					continue
 				}
-				if string(leaf.LeafData.Credential.Identity) == string(req.Identity) {
-					leafIndex := group.LeafNodeIndex(i)
-					removePriorLeaf = &leafIndex
+				if bytes.Equal(leaf.LeafData.Credential.Identity, req.Identity) {
+					removePriorLeaf = new(group.LeafNodeIndex(i))
 					break
 				}
 			}
@@ -563,12 +565,12 @@ func (s *Server) ExternalJoin(ctx context.Context, req *proto.ExternalJoinReques
 	}, nil
 }
 
-// AddProposal creates an add proposal (Oleada 2).
+// AddProposal creates an add proposal.
 //
 // AddMember stores the proposal in g.Proposals() automatically (RFC 9420 §12.1).
 // The returned bytes are the raw Proposal TLV, used by the test runner to
 // reference proposals by value in subsequent Commit and HandleCommit calls.
-func (s *Server) AddProposal(ctx context.Context, req *proto.AddProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) AddProposal(_ context.Context, req *proto.AddProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -590,7 +592,7 @@ func (s *Server) AddProposal(ctx context.Context, req *proto.AddProposalRequest)
 
 // UpdateProposal creates an Update proposal (RFC 9420 §12.1.2).
 // Generates a fresh HPKE leaf key and signs the new leaf node.
-func (s *Server) UpdateProposal(ctx context.Context, req *proto.UpdateProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) UpdateProposal(_ context.Context, req *proto.UpdateProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -611,11 +613,11 @@ func (s *Server) UpdateProposal(ctx context.Context, req *proto.UpdateProposalRe
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
-// RemoveProposal creates a remove proposal (Oleada 2).
+// RemoveProposal creates a remove proposal .
 //
 // Searches members by identity bytes to find the target leaf index.
 // RemoveMember stores the proposal in g.Proposals() (RFC 9420 §12.1).
-func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) RemoveProposal(_ context.Context, req *proto.RemoveProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -627,7 +629,7 @@ func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRe
 	targetLeafIndex := group.LeafNodeIndex(0)
 	found := false
 	g.IterateMembers(func(leafIdx group.LeafNodeIndex, m *group.Member) {
-		if !found && m.Active && string(m.Credential.Identity) == string(req.RemovedId) {
+		if !found && m.Active && bytes.Equal(m.Credential.Identity, req.RemovedId) {
 			targetLeafIndex = leafIdx
 			found = true
 		}
@@ -646,7 +648,7 @@ func (s *Server) RemoveProposal(ctx context.Context, req *proto.RemoveProposalRe
 }
 
 // ExternalPSKProposal creates an external PSK proposal (RFC 9420 §12.1.4).
-func (s *Server) ExternalPSKProposal(ctx context.Context, req *proto.ExternalPSKProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) ExternalPSKProposal(_ context.Context, req *proto.ExternalPSKProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -668,7 +670,7 @@ func (s *Server) ExternalPSKProposal(ctx context.Context, req *proto.ExternalPSK
 
 // ResumptionPSKProposal creates a resumption PSK proposal (RFC 9420 §12.1.4 / §8.4).
 // EpochId is the MLS epoch number whose resumption secret should be referenced.
-func (s *Server) ResumptionPSKProposal(ctx context.Context, req *proto.ResumptionPSKProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) ResumptionPSKProposal(_ context.Context, req *proto.ResumptionPSKProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -687,7 +689,7 @@ func (s *Server) ResumptionPSKProposal(ctx context.Context, req *proto.Resumptio
 			PskID: group.PskID{
 				PskType:    2,
 				Usage:      1, // application
-				PskGroupID: g.GroupID().AsSlice(),
+				PskGroupID: g.ID().AsSlice(),
 				PskEpoch:   req.EpochId,
 				Nonce:      nonce,
 			},
@@ -699,7 +701,7 @@ func (s *Server) ResumptionPSKProposal(ctx context.Context, req *proto.Resumptio
 }
 
 // GroupContextExtensionsProposal creates a GroupContextExtensions proposal (RFC 9420 §12.1.7).
-func (s *Server) GroupContextExtensionsProposal(ctx context.Context, req *proto.GroupContextExtensionsProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) GroupContextExtensionsProposal(_ context.Context, req *proto.GroupContextExtensionsProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -778,7 +780,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 		var removedLeaf group.LeafNodeIndex
 		removedFound := false
 		g.IterateMembers(func(leafIdx group.LeafNodeIndex, m *group.Member) {
-			if !removedFound && m.Active && string(m.Credential.Identity) == string(desc.RemovedId) {
+			if !removedFound && m.Active && bytes.Equal(m.Credential.Identity, desc.RemovedId) {
 				removedLeaf = leafIdx
 				removedFound = true
 			}
@@ -798,7 +800,11 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 		return p, nil
 
 	case "resumptionPSK":
-		log.Printf("[BYVAL PSK] epochID=%d currentEpoch=%d", desc.EpochId, g.GroupContext().Epoch.AsUint64())
+		gc := g.GroupContext()
+		if gc == nil {
+			return nil, fmt.Errorf("group context not available")
+		}
+		log.Printf("[BYVAL PSK] epochID=%d currentEpoch=%d", desc.EpochId, gc.Epoch.AsUint64())
 		nonce := make([]byte, g.CipherSuite().HashLength())
 		if _, err := rand.Read(nonce); err != nil {
 			return nil, fmt.Errorf("generating psk nonce: %w", err)
@@ -810,7 +816,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 				PskID: group.PskID{
 					PskType:    2,
 					Usage:      1,
-					PskGroupID: g.GroupID().AsSlice(),
+					PskGroupID: g.ID().AsSlice(),
 					PskEpoch:   desc.EpochId,
 					Nonce:      nonce,
 				},
@@ -829,7 +835,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 	}
 }
 
-// Commit creates a commit for all pending proposals (Oleada 2).
+// Commit creates a commit for all pending proposals .
 //
 // Flow per RFC 9420 §12.4:
 //  1. Capture OLD epoch init_secret (needed for Welcome's joiner_secret derivation).
@@ -838,7 +844,7 @@ func (s *Server) proposalFromDescription(g *group.Group, desc *proto.ProposalDes
 //  4. CreateWelcome for any new members added via pending Add proposals.
 //
 // HandlePendingCommit is a no-op after this (MergeCommit already applied).
-func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.CommitResponse, error) {
+func (s *Server) Commit(_ context.Context, req *proto.CommitRequest) (*proto.CommitResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -863,7 +869,7 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 		// Only add if not already present (own proposals are already there).
 		alreadyPresent := false
 		for _, sp := range g.Proposals().Proposals {
-			if string(group.ProposalMarshal(sp.Proposal)) == string(rawProp) {
+			if bytes.Equal(group.ProposalMarshal(sp.Proposal), rawProp) {
 				alreadyPresent = true
 				break
 			}
@@ -991,13 +997,13 @@ func (s *Server) Commit(ctx context.Context, req *proto.CommitRequest) (*proto.C
 	}, nil
 }
 
-// HandleCommit processes a commit received from another group member (Oleada 2).
+// HandleCommit processes a commit received from another group member .
 //
 // Accepts both PublicMessage and PrivateMessage wire formats. PrivateMessage
 // commits are decrypted using the current epoch's secret tree before processing.
 // ProcessReceivedCommit takes *framing.AuthenticatedContent and uses the
 // receiver's own HPKE private key (g.MyLeafEncryptionKey) to decrypt path secrets.
-func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitRequest) (*proto.HandleCommitResponse, error) {
+func (s *Server) HandleCommit(_ context.Context, req *proto.HandleCommitRequest) (*proto.HandleCommitResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1013,13 +1019,18 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 	var ac *framing.AuthenticatedContent
 	var senderLeafIdx treesync.LeafIndex
 
+	gc := g.GroupContext()
+	if gc == nil {
+		return nil, status.Errorf(codes.Internal, "group context not available for HandleCommit")
+	}
+
 	if pubMsg, isPub := msg.AsPublic(); isPub {
 		// PublicMessage commit: reconstruct AuthenticatedContent directly.
 		ac = &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pubMsg.Content,
 			Auth:         pubMsg.Auth,
-			GroupContext: g.GroupContext().Marshal(),
+			GroupContext: gc.Marshal(),
 		}
 		senderLeafIdx = treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
 	} else if privMsg, isPriv := msg.AsPrivate(); isPriv {
@@ -1034,7 +1045,7 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 			CipherSuite:      g.CipherSuite(),
 			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 			SecretTree:       g.SecretTree(),
-			GroupContext:     g.GroupContext().Marshal(),
+			GroupContext:     gc.Marshal(),
 		})
 		if decErr != nil {
 			return nil, status.Errorf(codes.Internal, "decrypting PrivateMessage commit: %v", decErr)
@@ -1061,7 +1072,7 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 		}
 	}
 
-	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x", req.StateId, g.OwnLeafIndex(), g.Epoch, g.InterimTranscriptHash)
+	log.Printf("HandleCommit: state_id=%d ownLeaf=%d epoch=%d interimHash=%x", req.StateId, g.OwnLeafIndex(), g.Epoch(), g.InterimTranscriptHash())
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		return nil, status.Errorf(codes.Internal, "processing commit: %v", err)
 	}
@@ -1082,12 +1093,12 @@ func (s *Server) HandleCommit(ctx context.Context, req *proto.HandleCommitReques
 	}, nil
 }
 
-// HandlePendingCommit handles a pending commit (own commit, Oleada 2).
+// HandlePendingCommit handles a pending commit.
 //
 // Commit() already calls MergeCommit() immediately, so by the time
 // HandlePendingCommit is called the group is already in the new epoch.
 // We assign a new state ID for the already-advanced group state.
-func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendingCommitRequest) (*proto.HandleCommitResponse, error) {
+func (s *Server) HandlePendingCommit(_ context.Context, req *proto.HandlePendingCommitRequest) (*proto.HandleCommitResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1118,8 +1129,8 @@ func (s *Server) HandlePendingCommit(ctx context.Context, req *proto.HandlePendi
 	}, nil
 }
 
-// ReInitProposal creates a ReInit proposal and stores it in the group (Oleada 3, RFC 9420 §12.1.5).
-func (s *Server) ReInitProposal(ctx context.Context, req *proto.ReInitProposalRequest) (*proto.ProposalResponse, error) {
+// ReInitProposal creates a ReInit proposal and stores it in the group (RFC 9420 §12.1.5).
+func (s *Server) ReInitProposal(_ context.Context, req *proto.ReInitProposalRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1139,7 +1150,7 @@ func (s *Server) ReInitProposal(ctx context.Context, req *proto.ReInitProposalRe
 	return s.proposalResponse(g, req.StateId, proposal)
 }
 
-// ReInitCommit commits pending proposals for a reinitialization (Oleada 3).
+// ReInitCommit commits pending proposals for a reinitialization.
 //
 // Identical to Commit: the ReInit proposal was stored via ReInitProposal and
 // will be included in the commit automatically (RFC 9420 §12.4).
@@ -1147,12 +1158,12 @@ func (s *Server) ReInitCommit(ctx context.Context, req *proto.CommitRequest) (*p
 	return s.Commit(ctx, req)
 }
 
-// HandlePendingReInitCommit handles the committer's own ReInit commit (Oleada 3).
+// HandlePendingReInitCommit handles the committer's own ReInit commit.
 //
 // After the commit is merged the resumption_secret is extracted from the new
 // epoch's EpochSecrets. A fresh KeyPackage for the new group's cipher suite is
 // generated and stored under a reinit_id for use by ReInitWelcome later.
-func (s *Server) HandlePendingReInitCommit(ctx context.Context, req *proto.HandlePendingCommitRequest) (*proto.HandleReInitCommitResponse, error) {
+func (s *Server) HandlePendingReInitCommit(_ context.Context, req *proto.HandlePendingCommitRequest) (*proto.HandleReInitCommitResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1176,11 +1187,11 @@ func (s *Server) HandlePendingReInitCommit(ctx context.Context, req *proto.Handl
 	return s.finalizeReInitCommit(g, proposals)
 }
 
-// HandleReInitCommit processes a ReInit commit from another member (Oleada 3).
+// HandleReInitCommit processes a ReInit commit from another member.
 //
 // Parses the commit, processes it via ProcessReceivedCommit, then extracts
 // the ReInit proposal to bootstrap the pending reinit state.
-func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommitRequest) (*proto.HandleReInitCommitResponse, error) {
+func (s *Server) HandleReInitCommit(_ context.Context, req *proto.HandleCommitRequest) (*proto.HandleReInitCommitResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1212,12 +1223,17 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 	var ac *framing.AuthenticatedContent
 	var senderLeafIdx treesync.LeafIndex
 
+	gc := g.GroupContext()
+	if gc == nil {
+		return nil, status.Errorf(codes.Internal, "group context not available for ReInitCommit")
+	}
+
 	if pubMsg, isPub := msg.AsPublic(); isPub {
 		ac = &framing.AuthenticatedContent{
 			WireFormat:   framing.WireFormatPublicMessage,
 			Content:      pubMsg.Content,
 			Auth:         pubMsg.Auth,
-			GroupContext: g.GroupContext().Marshal(),
+			GroupContext: gc.Marshal(),
 		}
 		senderLeafIdx = treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
 	} else if privMsg, isPriv := msg.AsPrivate(); isPriv {
@@ -1231,7 +1247,7 @@ func (s *Server) HandleReInitCommit(ctx context.Context, req *proto.HandleCommit
 			CipherSuite:      g.CipherSuite(),
 			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 			SecretTree:       g.SecretTree(),
-			GroupContext:     g.GroupContext().Marshal(),
+			GroupContext:     gc.Marshal(),
 		})
 		if decErr != nil {
 			return nil, status.Errorf(codes.Internal, "decrypting PrivateMessage reinit commit: %v", decErr)
@@ -1279,7 +1295,7 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 		return nil, status.Errorf(codes.Internal, "resumption secret not available after reinit commit")
 	}
 	resumptionSecret := g.EpochSecrets().ResumptionSecret.Clone()
-	oldGroupID := append([]byte(nil), g.GroupID().AsSlice()...)
+	oldGroupID := append([]byte(nil), g.ID().AsSlice()...)
 
 	// Generate a fresh identity + KP for the new group.
 	newCS := reInitProposal.CipherSuite
@@ -1317,11 +1333,11 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 	}, nil
 }
 
-// ReInitWelcome creates the new group and Welcome for a reinitialization (Oleada 3, RFC 9420 §11.3).
+// ReInitWelcome creates the new group and Welcome for a reinitialization (RFC 9420 §11.3).
 //
 // Uses NewGroupFromReInit to create the new group (epoch 0), then adds all
 // provided key packages as Add proposals, commits, and returns a Welcome.
-func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequest) (*proto.CreateSubgroupResponse, error) {
+func (s *Server) ReInitWelcome(_ context.Context, req *proto.ReInitWelcomeRequest) (*proto.CreateSubgroupResponse, error) {
 	ri, ok := s.reinits.Load(req.ReinitId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "reinit not found: %d", req.ReinitId)
@@ -1399,8 +1415,8 @@ func (s *Server) ReInitWelcome(ctx context.Context, req *proto.ReInitWelcomeRequ
 	}, nil
 }
 
-// HandleReInitWelcome joins the new group via a Welcome after reinitialization (Oleada 3).
-func (s *Server) HandleReInitWelcome(ctx context.Context, req *proto.HandleReInitWelcomeRequest) (*proto.JoinGroupResponse, error) {
+// HandleReInitWelcome joins the new group via a Welcome after reinitialization.
+func (s *Server) HandleReInitWelcome(_ context.Context, req *proto.HandleReInitWelcomeRequest) (*proto.JoinGroupResponse, error) {
 	ri, ok := s.reinits.Load(req.ReinitId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "reinit not found: %d", req.ReinitId)
@@ -1433,7 +1449,7 @@ func (s *Server) HandleReInitWelcome(ctx context.Context, req *proto.HandleReIni
 // The branch creator starts a fresh group with the given group_id and their
 // own identity, adds every provided KeyPackage as an Add proposal, commits,
 // and returns the Welcome plus the new state_id.
-func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchRequest) (*proto.CreateSubgroupResponse, error) {
+func (s *Server) CreateBranch(_ context.Context, req *proto.CreateBranchRequest) (*proto.CreateSubgroupResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1483,7 +1499,11 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	if _, err := rand.Read(branchNonce); err != nil {
 		return nil, status.Errorf(codes.Internal, "generating branch psk nonce: %v", err)
 	}
-	branchPskKey := group.ResumptionPskCacheKey(oldGroup.GroupContext().GroupID.AsSlice(), oldGroup.GroupContext().Epoch.AsUint64())
+	oldGC := oldGroup.GroupContext()
+	if oldGC == nil {
+		return nil, status.Errorf(codes.Internal, "old group context not available for branch")
+	}
+	branchPskKey := group.ResumptionPskCacheKey(oldGC.GroupID.AsSlice(), oldGC.Epoch.AsUint64())
 	newGroup.LoadPsk([]byte(branchPskKey), oldGroup.EpochSecrets().ResumptionSecret.AsSlice())
 	newGroup.Proposals().AddProposal(&group.Proposal{
 		Type: group.ProposalTypePreSharedKey,
@@ -1492,8 +1512,8 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 			PskID: group.PskID{
 				PskType:    2,
 				Usage:      3,
-				PskGroupID: oldGroup.GroupContext().GroupID.AsSlice(),
-				PskEpoch:   oldGroup.GroupContext().Epoch.AsUint64(),
+				PskGroupID: oldGC.GroupID.AsSlice(),
+				PskEpoch:   oldGC.Epoch.AsUint64(),
 				Nonce:      branchNonce,
 			},
 		},
@@ -1561,11 +1581,11 @@ func (s *Server) CreateBranch(ctx context.Context, req *proto.CreateBranchReques
 	}, nil
 }
 
-// HandleBranch joins a branched subgroup via Welcome (Oleada 3).
+// HandleBranch joins a branched subgroup via Welcome.
 //
 // Branches use the same JoinFromWelcome path as regular Welcome. The
 // transaction_id refers to a KeyPackage previously created via NewMemberAddProposal.
-func (s *Server) HandleBranch(ctx context.Context, req *proto.HandleBranchRequest) (*proto.HandleBranchResponse, error) {
+func (s *Server) HandleBranch(_ context.Context, req *proto.HandleBranchRequest) (*proto.HandleBranchResponse, error) {
 	txVal, ok := s.transactions.Load(req.TransactionId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "transaction not found: %d", req.TransactionId)
@@ -1594,12 +1614,12 @@ func (s *Server) HandleBranch(ctx context.Context, req *proto.HandleBranchReques
 }
 
 // NewMemberAddProposal creates a KeyPackage and an Add proposal for a new
-// external member (Oleada 3, RFC 9420 §12.1.8).
+// external member (RFC 9420 §12.1.8).
 //
 // The proposal bytes and private key material are returned so the caller can
 // (a) forward the proposal to an existing group member who will commit it, and
 // (b) later call HandleBranch with the resulting Welcome.
-func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberAddProposalRequest) (*proto.NewMemberAddProposalResponse, error) {
+func (s *Server) NewMemberAddProposal(_ context.Context, req *proto.NewMemberAddProposalRequest) (*proto.NewMemberAddProposalResponse, error) {
 	groupInfo, err := unmarshalGroupInfoAnyFormat(req.GroupInfo)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "parsing group info: %v", err)
@@ -1636,7 +1656,7 @@ func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberA
 	// Extract raw private key bytes (Ed25519 for CS1/CS3, P-256 for CS2).
 	var sigKeyBytes []byte
 	if privKeys.Ed25519SignatureKey != nil {
-		sigKeyBytes = []byte(privKeys.Ed25519SignatureKey)
+		sigKeyBytes = privKeys.Ed25519SignatureKey
 	} else if privKeys.SignatureKey != nil {
 		sigKeyBytes, _ = privKeys.SignatureKey.Bytes()
 	}
@@ -1656,14 +1676,14 @@ func (s *Server) NewMemberAddProposal(ctx context.Context, req *proto.NewMemberA
 	}, nil
 }
 
-// CreateExternalSigner generates an external signer identity (Oleada 3, RFC 9420 §12.1.8.1).
+// CreateExternalSigner generates an external signer identity (RFC 9420 §12.1.8.1).
 //
 // The external_sender bytes are encoded as a single ExternalSender entry:
 //
 //	VLBytes(signature_key) || VLBytes(credential)
 //
 // This matches the per-entry layout of the ExternalSenders extension (§12.1.8.1).
-func (s *Server) CreateExternalSigner(ctx context.Context, req *proto.CreateExternalSignerRequest) (*proto.CreateExternalSignerResponse, error) {
+func (s *Server) CreateExternalSigner(_ context.Context, req *proto.CreateExternalSignerRequest) (*proto.CreateExternalSignerResponse, error) {
 	cs := ciphersuite.CipherSuite(req.CipherSuite)
 	if !cs.IsSupported() {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported cipher suite: %d", req.CipherSuite)
@@ -1698,7 +1718,7 @@ func (s *Server) CreateExternalSigner(ctx context.Context, req *proto.CreateExte
 //	VLBytes(signature_key) || VLBytes(credential)
 //
 // The current ExternalSenders list (if any) is preserved; the new entry is appended.
-func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSignerRequest) (*proto.ProposalResponse, error) {
+func (s *Server) AddExternalSigner(_ context.Context, req *proto.AddExternalSignerRequest) (*proto.ProposalResponse, error) {
 	gVal, ok := s.groups.Load(req.StateId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "group not found: %d", req.StateId)
@@ -1711,7 +1731,11 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 	// extension data = VL(total_entries_bytes) || [ExternalSender entries].
 	// Each entry = VL(sigKey) || Credential_inline (no extra VL on credential).
 	var entriesBytes []byte
-	for _, ext := range g.GroupContext().Extensions {
+	gc := g.GroupContext()
+	if gc == nil {
+		return nil, status.Errorf(codes.Internal, "group context not available for AddExternalSigner")
+	}
+	for _, ext := range gc.Extensions {
 		if ext.Type == extTypeExternalSenders {
 			// Existing data is VL(total)||entries; unwrap to get raw entries.
 			inner, _, err := mlsReadVLBytes(ext.Data)
@@ -1726,9 +1750,9 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 	newExtData := mlsVLBytes(entriesBytes)
 
 	// Replace or append the ExternalSenders extension.
-	newExts := make([]group.Extension, 0, len(g.GroupContext().Extensions)+1)
+	newExts := make([]group.Extension, 0, len(gc.Extensions)+1)
 	found := false
-	for _, ext := range g.GroupContext().Extensions {
+	for _, ext := range gc.Extensions {
 		if ext.Type == extTypeExternalSenders {
 			newExts = append(newExts, group.Extension{Type: extTypeExternalSenders, Data: newExtData})
 			found = true
@@ -1748,7 +1772,7 @@ func (s *Server) AddExternalSigner(ctx context.Context, req *proto.AddExternalSi
 // ExternalSignerProposal creates a proposal signed by an external signer
 // (RFC 9420 §12.1.8.1). The proposal is wrapped in a PublicMessage with
 // SenderType=external and signed with the external signer's private key.
-func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.ExternalSignerProposalRequest) (*proto.ProposalResponse, error) {
+func (s *Server) ExternalSignerProposal(_ context.Context, req *proto.ExternalSignerProposalRequest) (*proto.ProposalResponse, error) {
 	signerVal, ok := s.externalSigners.Load(req.SignerId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "external signer not found: %d", req.SignerId)
@@ -1795,7 +1819,7 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 		for i := treesync.LeafIndex(0); i < treesync.LeafIndex(treeForLookup.NumLeaves); i++ {
 			leaf := treeForLookup.GetLeaf(i)
 			if leaf != nil && leaf.LeafData != nil && leaf.LeafData.Credential != nil {
-				if string(leaf.LeafData.Credential.Identity) == string(req.Description.RemovedId) {
+				if bytes.Equal(leaf.LeafData.Credential.Identity, req.Description.RemovedId) {
 					removedLeaf = i
 					break
 				}
@@ -1894,7 +1918,7 @@ func (s *Server) ExternalSignerProposal(ctx context.Context, req *proto.External
 // looks like ProposalTypeAdd=1, causing raw parsing to succeed with garbage data.
 //
 // Returns the raw proposal bytes, the parsed proposal, and the ProposalRef (nil if unavailable).
-func extractByReferenceProposal(propBytes []byte, g *group.Group) ([]byte, *group.Proposal, []byte, error) {
+func extractByReferenceProposal(propBytes []byte, g *group.Group) (rawProposal []byte, proposal *group.Proposal, ref []byte, err error) {
 	if msg, err := framing.UnmarshalMLSMessage(propBytes); err == nil {
 		// PublicMessage path (public mode).
 		if msg.PublicMessage != nil {
@@ -1913,6 +1937,7 @@ func extractByReferenceProposal(propBytes []byte, g *group.Group) ([]byte, *grou
 		}
 		// PrivateMessage path (encrypt_handshake=true).
 		if msg.PrivateMessage != nil && g != nil &&
+			g.GroupContext() != nil &&
 			g.EpochSecrets() != nil && g.EpochSecrets().SenderDataSecret != nil &&
 			g.SecretTree() != nil {
 			ac, err := framing.Decrypt(msg.PrivateMessage, framing.DecryptParams{
@@ -1963,7 +1988,7 @@ func unmarshalWelcomeAnyFormat(data []byte) (*group.Welcome, error) {
 
 // unmarshalGroupInfoAnyFormat parses a GroupInfo from either raw bytes
 // or an MLSMessage-wrapped GroupInfo (wire_format=4, as sent by OpenMLS).
-func unmarshalGroupInfoAnyFormat(data []byte) (*group.GroupInfo, error) {
+func unmarshalGroupInfoAnyFormat(data []byte) (*group.Info, error) {
 	// Detect MLSMessage wrapper: starts with version=0x0001, wire_format=0x0004.
 	if len(data) >= 4 && data[0] == 0x00 && data[1] == 0x01 && data[2] == 0x00 && data[3] == 0x04 {
 		msg, err := framing.UnmarshalMLSMessage(data)

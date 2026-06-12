@@ -137,6 +137,11 @@ func TestUnmarshalCredentialFromReader_X509MultiCert(t *testing.T) {
 	if got.Type() != credentials.X509Credential {
 		t.Errorf("type = %d, want X509Credential", got.Type())
 	}
+
+	if got == nil {
+		t.Fatal("UnmarshalCredentialFromReader returned nil credential")
+	}
+
 	if len(got.Certificates) != 2 {
 		t.Fatalf("certificates count = %d, want 2", len(got.Certificates))
 	}

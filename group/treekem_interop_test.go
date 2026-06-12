@@ -46,7 +46,7 @@ type updatePathEntry struct {
 
 type interopUpdatePathNode struct {
 	EncryptionKey        []byte
-	EncryptedPathSecrets []ciphersuite.HpkeCiphertext
+	EncryptedPathSecrets []ciphersuite.HPKECiphertext
 }
 
 type interopUpdatePath struct {
@@ -89,7 +89,7 @@ func unmarshalInteropUpdatePath(data []byte) (*interopUpdatePath, error) {
 
 		// encrypted_path_secret<V> is a list of HPKECiphertext: kem_output<V> + ciphertext<V>
 		epsr := tls.NewReader(epsData)
-		cts := make([]ciphersuite.HpkeCiphertext, 0)
+		cts := make([]ciphersuite.HPKECiphertext, 0)
 		for epsr.Remaining() > 0 {
 			kemOutput, err := epsr.ReadVLBytes()
 			if err != nil {
@@ -99,7 +99,7 @@ func unmarshalInteropUpdatePath(data []byte) (*interopUpdatePath, error) {
 			if err != nil {
 				return nil, fmt.Errorf("reading ciphertext: %w", err)
 			}
-			cts = append(cts, ciphersuite.HpkeCiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
+			cts = append(cts, ciphersuite.HPKECiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
 		}
 
 		nodes = append(nodes, interopUpdatePathNode{EncryptionKey: encKey, EncryptedPathSecrets: cts})
@@ -238,8 +238,7 @@ func decryptInteropPathSecret(
 				continue
 			}
 
-			ct := up.Nodes[m].EncryptedPathSecrets[j]
-			psBytes, err := ciphersuite.DecryptWithLabel(privKeyBytes, "UpdatePathNode", gcBytes, &ct, cs)
+			psBytes, err := ciphersuite.DecryptWithLabel(privKeyBytes, "UpdatePathNode", gcBytes, new(up.Nodes[m].EncryptedPathSecrets[j]), cs)
 			if err != nil {
 				continue
 			}

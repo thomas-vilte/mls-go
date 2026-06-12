@@ -94,7 +94,7 @@ func (s *closableCountingStore) Close() error {
 	return nil
 }
 
-func (s *countingStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
+func (s *countingStore) LoadGroupState(ctx context.Context, groupID *group.ID) ([]byte, error) {
 	s.loadCalls++
 	return s.Store.LoadGroupState(ctx, groupID)
 }
@@ -403,7 +403,7 @@ func TestClientSendMessageWithAADAndReceiveMetadata(t *testing.T) {
 	}
 
 	aad := []byte("visible-metadata")
-	msg, err := alice.SendMessageWithAAD(ctx, groupID, []byte("hello with aad"), aad)
+	msg, err := alice.SendMessage(ctx, groupID, []byte("hello with aad"), WithAAD(aad))
 	if err != nil {
 		t.Fatalf("alice sending message with aad: %v", err)
 	}
@@ -708,11 +708,35 @@ func TestClientLeaveGroup(t *testing.T) {
 		t.Fatalf("bob joining group: %v", err)
 	}
 
-	if err := bob.LeaveGroup(ctx, bobGroupID); err != nil {
+	// Bob leaves the group — this produces a commit that alice must process.
+	leaveCommit, err := bob.LeaveGroup(ctx, bobGroupID)
+	if err != nil {
 		t.Fatalf("bob leaving group: %v", err)
 	}
+	if len(leaveCommit) == 0 {
+		t.Fatal("LeaveGroup returned empty commit")
+	}
+
+	// Bob can no longer operate on the group.
 	if _, err := bob.SendMessage(ctx, bobGroupID, []byte("still here?")); !errors.Is(err, ErrGroupNotFound) {
 		t.Fatalf("expected ErrGroupNotFound after leave, got %v", err)
+	}
+
+	// Alice processes Bob's leave commit.
+	if err := alice.ProcessCommit(ctx, groupID, leaveCommit); err != nil {
+		t.Fatalf("alice processing leave commit: %v", err)
+	}
+
+	// Alice should see only herself as a member.
+	members, err := alice.ListMembers(ctx, groupID)
+	if err != nil {
+		t.Fatalf("listing members: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member after bob left, got %d", len(members))
+	}
+	if string(members[0].Identity) != "alice" {
+		t.Fatalf("expected remaining member to be alice, got %s", members[0].Identity)
 	}
 }
 
@@ -758,8 +782,7 @@ func TestClientErrorHelpers(t *testing.T) {
 	if !IsEpochMismatch(err) {
 		t.Fatalf("expected IsEpochMismatch=true, got err=%v", err)
 	}
-	var epochErr *ErrEpochMismatch
-	if !errors.As(err, &epochErr) {
+	if _, ok := errors.AsType[*ErrEpochMismatch](err); !ok {
 		t.Fatalf("expected errors.As(..., *ErrEpochMismatch), got %v", err)
 	}
 

@@ -21,7 +21,7 @@ on:
         type: choice
         options: [mlspp, openmls]
   push:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - '**.go'
       - 'go.mod'

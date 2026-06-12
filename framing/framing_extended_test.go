@@ -147,8 +147,7 @@ func TestAuthenticatedContent_MarshalTBS_IncludesGroupContext(t *testing.T) {
 	ac.GroupContext = []byte("gc-bytes")
 
 	tbs := (&ac).MarshalTBS()
-	ac2 := makeTestAC(ApplicationData{Data: []byte("msg")})
-	tbsWithout := (&ac2).MarshalTBS()
+	tbsWithout := (new(makeTestAC(ApplicationData{Data: []byte("msg")}))).MarshalTBS()
 
 	// With GroupContext for SenderTypeMember, TBS must be larger
 	if len(tbs) <= len(tbsWithout) {
