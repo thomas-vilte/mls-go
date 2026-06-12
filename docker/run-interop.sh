@@ -11,12 +11,13 @@ SUITES="${SUITES:-1 2 3}"
 RUN_STRESS="${RUN_STRESS:-}"
 CROSS_TARGET="${CROSS_TARGET:-mlspp}"
 # SEQUENTIAL=1 runs one cipher suite at a time instead of all in parallel.
-# Required for targets that don't handle concurrent gRPC connections well (e.g. OpenMLS).
-# Automatically enabled when CROSS_TARGET=openmls.
-SEQUENTIAL="${SEQUENTIAL:-}"
-if [ "$CROSS_TARGET" = "openmls" ]; then
-    SEQUENTIAL=1
-fi
+# Cross-interop targets (mlspp, openmls) don't reliably handle 3 concurrent
+# gRPC connections: their interop servers race on internal state IDs, which
+# can scramble KeyPackages/Welcomes between suites and cause spurious
+# failures (typically in the last-run configs, e.g. reinit/branch).
+# Self-interop (mls-go vs mls-go) handles concurrency fine and stays parallel.
+SEQUENTIAL_SELF="${SEQUENTIAL_SELF:-}"
+SEQUENTIAL_CROSS="${SEQUENTIAL_CROSS:-1}"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -174,12 +175,14 @@ fi
 if [ "$MODE" = "all" ] || [ "$MODE" = "self" ]; then
     declare -a selected_self
     select_configs self selected_self
+    SEQUENTIAL="$SEQUENTIAL_SELF"
     run_mode self "mls-go:50051" "mls-go:50051" "${selected_self[@]}"
 fi
 
 if [ "$MODE" = "all" ] || [ "$MODE" = "cross" ]; then
     declare -a selected_cross
     select_configs cross selected_cross
+    SEQUENTIAL="$SEQUENTIAL_CROSS"
     run_mode cross "mls-go:50051" "$CROSS_TARGET:50051" "${selected_cross[@]}"
 fi
 
