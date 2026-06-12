@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v1.3.1] - 2026-06-12
+
+[v1.3.1]: https://github.com/thomas-vilte/mls-go/compare/v1.3.0...v1.3.1
+
+In this patch release, we focused on enhancing the stability of the library through improved concurrency handling and state persistence. We also introduced collaborative group leave functionality and aligned our API naming conventions for better consistency.
+
+### 🤝 Group Management & API
+
+- We implemented support for collaborative group leave operations, allowing for more flexible group management.
+- We refined our API naming conventions to provide a more consistent and intuitive developer experience.
+
+### 🛡️ Stability & Concurrency
+
+- We improved concurrency safety by synchronizing the events field with a dedicated read-write mutex to prevent race conditions.
+- We resolved a bug that caused benchmarks to hang during execution.
+
+### 💾 State Management
+
+- We ensured that path-node and pending-update private keys are correctly persisted in the state, preventing data loss during updates.
+
+### 🔧 Developer Experience
+
+- We fixed several issues related to the build process, including bake context paths and filesystem entitlements.
+- We updated the CI configuration to use pinned versions of golangci-lint for more predictable build environments.
+
 ## [v1.3.0] - 2026-04-22
 
 [v1.3.0]: https://github.com/thomas-vilte/mls-go/compare/v1.2.1...v1.3.0
