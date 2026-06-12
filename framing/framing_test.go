@@ -2,6 +2,7 @@ package framing_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -333,7 +334,7 @@ func TestErrors_Is(t *testing.T) {
 
 // isError is a helper for testing errors.Is.
 func isError(got, want error) bool {
-	return got == want
+	return errors.Is(got, want)
 }
 
 // ============================================================================

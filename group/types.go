@@ -72,7 +72,7 @@ type Proposal struct {
 	PreSharedKey           *PreSharedKeyProposal
 	ReInit                 *ReInitProposal
 	ExternalInit           *ExternalInitProposal
-	GroupContextExtensions *GroupContextExtensionsProposal
+	GroupContextExtensions *ContextExtensionsProposal
 }
 
 // ProposalMarshal serializes a Proposal to TLS format per RFC 9420 §12.1.
@@ -283,7 +283,7 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 			return nil, fmt.Errorf("reading group context extensions: %w", err)
 		}
 		exts, _ := parseExtensions(extData)
-		proposal.GroupContextExtensions = &GroupContextExtensionsProposal{Extensions: exts}
+		proposal.GroupContextExtensions = &ContextExtensionsProposal{Extensions: exts}
 	}
 
 	return proposal, nil

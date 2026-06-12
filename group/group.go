@@ -20,27 +20,27 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// GroupID uniquely identifies an MLS group
-type GroupID struct {
+// ID uniquely identifies an MLS group
+type ID struct {
 	Value []byte
 }
 
-// NewGroupID creates a GroupID from bytes
-func NewGroupID(value []byte) *GroupID {
-	return &GroupID{Value: value}
+// NewGroupID creates a ID from bytes
+func NewGroupID(value []byte) *ID {
+	return &ID{Value: value}
 }
 
-// NewGroupIDRandom generates a random GroupID.
-func NewGroupIDRandom() (*GroupID, error) {
+// NewGroupIDRandom generates a random ID.
+func NewGroupIDRandom() (*ID, error) {
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
 		return nil, fmt.Errorf("generating random group ID: %w", err)
 	}
-	return &GroupID{Value: id}, nil
+	return &ID{Value: id}, nil
 }
 
-// AsSlice returns the GroupID as a byte slice.
-func (g *GroupID) AsSlice() []byte {
+// AsSlice returns the ID as a byte slice.
+func (g *ID) AsSlice() []byte {
 	return g.Value
 }
 
@@ -60,22 +60,17 @@ func secureZeroSecret(s *ciphersuite.Secret) {
 	}
 }
 
-// GroupEpoch represents the epoch number of a group.
-type GroupEpoch uint64
+// Epoch represents the epoch number of a group.
+type Epoch uint64
 
 // NewGroupEpoch creates a new epoch.
-func NewGroupEpoch(epoch uint64) GroupEpoch {
-	return GroupEpoch(epoch)
+func NewGroupEpoch(epoch uint64) Epoch {
+	return Epoch(epoch)
 }
 
 // AsUint64 returns the epoch as uint64.
-func (e GroupEpoch) AsUint64() uint64 {
+func (e Epoch) AsUint64() uint64 {
 	return uint64(e)
-}
-
-// Increment increments the epoch.
-func (e *GroupEpoch) Increment() {
-	*e++
 }
 
 // Group represents an MLS group.
@@ -83,8 +78,8 @@ func (e *GroupEpoch) Increment() {
 // Group is not safe for concurrent use. Callers that access the same Group from
 // multiple goroutines must provide external synchronization.
 type Group struct {
-	groupID               *GroupID
-	epoch                 GroupEpoch
+	groupID               *ID
+	epoch                 Epoch
 	cipherSuite           ciphersuite.CipherSuite
 	groupContext          *GroupContext
 	ratchetTree           *treesync.RatchetTree
@@ -161,8 +156,8 @@ func (g *Group) deletePathNodePrivKey(nodeIdx treesync.NodeIndex) {
 	delete(g.pathNodePrivKeys, nodeIdx)
 }
 
-// GroupID returns the unique identifier of the group.
-func (g *Group) GroupID() *GroupID {
+// ID returns the unique identifier of the group.
+func (g *Group) ID() *ID {
 	if g == nil || g.groupID == nil {
 		return nil
 	}
@@ -170,7 +165,7 @@ func (g *Group) GroupID() *GroupID {
 }
 
 // Epoch returns the current epoch of the group.
-func (g *Group) Epoch() GroupEpoch {
+func (g *Group) Epoch() Epoch {
 	if g == nil {
 		return 0
 	}
@@ -476,7 +471,7 @@ func (g *Group) cacheOldEpoch(
 //	kp, kpPriv, _ := keypackages.Generate(cred, cs)
 //	group, err := group.NewGroup(groupID, cs, kp, kpPriv)
 func NewGroup(
-	groupID *GroupID,
+	groupID *ID,
 	cipherSuite ciphersuite.CipherSuite,
 	keyPackage *keypackages.KeyPackage,
 	privKeys *keypackages.KeyPackagePrivateKeys,
@@ -601,20 +596,6 @@ func NewGroup(
 	}
 
 	return group, nil
-}
-
-// NewGroupWithExtensions creates a new group with the given GroupContext extensions.
-// Identical to NewGroup except the initial GroupContext includes the provided extensions.
-//
-// Deprecated: use NewGroup(..., WithExtensions(extensions)).
-func NewGroupWithExtensions(
-	groupID *GroupID,
-	cipherSuite ciphersuite.CipherSuite,
-	keyPackage *keypackages.KeyPackage,
-	privKeys *keypackages.KeyPackagePrivateKeys,
-	extensions []Extension,
-) (*Group, error) {
-	return NewGroup(groupID, cipherSuite, keyPackage, privKeys, WithExtensions(extensions))
 }
 
 // AddMember creates a proposal to add a new member to the group.
@@ -934,13 +915,18 @@ func (g *Group) CommitWithContext(
 	// Generate UpdatePath if necessary (RFC §12.4.1).
 	// If the committer is the only member of the group, omit the path;
 	// new members receive the commit_secret via the Welcome message instead.
+	// Also omit the path when the committer's own leaf was removed (self-removal):
+	// the truncated tree no longer contains the committer's leaf index, so no
+	// UpdatePath can be derived. Remaining members advance the epoch using the
+	// Remove proposal alone.
 	var updatePath *UpdatePath
 	var commitSecret *ciphersuite.Secret
 	var allPathSecrets []*ciphersuite.Secret
 	var committerDP, committerCopath []treesync.NodeIndex
 	var committerLevels []int
 
-	if g.ratchetTree.LeafCount() > 1 {
+	selfRemoved := uint32(g.ownLeafIndex) >= treeDiff.NumLeaves
+	if g.ratchetTree.LeafCount() > 1 && !selfRemoved {
 		updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
 		if err != nil {
 			return nil, fmt.Errorf("creating update path: %w", err)
@@ -1310,7 +1296,7 @@ func (g *Group) createUpdatePath(
 			defer wg.Done()
 			ps := pathSecrets[N-F+m+1]
 			res := tree.ResolutionWithExclusions(copath[level], excluded)
-			encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
+			encryptedSecrets := make([]ciphersuite.HPKECiphertext, len(res))
 			for j, resIdx := range res {
 				resNode := &tree.Nodes[resIdx]
 				var encKeyBytes []byte
@@ -1653,18 +1639,26 @@ func (g *Group) ProcessReceivedCommit(
 
 	// RFC §12.4.2: a commit MUST include a path if it covers a full commit
 	// (no proposals), or contains at least one Update or Remove proposal.
+	// Exception: a self-removal commit (committer removes their own leaf) cannot
+	// include a path because the committer's leaf is blanked by the Remove.
 	{
 		hasUpdate, hasRemove := false, false
+		selfRemovalOnly := false
 		for _, p := range proposals {
 			switch p.Type {
 			case ProposalTypeUpdate:
 				hasUpdate = true
 			case ProposalTypeRemove:
 				hasRemove = true
+				if p.Remove != nil && LeafNodeIndex(p.Remove.Removed) == LeafNodeIndex(senderLeafIdx) {
+					selfRemovalOnly = true
+				} else {
+					selfRemovalOnly = false
+				}
 			}
 		}
 		pathRequired := len(proposals) == 0 || hasUpdate || hasRemove
-		if pathRequired && commit.Path == nil && !isExternalCommit {
+		if pathRequired && !selfRemovalOnly && commit.Path == nil && !isExternalCommit {
 			return fmt.Errorf("commit requires UpdatePath (no proposals or has Update/Remove) but path is absent: %w", ErrInvalidProposal)
 		}
 	}
@@ -2800,7 +2794,7 @@ func (g *Group) EpochAuthenticator() []byte {
 }
 
 // NewGroupFromReInit creates a successor group from a ReInit proposal.
-// oldGroupID must be the GroupID of the group that sent the ReInit proposal
+// oldGroupID must be the ID of the group that sent the ReInit proposal
 // (RFC §12.4.4: the resumption PSK ID references the old group, not the new one).
 func NewGroupFromReInit(
 	reInit *ReInitProposal,
@@ -2936,22 +2930,22 @@ func NewGroupFromReInit(
 	return group, nil
 }
 
-// GetGroupInfo returns a signed GroupInfo for the current epoch (RFC 9420 §12.4.3.2).
+// GetGroupInfo returns a signed Info for the current epoch (RFC 9420 §12.4.3.2).
 func (g *Group) GetGroupInfo(
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
-) (*GroupInfo, error) {
+) (*Info, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}
 	return g.buildSignedGroupInfo(signerPrivKey)
 }
 
-// GetGroupInfoWithOptions returns a signed GroupInfo for the current epoch with
+// GetGroupInfoWithOptions returns a signed Info for the current epoch with
 // customizable extension inclusion.
 func (g *Group) GetGroupInfoWithOptions(
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
-	opts ...GroupInfoOption,
-) (*GroupInfo, error) {
+	opts ...InfoOption,
+) (*Info, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("group not operational")
 	}
@@ -2967,35 +2961,27 @@ func defaultGroupInfoConfig() groupInfoConfig {
 	return groupInfoConfig{includeRatchetTree: true, includeExternalPub: true}
 }
 
-// GroupInfoOption configures GroupInfo serialization behavior.
-type GroupInfoOption func(*groupInfoConfig)
+// InfoOption configures Info serialization behavior.
+type InfoOption func(*groupInfoConfig)
 
 // WithRatchetTree controls inclusion of the ratchet_tree extension.
-func WithRatchetTree(include bool) GroupInfoOption {
+func WithRatchetTree(include bool) InfoOption {
 	return func(cfg *groupInfoConfig) {
 		cfg.includeRatchetTree = include
 	}
 }
 
 // WithExternalPub controls inclusion of the external_pub extension.
-func WithExternalPub(include bool) GroupInfoOption {
+func WithExternalPub(include bool) InfoOption {
 	return func(cfg *groupInfoConfig) {
 		cfg.includeExternalPub = include
 	}
 }
 
-// GroupInfoOptions controls optional extensions in GroupInfo serialization.
-//
-// Deprecated: use GroupInfoOption values (WithRatchetTree/WithExternalPub).
-type GroupInfoOptions struct {
-	IncludeRatchetTree *bool
-	IncludeExternalPub *bool
-}
-
 func (g *Group) buildSignedGroupInfo(
 	signerPrivKey *ciphersuite.SignaturePrivateKey,
-	opts ...GroupInfoOption,
-) (*GroupInfo, error) {
+	opts ...InfoOption,
+) (*Info, error) {
 	cfg := defaultGroupInfoConfig()
 	for _, opt := range opts {
 		if opt != nil {
@@ -3008,7 +2994,7 @@ func (g *Group) buildSignedGroupInfo(
 
 	extensions := cloneExtensions(g.groupContext.Extensions)
 
-	groupInfo := &GroupInfo{
+	groupInfo := &Info{
 		GroupContext:    g.groupContext,
 		Extensions:      extensions,
 		ConfirmationTag: g.confirmationTag,

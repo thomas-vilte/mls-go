@@ -52,7 +52,7 @@ func NewEncryptedStore(inner group.GroupStorage, encryptionKey []byte) (*Encrypt
 }
 
 // SaveGroupState encrypts the plaintext state and stores nonce || ciphertext in the inner store.
-func (s *EncryptedStore) SaveGroupState(ctx context.Context, groupID *group.GroupID, state []byte) error {
+func (s *EncryptedStore) SaveGroupState(ctx context.Context, groupID *group.ID, state []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (s *EncryptedStore) SaveGroupState(ctx context.Context, groupID *group.Grou
 }
 
 // LoadGroupState loads nonce || ciphertext from the inner store and decrypts it.
-func (s *EncryptedStore) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
+func (s *EncryptedStore) LoadGroupState(ctx context.Context, groupID *group.ID) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -90,6 +90,6 @@ func (s *EncryptedStore) LoadGroupState(ctx context.Context, groupID *group.Grou
 }
 
 // DeleteGroupState removes the encrypted group state from the inner store.
-func (s *EncryptedStore) DeleteGroupState(ctx context.Context, groupID *group.GroupID) error {
+func (s *EncryptedStore) DeleteGroupState(ctx context.Context, groupID *group.ID) error {
 	return s.inner.DeleteGroupState(ctx, groupID)
 }

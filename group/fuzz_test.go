@@ -34,7 +34,7 @@ func FuzzProcessReceivedCommit(f *testing.F) {
 		var myPrivBytes []byte
 		if group.members[0] != nil && group.members[0].KeyPackage != nil {
 			myPrivBytes = make([]byte, 32)
-			rand.Read(myPrivBytes)
+			_, _ = rand.Read(myPrivBytes)
 		}
 
 		// Must not panic regardless of input.

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	mls "github.com/thomas-vilte/mls-go"
+	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/framing"
 )

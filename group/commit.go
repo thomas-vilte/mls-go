@@ -114,7 +114,7 @@ func ComputeProposalRef(acBytes []byte, cs ciphersuite.CipherSuite) []byte {
 // the resolution of the corresponding copath node.
 type UpdatePathNode struct {
 	EncryptionKey        []byte
-	EncryptedPathSecrets []ciphersuite.HpkeCiphertext
+	EncryptedPathSecrets []ciphersuite.HPKECiphertext
 }
 
 // Marshal serializes the UpdatePathNode to TLS format.
@@ -172,7 +172,7 @@ func unmarshalUpdatePathNodeFromReader(r *tls.Reader) (*UpdatePathNode, error) {
 // unmarshalEncryptedPathSecrets parses encrypted path secrets with fallback.
 //
 // First tries inline format per RFC, then falls back to wrapped format for interop.
-func unmarshalEncryptedPathSecrets(data []byte) ([]ciphersuite.HpkeCiphertext, error) {
+func unmarshalEncryptedPathSecrets(data []byte) ([]ciphersuite.HPKECiphertext, error) {
 	if secrets, err := unmarshalEncryptedPathSecretsInline(data); err == nil {
 		return secrets, nil
 	}
@@ -181,9 +181,9 @@ func unmarshalEncryptedPathSecrets(data []byte) ([]ciphersuite.HpkeCiphertext, e
 }
 
 // unmarshalEncryptedPathSecretsInline parses inline HPKE ciphertexts per RFC 9420 §12.4.1.
-func unmarshalEncryptedPathSecretsInline(data []byte) ([]ciphersuite.HpkeCiphertext, error) {
+func unmarshalEncryptedPathSecretsInline(data []byte) ([]ciphersuite.HPKECiphertext, error) {
 	secretsReader := tls.NewReader(data)
-	secrets := make([]ciphersuite.HpkeCiphertext, 0)
+	secrets := make([]ciphersuite.HPKECiphertext, 0)
 	for secretsReader.Remaining() > 0 {
 		kemOutput, err := secretsReader.ReadVLBytes()
 		if err != nil {
@@ -193,15 +193,15 @@ func unmarshalEncryptedPathSecretsInline(data []byte) ([]ciphersuite.HpkeCiphert
 		if err != nil {
 			return nil, fmt.Errorf("reading ciphertext: %w", err)
 		}
-		secrets = append(secrets, ciphersuite.HpkeCiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
+		secrets = append(secrets, ciphersuite.HPKECiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
 	}
 	return secrets, nil
 }
 
 // unmarshalEncryptedPathSecretsWrapped parses wrapped HPKE ciphertexts for interop.
-func unmarshalEncryptedPathSecretsWrapped(data []byte) ([]ciphersuite.HpkeCiphertext, error) {
+func unmarshalEncryptedPathSecretsWrapped(data []byte) ([]ciphersuite.HPKECiphertext, error) {
 	secretsReader := tls.NewReader(data)
-	secrets := make([]ciphersuite.HpkeCiphertext, 0)
+	secrets := make([]ciphersuite.HPKECiphertext, 0)
 	for secretsReader.Remaining() > 0 {
 		ctData, err := secretsReader.ReadVLBytes()
 		if err != nil {
@@ -219,7 +219,7 @@ func unmarshalEncryptedPathSecretsWrapped(data []byte) ([]ciphersuite.HpkeCipher
 		if ctReader.Remaining() != 0 {
 			return nil, fmt.Errorf("trailing bytes in wrapped HPKECiphertext")
 		}
-		secrets = append(secrets, ciphersuite.HpkeCiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
+		secrets = append(secrets, ciphersuite.HPKECiphertext{KEMOutput: kemOutput, Ciphertext: ciphertext})
 	}
 	return secrets, nil
 }

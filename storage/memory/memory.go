@@ -51,7 +51,7 @@ func NewStore() *Store {
 }
 
 // SaveGroupState persists serialized group state for the given group ID.
-func (s *Store) SaveGroupState(ctx context.Context, groupID *group.GroupID, state []byte) error {
+func (s *Store) SaveGroupState(ctx context.Context, groupID *group.ID, state []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (s *Store) SaveGroupState(ctx context.Context, groupID *group.GroupID, stat
 }
 
 // LoadGroupState retrieves serialized group state for the given group ID.
-func (s *Store) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]byte, error) {
+func (s *Store) LoadGroupState(ctx context.Context, groupID *group.ID) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (s *Store) LoadGroupState(ctx context.Context, groupID *group.GroupID) ([]b
 }
 
 // DeleteGroupState removes the persisted group state for the given group ID.
-func (s *Store) DeleteGroupState(ctx context.Context, groupID *group.GroupID) error {
+func (s *Store) DeleteGroupState(ctx context.Context, groupID *group.ID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (s *Store) DeleteGroupState(ctx context.Context, groupID *group.GroupID) er
 }
 
 // StoreSignatureKey persists the signature private key for the given group.
-func (s *Store) StoreSignatureKey(ctx context.Context, groupID *group.GroupID, key *ciphersuite.SignaturePrivateKey) error {
+func (s *Store) StoreSignatureKey(ctx context.Context, groupID *group.ID, key *ciphersuite.SignaturePrivateKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (s *Store) StoreSignatureKey(ctx context.Context, groupID *group.GroupID, k
 }
 
 // LoadSignatureKey retrieves the signature private key for the given group.
-func (s *Store) LoadSignatureKey(ctx context.Context, groupID *group.GroupID) (*ciphersuite.SignaturePrivateKey, error) {
+func (s *Store) LoadSignatureKey(ctx context.Context, groupID *group.ID) (*ciphersuite.SignaturePrivateKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (s *Store) LoadSignatureKey(ctx context.Context, groupID *group.GroupID) (*
 }
 
 // StoreLeafEncryptionKey persists the leaf HPKE encryption private key for the given group and leaf index.
-func (s *Store) StoreLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex, key []byte) error {
+func (s *Store) StoreLeafEncryptionKey(ctx context.Context, groupID *group.ID, leafIndex group.LeafNodeIndex, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (s *Store) StoreLeafEncryptionKey(ctx context.Context, groupID *group.Group
 }
 
 // LoadLeafEncryptionKey retrieves the leaf HPKE encryption private key for the given group and leaf index.
-func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.GroupID, leafIndex group.LeafNodeIndex) ([]byte, error) {
+func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.ID, leafIndex group.LeafNodeIndex) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -167,14 +167,14 @@ func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.GroupI
 	return append([]byte(nil), key...), nil
 }
 
-func groupKey(groupID *group.GroupID) (string, error) {
+func groupKey(groupID *group.ID) (string, error) {
 	if groupID == nil {
 		return "", ErrNilGroupID
 	}
 	return hex.EncodeToString(groupID.AsSlice()), nil
 }
 
-func leafKey(groupID *group.GroupID, leafIndex group.LeafNodeIndex) (string, error) {
+func leafKey(groupID *group.ID, leafIndex group.LeafNodeIndex) (string, error) {
 	groupKeyValue, err := groupKey(groupID)
 	if err != nil {
 		return "", err

@@ -13,7 +13,7 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
-// GroupStateData represents the serialized state of an MLS group.
+// StateData represents the serialized state of an MLS group.
 //
 // SECURITY WARNING: This structure contains sensitive cryptographic material
 // (epoch secrets, membership data, ratchet tree). It MUST be encrypted at rest
@@ -23,7 +23,7 @@ import (
 // of debugging. For production use, consider a more compact binary format.
 //
 // Fields:
-//   - GroupID: Unique group identifier (RFC 9420 §5.2)
+//   - ID: Unique group identifier (RFC 9420 §5.2)
 //   - Epoch: Current epoch number
 //   - CipherSuite: Cipher suite in use
 //   - OwnLeafIndex: This member's leaf index in the tree
@@ -44,7 +44,7 @@ import (
 //   - PendingUpdatePrivKey: Private HPKE key for a self-generated Update
 //     proposal (SelfUpdate) not yet committed; needed to decrypt the UpdatePath
 //     of the commit that merges this proposal.
-type GroupStateData struct {
+type StateData struct {
 	GroupID               []byte                        `json:"group_id"`
 	Epoch                 uint64                        `json:"epoch"`
 	CipherSuite           uint16                        `json:"cipher_suite"`
@@ -105,7 +105,7 @@ func (g *Group) MarshalState() ([]byte, error) {
 		return nil, fmt.Errorf("can only serialize group in operational state")
 	}
 
-	state := &GroupStateData{
+	state := &StateData{
 		GroupID:               g.groupID.AsSlice(),
 		Epoch:                 g.epoch.AsUint64(),
 		CipherSuite:           uint16(g.cipherSuite),
@@ -182,7 +182,7 @@ func (g *Group) MarshalState() ([]byte, error) {
 //	    return err
 //	}
 func UnmarshalGroupState(data []byte) (*Group, error) {
-	var state GroupStateData
+	var state StateData
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("unmarshaling group state: %w", err)
 	}
@@ -235,6 +235,10 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		}
 	default:
 		return nil, fmt.Errorf("missing secret tree and encryption secret")
+	}
+
+	if epochSecrets == nil {
+		return nil, fmt.Errorf("missing epoch secrets")
 	}
 
 	// Restore Group

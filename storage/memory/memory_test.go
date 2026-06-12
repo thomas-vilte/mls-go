@@ -47,7 +47,7 @@ func TestStoreGroupStateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshaling group state: %v", err)
 	}
-	if got, want := string(restored.GroupID().AsSlice()), string(g.GroupID().AsSlice()); got != want {
+	if got, want := string(restored.ID().AsSlice()), string(g.ID().AsSlice()); got != want {
 		t.Fatalf("unexpected group ID: got %x want %x", got, want)
 	}
 	if restored.Epoch() != g.Epoch() {

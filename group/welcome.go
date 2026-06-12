@@ -28,7 +28,7 @@ type Welcome struct {
 	CipherSuite        ciphersuite.CipherSuite
 	Secrets            []EncryptedGroupSecrets
 	EncryptedGroupInfo []byte
-	GroupInfo          *GroupInfo
+	GroupInfo          *Info
 }
 
 // EncryptedGroupSecrets represents encrypted group secrets for a new member.
@@ -39,24 +39,24 @@ type Welcome struct {
 //	} EncryptedGroupSecrets;
 type EncryptedGroupSecrets struct {
 	NewMember             []byte
-	EncryptedGroupSecrets ciphersuite.HpkeCiphertext
+	EncryptedGroupSecrets ciphersuite.HPKECiphertext
 }
 
-// GroupSecrets represents the secrets needed to join a group.
+// Secrets represents the secrets needed to join a group.
 //
 //	struct {
 //	    opaque joiner_secret<V>;
 //	    optional<PathSecret> path_secret;
 //	    PreSharedKeyID psks<V>;
 //	} GroupSecrets;
-type GroupSecrets struct {
+type Secrets struct {
 	JoinerSecret *ciphersuite.Secret
 	PathSecret   []byte
 	Psks         []PskID
 }
 
-// Marshal serializes GroupSecrets to TLS format.
-func (gs *GroupSecrets) Marshal() []byte {
+// Marshal serializes Secrets to TLS format.
+func (gs *Secrets) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteVLBytes(gs.JoinerSecret.AsSlice())
 
@@ -85,8 +85,8 @@ func (gs *GroupSecrets) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalGroupSecrets deserializes GroupSecrets from TLS format.
-func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
+// UnmarshalGroupSecrets deserializes Secrets from TLS format.
+func UnmarshalGroupSecrets(data []byte) (*Secrets, error) {
 	r := tls.NewReader(data)
 
 	joinerSecretData, err := r.ReadVLBytes()
@@ -153,14 +153,14 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 		psks = append(psks, pskID)
 	}
 
-	return &GroupSecrets{
+	return &Secrets{
 		JoinerSecret: joinerSecret,
 		PathSecret:   pathSecret,
 		Psks:         psks,
 	}, nil
 }
 
-// GroupInfo represents the group information sent in a Welcome.
+// Info represents the group information sent in a Welcome.
 //
 //	struct {
 //	    GroupContext group_context;
@@ -169,7 +169,7 @@ func UnmarshalGroupSecrets(data []byte) (*GroupSecrets, error) {
 //	    uint32 signer;
 //	    opaque signature<V>;
 //	} GroupInfo;
-type GroupInfo struct {
+type Info struct {
 	GroupContext    *GroupContext
 	Extensions      []Extension
 	ConfirmationTag []byte
@@ -178,8 +178,8 @@ type GroupInfo struct {
 	RatchetTree     *treesync.RatchetTree
 }
 
-// MarshalTBS serializes the fields to sign of GroupInfo (excludes Signature).
-func (gi *GroupInfo) MarshalTBS() []byte {
+// MarshalTBS serializes the fields to sign of Info (excludes Signature).
+func (gi *Info) MarshalTBS() []byte {
 	w := tls.NewWriter()
 	w.WriteRaw(gi.GroupContext.Marshal())
 	extBuf := tls.NewWriter()
@@ -193,8 +193,8 @@ func (gi *GroupInfo) MarshalTBS() []byte {
 	return w.Bytes()
 }
 
-// Marshal serializes GroupInfo to TLS format.
-func (gi *GroupInfo) Marshal() []byte {
+// Marshal serializes Info to TLS format.
+func (gi *Info) Marshal() []byte {
 	w := tls.NewWriter()
 	w.WriteRaw(gi.GroupContext.Marshal())
 
@@ -213,8 +213,8 @@ func (gi *GroupInfo) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalGroupInfo deserializes GroupInfo from TLS format.
-func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
+// UnmarshalGroupInfo deserializes Info from TLS format.
+func UnmarshalGroupInfo(data []byte) (*Info, error) {
 	r := tls.NewReader(data)
 
 	version, err := r.ReadUint16()
@@ -293,7 +293,7 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 		return nil, err
 	}
 
-	return &GroupInfo{
+	return &Info{
 		GroupContext:    groupContext,
 		Extensions:      extensions,
 		ConfirmationTag: confirmationTag,
@@ -354,7 +354,7 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 
 		secrets = append(secrets, EncryptedGroupSecrets{
 			NewMember: newMember,
-			EncryptedGroupSecrets: ciphersuite.HpkeCiphertext{
+			EncryptedGroupSecrets: ciphersuite.HPKECiphertext{
 				KEMOutput:  kemOutput,
 				Ciphertext: ciphertext,
 			},
@@ -392,14 +392,14 @@ type createWelcomeConfig struct {
 	pskIDs        []PskID
 	pskSecret     *ciphersuite.Secret
 	stagedCommit  *StagedCommit
-	groupInfoOpts []GroupInfoOption
+	groupInfoOpts []InfoOption
 	signerPrivKey *ciphersuite.SignaturePrivateKey
 }
 
 // CreateWelcomeOption configures Welcome message creation.
 type CreateWelcomeOption func(*createWelcomeConfig)
 
-// WithJoinerSecret sets the joiner_secret included in GroupSecrets.
+// WithJoinerSecret sets the joiner_secret included in Secrets.
 func WithJoinerSecret(secret *ciphersuite.Secret) CreateWelcomeOption {
 	return func(cfg *createWelcomeConfig) {
 		cfg.joinerSecret = secret
@@ -413,7 +413,7 @@ func WithPathSecret(pathSecret []byte) CreateWelcomeOption {
 	}
 }
 
-// WithPSKIDs sets the PSK references included in GroupSecrets.
+// WithPSKIDs sets the PSK references included in Secrets.
 func WithPSKIDs(pskIDs []PskID) CreateWelcomeOption {
 	return func(cfg *createWelcomeConfig) {
 		cfg.pskIDs = append([]PskID(nil), pskIDs...)
@@ -434,10 +434,10 @@ func WithStagedCommit(staged *StagedCommit) CreateWelcomeOption {
 	}
 }
 
-// WithGroupInfoOptions sets GroupInfo serialization options for the Welcome.
-func WithGroupInfoOptions(opts ...GroupInfoOption) CreateWelcomeOption {
+// WithGroupInfoOptions sets Info serialization options for the Welcome.
+func WithGroupInfoOptions(opts ...InfoOption) CreateWelcomeOption {
 	return func(cfg *createWelcomeConfig) {
-		cfg.groupInfoOpts = append([]GroupInfoOption(nil), opts...)
+		cfg.groupInfoOpts = append([]InfoOption(nil), opts...)
 	}
 }
 
@@ -510,7 +510,7 @@ func (g *Group) createWelcome(
 	pskIDs []PskID,
 	pskSecret *ciphersuite.Secret,
 	staged *StagedCommit,
-	groupInfoOpts ...GroupInfoOption,
+	groupInfoOpts ...InfoOption,
 ) (*Welcome, error) {
 	if g.state != StateOperational {
 		return nil, fmt.Errorf("create welcome: %w", ErrGroupNotOperational)
@@ -544,11 +544,11 @@ func (g *Group) createWelcome(
 
 	// Encrypt GroupInfo (including signature) with welcome_secret per RFC 9420 §11.2.2
 	groupInfoBytes := groupInfo.Marshal()
-	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.cipherSuite.AeadKeyLength())
+	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, g.cipherSuite.AEADKeyLength())
 	if err != nil {
 		return nil, err
 	}
-	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, g.cipherSuite.AeadNonceLength())
+	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, g.cipherSuite.AEADNonceLength())
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +599,7 @@ func (g *Group) createWelcome(
 		// RFC 9420 §11.2.2: optional<PathSecret> path_secret — absent when no path.
 
 		// Build GroupSecrets
-		groupSecrets := &GroupSecrets{
+		groupSecrets := &Secrets{
 			JoinerSecret: joinerSecret,
 			PathSecret:   joinerPathSecret,
 			Psks:         pskIDs,
@@ -758,13 +758,13 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("deriving welcome_secret: %w", err)
 	}
 
-	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, welcome.CipherSuite.AeadKeyLength())
+	welcomeKey, err := welcomeSecret.KdfExpandLabel("key", []byte{}, welcome.CipherSuite.AEADKeyLength())
 	if err != nil {
 		secureZeroSecret(welcomeSecret)
 		return nil, fmt.Errorf("deriving welcome_key: %w", err)
 	}
 	defer secureZeroSecret(welcomeKey)
-	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, welcome.CipherSuite.AeadNonceLength())
+	welcomeNonce, err := welcomeSecret.KdfExpandLabel("nonce", []byte{}, welcome.CipherSuite.AEADNonceLength())
 	secureZeroSecret(welcomeSecret)
 	if err != nil {
 		return nil, fmt.Errorf("deriving welcome_nonce: %w", err)
@@ -866,12 +866,12 @@ func JoinFromWelcomeWithContext(
 				continue
 			}
 			for _, unmergedLeafIdx := range node.UnmergedLeaves {
-				leafNode := ratchetTree.GetLeaf(treesync.LeafIndex(unmergedLeafIdx))
+				leafNode := ratchetTree.GetLeaf(unmergedLeafIdx)
 				if leafNode == nil || leafNode.State != treesync.NodeStatePresent {
 					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d references a blank or missing leaf: %w",
 						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
 				}
-				if !ratchetTree.SubtreeContainsLeaf(treesync.NodeIndex(nodeIdx), treesync.LeafIndex(unmergedLeafIdx)) {
+				if !ratchetTree.SubtreeContainsLeaf(treesync.NodeIndex(nodeIdx), unmergedLeafIdx) {
 					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d is not a descendant of that node: %w",
 						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
 				}
@@ -1065,7 +1065,7 @@ func JoinFromWelcomeWithContext(
 	return group, nil
 }
 
-func verifyGroupInfoSignature(groupInfo *GroupInfo, tree *treesync.RatchetTree) error {
+func verifyGroupInfoSignature(groupInfo *Info, tree *treesync.RatchetTree) error {
 	if groupInfo == nil {
 		return ErrGroupInfoNil
 	}

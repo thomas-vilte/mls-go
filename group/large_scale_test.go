@@ -96,7 +96,8 @@ func TestGroup_1024Members(t *testing.T) {
 	// Benchmark a single message send with 1024 members
 	msgStart := time.Now()
 	data := make([]byte, 1024)
-	rand.Read(data)
+
+	_, _ = rand.Read(data)
 	_, err = group.SendMessage(data, creatorSigPriv)
 	if err != nil {
 		t.Fatalf("SendMessage failed: %v", err)

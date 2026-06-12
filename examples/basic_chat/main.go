@@ -128,7 +128,7 @@ func main() {
 	}
 	fmt.Printf("Alice received: %s\n", string(receivedByAlice))
 
-	if !bytes.Equal(aliceGroup.GroupID().AsSlice(), bobGroup.GroupID().AsSlice()) {
+	if !bytes.Equal(aliceGroup.ID().AsSlice(), bobGroup.ID().AsSlice()) {
 		log.Fatal("group IDs do not match")
 	}
 

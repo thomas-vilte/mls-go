@@ -201,7 +201,7 @@ func TestMergeCommit_EpochMismatch(t *testing.T) {
 	}
 }
 
-// TestMergeCommit_WrongGroupID verifies that MergeCommit rejects commits with the wrong GroupID.
+// TestMergeCommit_WrongGroupID verifies that MergeCommit rejects commits with the wrong ID.
 func TestMergeCommit_WrongGroupID(t *testing.T) {
 	// Create group with Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))
@@ -250,7 +250,7 @@ func TestMergeCommit_WrongGroupID(t *testing.T) {
 	}
 }
 
-// TestProcessReceivedCommit_WrongGroupID verifies that ProcessReceivedCommit rejects commits with the wrong GroupID.
+// TestProcessReceivedCommit_WrongGroupID verifies that ProcessReceivedCommit rejects commits with the wrong ID.
 func TestProcessReceivedCommit_WrongGroupID(t *testing.T) {
 	// Create group with Alice
 	aliceCred, _, err := credentials.GenerateCredentialWithKey([]byte("alice"))

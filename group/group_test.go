@@ -92,11 +92,10 @@ func TestGroupAddMember(t *testing.T) {
 		t.Fatalf("AddMember failed: %v", err)
 	}
 
-	//nolint:staticcheck // nil check is necessary here
 	if proposal == nil {
-		t.Error("Proposal should not be nil")
+		t.Fatal("Proposal should not be nil")
 	}
-	//nolint:staticcheck // proposal is guaranteed non-nil after check above
+
 	if proposal.Type != ProposalTypeAdd {
 		t.Errorf("Proposal type should be Add, got %d", proposal.Type)
 	}
@@ -133,7 +132,7 @@ func TestGroupAccessors_ReturnCopies(t *testing.T) {
 		t.Fatalf("PaddingSize() = %d, want 32", g.PaddingSize())
 	}
 
-	groupIDCopy := g.GroupID()
+	groupIDCopy := g.ID()
 	if groupIDCopy == nil || !bytes.Equal(groupIDCopy.AsSlice(), g.groupID.AsSlice()) {
 		t.Fatal("GroupID() returned wrong value")
 	}
@@ -186,11 +185,10 @@ func TestGroupRemoveMember(t *testing.T) {
 		t.Fatalf("RemoveMember failed: %v", err)
 	}
 
-	//nolint:staticcheck // nil check is necessary here
 	if proposal == nil {
-		t.Error("Proposal should not be nil")
+		t.Fatal("Proposal should not be nil")
 	}
-	//nolint:staticcheck // proposal is guaranteed non-nil after check above
+
 	if proposal.Type != ProposalTypeRemove {
 		t.Errorf("Proposal type should be Remove, got %d", proposal.Type)
 	}
@@ -278,7 +276,7 @@ func TestGroupCommit(t *testing.T) {
 	}
 
 	if stagedCommit == nil {
-		t.Error("StagedCommit should not be nil")
+		t.Fatal("StagedCommit should not be nil")
 	}
 	if group.State() != StatePendingCommit {
 		t.Errorf("Group state should be StatePendingCommit, got %d", group.State())

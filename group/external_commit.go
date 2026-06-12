@@ -17,7 +17,7 @@ import (
 // ExternalCommit allows a new member to join an existing group without a Welcome message.
 //
 // RFC 9420 §12.4.3.2
-// The new member retrieves a signed GroupInfo, constructs an ExternalInit proposal
+// The new member retrieves a signed Info, constructs an ExternalInit proposal
 // and an UpdatePath, and creates an external commit that adds them to the group.
 // Returns the resulting group state and the PublicMessage to broadcast to other members.
 //
@@ -25,7 +25,7 @@ import (
 // the ExternalInit proposal (RFC §12.4.3.2: external commit may contain Remove proposals
 // to remove prior appearance of this member).
 func ExternalCommit(
-	groupInfo *GroupInfo,
+	groupInfo *Info,
 	cs ciphersuite.CipherSuite,
 	sigPrivKey *ciphersuite.SignaturePrivateKey,
 	sigPubKey *ciphersuite.SignaturePublicKey,
@@ -267,7 +267,7 @@ func ExternalCommit(
 	for m, level := range levels {
 		ps := pathSecrets[N-F+m+1]
 		res := treeDiff.ResolutionWithExclusions(copath[level], excluded)
-		encryptedSecrets := make([]ciphersuite.HpkeCiphertext, len(res))
+		encryptedSecrets := make([]ciphersuite.HPKECiphertext, len(res))
 		for j, resIdx := range res {
 			resNode := &treeDiff.Nodes[resIdx]
 			var encKeyBytes []byte
