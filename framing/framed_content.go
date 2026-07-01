@@ -73,6 +73,24 @@ func (fc *FramedContent) ApplicationData() ([]byte, bool) {
 	return app.Data, true
 }
 
+// ProposalData returns the serialized proposal if the body type is proposal.
+func (fc *FramedContent) ProposalData() ([]byte, bool) {
+	p, ok := fc.Body.(ProposalBody)
+	if !ok {
+		return nil, false
+	}
+	return p.Data, true
+}
+
+// CommitData returns the serialized commit if the body type is commit.
+func (fc *FramedContent) CommitData() ([]byte, bool) {
+	c, ok := fc.Body.(CommitBody)
+	if !ok {
+		return nil, false
+	}
+	return c.Data, true
+}
+
 // Marshal serializes FramedContent according to TLS encoding in the RFC.
 func (fc *FramedContent) Marshal() []byte {
 	w := tls.NewWriter()
