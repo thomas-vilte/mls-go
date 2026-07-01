@@ -1414,6 +1414,47 @@ func (c *Client) CancelPendingProposals(ctx context.Context, groupID []byte) err
 	return c.persistGroup(ctx, g, entry)
 }
 
+// RevokeProposals removes pending proposals identified by their ProposalRef
+// (RFC 9420 §12.4). Idempotent: refs that aren't found are silently skipped.
+// A ProposalRef is a public hash, not secret material, so it's safe to pass
+// around and log.
+func (c *Client) RevokeProposals(ctx context.Context, groupID []byte, refs [][]byte) error {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return err
+	}
+
+	var removed int
+	for _, ref := range refs {
+		if len(ref) == 0 {
+			continue
+		}
+		if g.RevokeProposal(ref) {
+			removed++
+		}
+	}
+	c.log(slog.LevelDebug, "revoked in-flight proposals",
+		"group", groupHex(groupID), "requested", len(refs), "removed", removed)
+	return c.persistGroup(ctx, g, entry)
+}
+
 // ListMembers returns all active members in the group.
 func (c *Client) ListMembers(ctx context.Context, groupID []byte) ([]MemberInfo, error) {
 	c.mu.Lock()
