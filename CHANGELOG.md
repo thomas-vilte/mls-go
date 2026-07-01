@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [v1.5.0] - 2026-07-01
+
+[v1.5.0]: https://github.com/thomas-vilte/mls-go/compare/v1.4.0...v1.5.0
+
+In this release, we focused on improving data accessibility within the library. We introduced new accessors for Proposal and Commit data to streamline how you interact with MLS protocol structures.
+
+### 🔧 Developer Experience
+
+- We added new accessors for ProposalData and CommitData to provide easier access to internal protocol information.
+
 ## [v1.4.0] - 2026-07-01
 
 [v1.4.0]: https://github.com/thomas-vilte/mls-go/compare/v1.3.1...v1.4.0
