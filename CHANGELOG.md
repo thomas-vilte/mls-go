@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-07-01
+
+[v1.4.0]: https://github.com/thomas-vilte/mls-go/compare/v1.3.1...v1.4.0
+
+In this release, we focused on expanding the control developers have over the proposal lifecycle within the MLS protocol. We introduced new functionality to manage and revoke proposals, ensuring more flexibility in group state transitions.
+
+### ✨ New Features
+
+- We added the RevokeProposals method to allow for the explicit withdrawal of active proposals within the protocol.
 
 ## [v1.3.1] - 2026-06-12
 
