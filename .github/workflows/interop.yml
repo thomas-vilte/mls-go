@@ -4,22 +4,15 @@ name: Interop
 # implementations. The mlspp/openmls images are pulled prebuilt from GHCR
 # (published by build-interop-images.yml), so a full run takes ~5-10 min.
 #
-# Runs on PRs and pushes that touch protocol-relevant code; doc-only changes
-# skip it. Also nightly (catches upstream drift) and manually. The weekly
-# Saturday run additionally executes the deep_random stress configs, which
-# take hours and are excluded from regular runs.
+# Runs on every PR (no path filter: these jobs are required status checks,
+# and a required check whose workflow is skipped by a paths filter blocks
+# the PR forever), on pushes that touch protocol-relevant code, nightly
+# (catches upstream drift), and manually. The hours-long deep_random stress
+# configs live in the separate Stress workflow (weekly).
 on:
   schedule:
     - cron: '0 4 * * *' # nightly at 04:00 UTC
-    - cron: '0 6 * * 6' # weekly stress run on Saturday at 06:00 UTC
   workflow_dispatch:
-    inputs:
-      cross_target:
-        description: 'Cross-interop target'
-        required: false
-        default: 'mlspp'
-        type: choice
-        options: [mlspp, openmls]
   push:
     branches: [main]
     paths:
@@ -30,12 +23,9 @@ on:
       - '.github/workflows/interop.yml'
   pull_request:
     branches: [main, dev]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'docker/**'
-      - 'interop/**'
-      - '.github/workflows/interop.yml'
+
+permissions:
+  contents: read
 
 concurrency:
   group: interop-${{ github.ref }}
@@ -47,19 +37,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Build the compose services with the GitHub Actions layer cache so the
       # mls-go and test-runner images are only rebuilt when their inputs change.
       - name: Build images (cached)
-        uses: docker/bake-action@v5
+        uses: docker/bake-action@v7
         with:
-          source: .
-          workdir: docker
+          source: ./docker
           files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
@@ -69,75 +58,136 @@ jobs:
             *.cache-to=type=gha,scope=interop-self,mode=max
 
       - name: Run self-interop
-        run: ./docker/run-interop.sh self
+        shell: bash
+        run: ./docker/run-interop.sh self 2>&1 | tee interop-output.log
+
+      - name: Collect results
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Self-interop (mls-go vs mls-go)'
+            echo '```'
+            grep -E '^(PASS|FAIL|Summary):' interop-output.log || echo 'no results (run crashed before the summary)'
+            echo '```'
+          } | tee results-self.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: interop-results-self
+          path: results-self.md
 
   cross-interop:
-    name: Cross-interop (mls-go vs ${{ inputs.cross_target || 'mlspp' }})
+    name: Cross-interop (mls-go vs ${{ matrix.target }})
     runs-on: ubuntu-latest
-    # Image is pulled prebuilt from GHCR; the suite itself runs in minutes.
+    # Images are pulled prebuilt from GHCR; the suite itself runs in minutes.
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mlspp, openmls]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # mls-go and test-runner are cheap to build; mlspp/openmls are pulled
       # prebuilt from GHCR (published by the build-interop-images workflow),
       # so this job never compiles C++/Rust.
       - name: Build mls-go images (cached)
-        uses: docker/bake-action@v5
+        uses: docker/bake-action@v7
         with:
-          source: .
-          workdir: docker
+          source: ./docker
           files: docker-compose.yml
           targets: mls-go,test-runner
           load: true
           allow: fs.read=..
           set: |
-            *.cache-from=type=gha,scope=interop-cross
-            *.cache-to=type=gha,scope=interop-cross,mode=max
+            *.cache-from=type=gha,scope=interop-cross-${{ matrix.target }}
+            *.cache-to=type=gha,scope=interop-cross-${{ matrix.target }},mode=max
 
       - name: Pull cross-target image from GHCR
-        run: docker compose -f docker/docker-compose.yml pull ${{ inputs.cross_target || 'mlspp' }}
+        run: docker compose -f docker/docker-compose.yml pull ${{ matrix.target }}
 
       - name: Run cross-interop
+        shell: bash
         env:
-          CROSS_TARGET: ${{ inputs.cross_target || 'mlspp' }}
-        run: ./docker/run-interop.sh cross
+          CROSS_TARGET: ${{ matrix.target }}
+        run: ./docker/run-interop.sh cross 2>&1 | tee interop-output.log
 
-  # Weekly stress run: includes the deep_random configs (hours-long) that are
-  # excluded from regular runs. Only fires on the Saturday cron.
-  stress:
-    name: Stress interop (deep_random)
+      - name: Collect results
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Cross-interop (mls-go vs ${{ matrix.target }})'
+            echo '```'
+            grep -E '^(PASS|FAIL|Summary):' interop-output.log || echo 'no results (run crashed before the summary)'
+            echo '```'
+          } | tee results-${{ matrix.target }}.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: interop-results-${{ matrix.target }}
+          path: results-${{ matrix.target }}.md
+
+  # Posts (or updates) a single sticky PR comment aggregating the PASS/FAIL
+  # lines from every interop leg. Runs even when a leg fails so the failure
+  # summary lands on the PR.
+  report:
+    name: Report results on PR
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 6 * * 6'
-    timeout-minutes: 360
+    needs: [self-interop, cross-interop]
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Download results
+        uses: actions/download-artifact@v8
         with:
-          submodules: recursive
+          pattern: interop-results-*
+          merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build mls-go images (cached)
-        uses: docker/bake-action@v5
+      - name: Post sticky comment
+        uses: actions/github-script@v9
         with:
-          source: .
-          workdir: docker
-          files: docker-compose.yml
-          targets: mls-go,test-runner
-          load: true
-          allow: fs.read=..
-          set: |
-            *.cache-from=type=gha,scope=interop-cross
-            *.cache-to=type=gha,scope=interop-cross,mode=max
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- interop-report -->';
 
-      - name: Pull mlspp image from GHCR
-        run: docker compose -f docker/docker-compose.yml pull mlspp
+            const sections = [];
+            for (const f of ['results-self.md', 'results-mlspp.md', 'results-openmls.md']) {
+              try { sections.push(fs.readFileSync(f, 'utf8')); }
+              catch { sections.push(`### ${f.replace('results-', '').replace('.md', '')}\n_missing (job did not upload results)_`); }
+            }
 
-      - name: Run stress interop
-        env:
-          RUN_STRESS: '1'
-        run: ./docker/run-interop.sh all
+            const selfOk = '${{ needs.self-interop.result }}' === 'success';
+            const crossOk = '${{ needs.cross-interop.result }}' === 'success';
+            const status = selfOk && crossOk ? '✅ all legs passed' : '❌ some legs failed';
+
+            const body = [
+              marker,
+              `## Interop results — ${status}`,
+              '',
+              sections.join('\n'),
+              '',
+              `_Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}_`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }

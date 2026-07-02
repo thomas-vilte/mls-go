@@ -1,0 +1,54 @@
+name: Stress
+
+# Weekly stress run: the deep_random interop configs take hours, so they are
+# kept out of the PR-facing Interop workflow entirely (no skipped checks on
+# PRs) and run on their own Saturday schedule.
+on:
+  schedule:
+    - cron: '0 6 * * 6' # weekly on Saturday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    name: Stress interop (deep_random, ${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # mlspp leg also covers self-interop (mode "all" = self + cross).
+          - target: mlspp
+            mode: all
+          - target: openmls
+            mode: cross
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build mls-go images (cached)
+        uses: docker/bake-action@v7
+        with:
+          source: ./docker
+          files: docker-compose.yml
+          targets: mls-go,test-runner
+          load: true
+          allow: fs.read=..
+          set: |
+            *.cache-from=type=gha,scope=interop-stress
+            *.cache-to=type=gha,scope=interop-stress,mode=max
+
+      - name: Pull cross-target image from GHCR
+        run: docker compose -f docker/docker-compose.yml pull ${{ matrix.target }}
+
+      - name: Run stress interop
+        env:
+          RUN_STRESS: '1'
+          CROSS_TARGET: ${{ matrix.target }}
+        run: ./docker/run-interop.sh ${{ matrix.mode }}

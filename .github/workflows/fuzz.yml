@@ -1,0 +1,53 @@
+name: Fuzz
+
+# Long-running randomized fuzzing, separate from PR CI: the seed corpus of
+# every Fuzz* target already runs as regular unit tests in the CI workflow
+# (`go test ./...`), so PRs keep regression coverage without paying for
+# exploration time. The corpus discovered here is cached between runs so
+# coverage accumulates week over week.
+on:
+  schedule:
+    - cron: '0 6 * * 0' # weekly on Sunday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Restore fuzz corpus
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
+      - name: Fuzz ProcessReceivedCommit
+        run: go test -fuzz=FuzzProcessReceivedCommit -fuzztime=10m ./group/
+
+      - name: Fuzz JoinFromWelcome
+        run: go test -fuzz=FuzzJoinFromWelcome -fuzztime=10m ./group/
+
+      - name: Fuzz UnmarshalPrivateMessage
+        run: go test -fuzz=FuzzUnmarshalPrivateMessage -fuzztime=10m ./framing/
+
+      - name: Fuzz UnmarshalPublicMessage
+        run: go test -fuzz=FuzzUnmarshalPublicMessage -fuzztime=10m ./framing/
+
+      - name: Fuzz UnmarshalTreeFromExtension
+        run: go test -fuzz=FuzzUnmarshalRatchetTree -fuzztime=10m ./treesync/
+
+      - name: Fuzz AEAD
+        run: go test -fuzz=FuzzAEAD -fuzztime=10m ./ciphersuite/
