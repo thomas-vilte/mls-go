@@ -46,6 +46,20 @@ func TestKeyPackageGenerate(t *testing.T) {
 	}
 }
 
+func TestUnmarshalLeafNode_OffCurveSignatureKey(t *testing.T) {
+	keyPackage, _, err := kp.Generate(newCredWithKey(t, "OffCurve"), kp.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	// 65 bytes with the 0x04 prefix, but (0, 0) is not a point on P-256.
+	keyPackage.LeafNode.SignatureKeyBytes = append([]byte{0x04}, make([]byte, 64)...)
+	data := keyPackage.LeafNode.Marshal()
+
+	if _, err := kp.UnmarshalLeafNode(data); err == nil {
+		t.Fatal("UnmarshalLeafNode should reject a P-256-shaped signature key not on the curve")
+	}
+}
+
 func TestKeyPackageGenerate_NilCredential(t *testing.T) {
 	_, _, err := kp.Generate(nil, kp.MLS128DHKEMP256)
 	if err == nil {

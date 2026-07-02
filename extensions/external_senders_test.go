@@ -1,6 +1,7 @@
 package extensions_test
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -225,6 +226,32 @@ func TestUnmarshalExternalSenders_ValidKey(t *testing.T) {
 	}
 	if !pub.Equal(&privKey.PublicKey) {
 		t.Error("parsed PublicKey does not match original")
+	}
+}
+
+// TestUnmarshalExternalSenders_OffCurveKey verifies that a 65-byte 0x04-prefixed
+// key whose point is not on P-256 is rejected during unmarshal.
+func TestUnmarshalExternalSenders_OffCurveKey(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	data := newExtWithKey(t, privKey)
+
+	// Locate the serialized key inside the extension and overwrite it with
+	// 0x04 || 64 zero bytes: (0, 0) is not a point on P-256.
+	ecdhKey, err := privKey.ECDH()
+	if err != nil {
+		t.Fatalf("ECDH: %v", err)
+	}
+	idx := bytes.Index(data, ecdhKey.PublicKey().Bytes())
+	if idx < 0 {
+		t.Fatal("key bytes not found in marshaled extension")
+	}
+	copy(data[idx:], append([]byte{0x04}, make([]byte, 64)...))
+
+	if _, err := extensions.UnmarshalExternalSendersExtension(data); err == nil {
+		t.Fatal("UnmarshalExternalSendersExtension should reject an off-curve key")
 	}
 }
 

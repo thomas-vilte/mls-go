@@ -1650,7 +1650,7 @@ func (g *Group) ProcessReceivedCommit(
 				hasUpdate = true
 			case ProposalTypeRemove:
 				hasRemove = true
-				if p.Remove != nil && LeafNodeIndex(p.Remove.Removed) == LeafNodeIndex(senderLeafIdx) {
+				if p.Remove != nil && p.Remove.Removed == LeafNodeIndex(senderLeafIdx) {
 					selfRemovalOnly = true
 				} else {
 					selfRemovalOnly = false

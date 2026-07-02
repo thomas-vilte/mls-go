@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"time"
 
@@ -603,9 +602,11 @@ func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 	// 0x04 || X || Y = 65 bytes (ciphersuite.P256UncompressedKeySize, RFC 5480 §2.2).
 	// Ed25519 keys are 32 bytes and never start with 0x04.
 	if len(sigKeyBytes) == ciphersuite.P256UncompressedKeySize && sigKeyBytes[0] == 0x04 {
-		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
-		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
-		leafNode.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), sigKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing P-256 signature_key: %w", err)
+		}
+		leafNode.SignatureKey = pub
 	}
 
 	cred, err := credentials.UnmarshalCredentialFromReader(buf)
