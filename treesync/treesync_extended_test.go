@@ -115,6 +115,17 @@ func TestUnmarshalLeafNodeData(t *testing.T) {
 	}
 }
 
+func TestUnmarshalLeafNodeData_OffCurveSignatureKey(t *testing.T) {
+	leaf := createTestLeafExt(t, "OffCurve")
+	// 65 bytes with the 0x04 prefix, but (0, 0) is not a point on P-256.
+	leaf.SignatureKeyRaw = append([]byte{0x04}, make([]byte, 64)...)
+	data := leaf.Marshal()
+
+	if _, err := UnmarshalLeafNodeData(data); err == nil {
+		t.Fatal("UnmarshalLeafNodeData should reject a P-256-shaped signature key not on the curve")
+	}
+}
+
 func TestLeafNodeData_Roundtrip(t *testing.T) {
 	leaf := createTestLeafExt(t, "Roundtrip")
 	data := leaf.Marshal()

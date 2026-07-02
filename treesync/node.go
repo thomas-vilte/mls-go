@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -155,9 +154,10 @@ func UnmarshalLeafNodeDataFromReader(r *tls.Reader) (*LeafNodeData, error) {
 	// Ed25519 keys are always 32 bytes and never start with 0x04.
 	// cs.SignatureKeyLength() returns 65 for ECDSA-P256, 32 for Ed25519.
 	if len(sigKeyBytes) == ciphersuite.P256UncompressedKeySize && sigKeyBytes[0] == 0x04 {
-		x := new(big.Int).SetBytes(sigKeyBytes[1:33])
-		y := new(big.Int).SetBytes(sigKeyBytes[33:65])
-		l.SignatureKey = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		l.SignatureKey, err = ecdsa.ParseUncompressedPublicKey(elliptic.P256(), sigKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing P-256 signature_key: %w", err)
+		}
 	}
 
 	// Credential (inline struct)

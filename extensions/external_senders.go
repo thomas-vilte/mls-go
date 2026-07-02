@@ -3,14 +3,11 @@ package extensions
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"errors"
 	"fmt"
-	"math/big"
 
-	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -405,18 +402,13 @@ func (e *ExternalSendersExtension) ToExtension() (*Extension, error) {
 
 func unmarshalECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
 	// ECDSA P-256 uncompressed point: 0x04 || 32-byte X || 32-byte Y = 65 bytes
-	// (ciphersuite.P256UncompressedKeySize, SEC 1 §2.3.3, RFC 9420 §5.1.2).
-	if len(data) != ciphersuite.P256UncompressedKeySize || data[0] != 0x04 {
-		return nil, fmt.Errorf("invalid ECDSA public key format: must be %d bytes starting with 0x04, got %d",
-			ciphersuite.P256UncompressedKeySize, len(data))
+	// (SEC 1 §2.3.3, RFC 9420 §5.1.2). Format and on-curve validation are
+	// handled by ParseUncompressedPublicKey (RFC 9420 §5.1.1).
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), data)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ECDSA P-256 public key: %w", err)
 	}
-	// Use crypto/ecdh for on-curve validation (RFC 9420 §5.1.1).
-	if _, err := ecdh.P256().NewPublicKey(data); err != nil {
-		return nil, fmt.Errorf("ECDSA public key not on curve P-256: %w", err)
-	}
-	x := new(big.Int).SetBytes(data[1:33])
-	y := new(big.Int).SetBytes(data[33:65])
-	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, nil
+	return pub, nil
 }
 
 func credentialsEqual(a, b *credentials.Credential) bool {

@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
-	"math/big"
 
 	"github.com/thomas-vilte/mls-go/internal/tls"
 )
@@ -56,22 +55,11 @@ func (k *SignaturePublicKey) AsSlice() []byte {
 // ToECDSA converts to an ECDSA public key (P-256).
 // Expects uncompressed SEC 1 point: 0x04 || X || Y (P256UncompressedKeySize = 65 bytes, RFC 5480 §2.2).
 func (k *SignaturePublicKey) ToECDSA() (*ecdsa.PublicKey, error) {
-	if len(k.value) != P256UncompressedKeySize || k.value[0] != 0x04 {
-		return nil, fmt.Errorf("invalid uncompressed point format: expected %d bytes starting with 0x04, got %d bytes",
-			P256UncompressedKeySize, len(k.value))
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), k.value)
+	if err != nil {
+		return nil, fmt.Errorf("parsing uncompressed P-256 point: %w", err)
 	}
-
-	// Note: crypto/elliptic is deprecated since Go 1.21, but ecdsa.PublicKey
-	// still requires Curve/X/Y fields for ecdsa.Verify compatibility.
-	// This usage is maintained for compatibility with the standard library.
-	x := new(big.Int).SetBytes(k.value[1:33])
-	y := new(big.Int).SetBytes(k.value[33:65])
-
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     x,
-		Y:     y,
-	}, nil
+	return pub, nil
 }
 
 // SignaturePrivateKey represents a private signature key as defined in RFC 9420 §5.1.2.
@@ -230,27 +218,19 @@ func (k *MLSSignaturePublicKey) Verify(data []byte, sig *Signature) error {
 // verifyECDSA verifies an ECDSA signature, supporting both P-256 and P-521.
 func (k *MLSSignaturePublicKey) verifyECDSA(data []byte, sig *Signature) error {
 	var curve elliptic.Curve
-	var coordLen int
 	switch k.SignatureScheme {
 	case ECDSA_SECP256R1_SHA256:
 		curve = elliptic.P256()
-		coordLen = 32
 	case ECDSA_SECP521R1_SHA512:
 		curve = elliptic.P521()
-		coordLen = 66
 	default:
 		return fmt.Errorf("unsupported ECDSA scheme: %v", k.SignatureScheme)
 	}
 
-	expectedLen := 1 + 2*coordLen
-	if len(k.Value) != expectedLen || k.Value[0] != 0x04 {
-		return fmt.Errorf("invalid uncompressed point: expected %d bytes starting with 0x04, got %d bytes",
-			expectedLen, len(k.Value))
+	pubKey, err := ecdsa.ParseUncompressedPublicKey(curve, k.Value)
+	if err != nil {
+		return fmt.Errorf("parsing uncompressed point: %w", err)
 	}
-
-	x := new(big.Int).SetBytes(k.Value[1 : 1+coordLen])
-	y := new(big.Int).SetBytes(k.Value[1+coordLen:])
-	pubKey := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
 
 	// Pre-hash with the scheme's digest algorithm (RFC 9420 §5.1.2).
 	hf := k.SignatureScheme.HashFunction()
