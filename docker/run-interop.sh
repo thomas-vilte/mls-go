@@ -29,11 +29,12 @@ NC='\033[0m'
 # Without it the full suite runs in a few minutes instead of several hours.
 SELF_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
 MLSPP_CROSS_CONFIGS=(welcome_join application commit external_join external_proposals reinit branch)
-OPENMLS_CROSS_CONFIGS=(welcome_join application external_join deep_random)
+OPENMLS_CROSS_CONFIGS=(welcome_join application external_join)
 
 if [ -n "$RUN_STRESS" ]; then
     SELF_CONFIGS+=(deep_random)
     MLSPP_CROSS_CONFIGS+=(deep_random)
+    OPENMLS_CROSS_CONFIGS+=(deep_random)
 fi
 
 if [ "$CROSS_TARGET" = "openmls" ]; then

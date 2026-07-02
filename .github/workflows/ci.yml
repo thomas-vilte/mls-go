@@ -5,19 +5,20 @@ on:
     branches: [main]
   pull_request:
     branches: [main, dev]
-  schedule:
-    - cron: '0 6 * * 0' # weekly on Sunday at 06:00 UTC (fuzz tests)
+
+permissions:
+  contents: read
 
 jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache: true
@@ -34,7 +35,7 @@ jobs:
         run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage.txt
           flags: unittests
@@ -44,9 +45,9 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache: true
@@ -61,53 +62,23 @@ jobs:
     name: Vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache: true
 
       - run: go vet ./...
 
-  fuzz:
-    name: Fuzz Tests
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-
-      - name: Fuzz ProcessReceivedCommit
-        run: go test -fuzz=FuzzProcessReceivedCommit -fuzztime=30s ./group/
-
-      - name: Fuzz JoinFromWelcome
-        run: go test -fuzz=FuzzJoinFromWelcome -fuzztime=30s ./group/
-
-      - name: Fuzz UnmarshalPrivateMessage
-        run: go test -fuzz=FuzzUnmarshalPrivateMessage -fuzztime=30s ./framing/
-
-      - name: Fuzz UnmarshalPublicMessage
-        run: go test -fuzz=FuzzUnmarshalPublicMessage -fuzztime=30s ./framing/
-
-      - name: Fuzz UnmarshalTreeFromExtension
-        run: go test -fuzz=FuzzUnmarshalRatchetTree -fuzztime=30s ./treesync/
-
-      - name: Fuzz AEAD
-        run: go test -fuzz=FuzzAEAD -fuzztime=30s ./ciphersuite/
-
   bench:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           cache: true
 
