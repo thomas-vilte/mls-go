@@ -817,15 +817,13 @@ func JoinFromWelcomeWithContext(
 	}
 	groupInfo.RatchetTree = ratchetTree
 
-	// RFC §12.4.3.1: verify that the tree_hash of the ratchet tree matches GroupInfo.
-	// Only checked when the tree was provided (via extension or pre-populated); if the
-	// caller did not supply a tree, they are responsible for fetching and verifying it.
+	// RFC §12.4.3.1: verify the integrity of the ratchet tree (tree_hash, leaf
+	// node structure, parent-hash validity, unmerged_leaves). Only checked when
+	// the tree was provided (via extension or pre-populated); if the caller did
+	// not supply a tree, they are responsible for fetching and verifying it.
 	if treeFromExtension {
-		computedTreeHash := ratchetTree.TreeHash()
-		// TreeHash is a public integrity value carried in GroupInfo.
-		if !bytes.Equal(computedTreeHash, groupInfo.GroupContext.TreeHash) {
-			return nil, fmt.Errorf("ratchet tree hash mismatch: computed=%x want=%x: %w",
-				computedTreeHash, groupInfo.GroupContext.TreeHash, ErrTreeHashMismatch)
+		if err := validateJoinedRatchetTree(ratchetTree, groupInfo.GroupContext, welcome.CipherSuite); err != nil {
+			return nil, err
 		}
 	}
 
@@ -836,46 +834,6 @@ func JoinFromWelcomeWithContext(
 	if treeFromExtension {
 		if err := verifyGroupInfoSignature(groupInfo, ratchetTree); err != nil {
 			return nil, err
-		}
-	}
-
-	// RFC §12.4.3.1: validate all non-blank LeafNodes in the ratchet tree.
-	// Existing members' leaves may have source=commit(3) or source=update(2) — their
-	// TBS includes group_id and leaf_index. Newly-added leaves have source=key_package(1).
-	// We skip lifetime checks (ValidateLeafNodeStructureWithContext) because existing
-	// members cannot renew their credential just because a joiner arrives late.
-	if treeFromExtension {
-		groupID := groupInfo.GroupContext.GroupID.AsSlice()
-		for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
-			leaf := ratchetTree.GetLeaf(i)
-			if leaf == nil || leaf.State != treesync.NodeStatePresent || leaf.LeafData == nil {
-				continue
-			}
-			if err := treesync.ValidateLeafNodeStructureWithContext(
-				leaf.LeafData, welcome.CipherSuite, groupID, uint32(i),
-			); err != nil {
-				return nil, fmt.Errorf("invalid leaf node at index %d in ratchet tree: %w", i, ErrLeafNodeInvalid)
-			}
-		}
-
-		// RFC §12.4.3.1: validate unmerged_leaves entries for each parent node.
-		// Each entry must reference a valid, non-blank leaf that is a descendant of the node.
-		for nodeIdx := range ratchetTree.Nodes {
-			node := &ratchetTree.Nodes[nodeIdx]
-			if node.State != treesync.NodeStatePresent || treesync.IsLeaf(treesync.NodeIndex(nodeIdx)) {
-				continue
-			}
-			for _, unmergedLeafIdx := range node.UnmergedLeaves {
-				leafNode := ratchetTree.GetLeaf(unmergedLeafIdx)
-				if leafNode == nil || leafNode.State != treesync.NodeStatePresent {
-					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d references a blank or missing leaf: %w",
-						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
-				}
-				if !ratchetTree.SubtreeContainsLeaf(treesync.NodeIndex(nodeIdx), unmergedLeafIdx) {
-					return nil, fmt.Errorf("unmerged_leaves entry %d in node %d is not a descendant of that node: %w",
-						unmergedLeafIdx, nodeIdx, ErrUnmergedLeavesInvalid)
-				}
-			}
 		}
 	}
 

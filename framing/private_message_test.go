@@ -258,6 +258,59 @@ func TestEncryptDecrypt_Proposal(t *testing.T) {
 }
 
 // TestDecrypt_TamperedCiphertext verifies that Decrypt fails with corrupted ciphertext.
+// TestDecrypt_NoRatchetFallback verifies RFC 9420 §9.1's ratchet separation:
+// a message encrypted with the application ratchet, but whose ContentType
+// (part of the AAD, so an attacker/relay could not forge this on the wire
+// without also being caught by AEAD authentication — this test flips it
+// locally to simulate that) claims to be a handshake message, MUST fail to
+// decrypt rather than silently succeed via a fallback to the application
+// ratchet. Before this fix, Decrypt retried with the other ratchet on
+// failure, defeating the domain separation between the two ratchets.
+func TestDecrypt_NoRatchetFallback(t *testing.T) {
+	cs := ciphersuite.MLS128DHKEMP256
+	encTree, decTree := makeEncDecTrees(t, cs, 2)
+	sigPriv, sigPub := makeSigKeyPair(t, cs)
+
+	sdSecretBytes := bytes.Repeat([]byte{0x55}, 32)
+	gcBytes := []byte("gc")
+
+	content := framing.FramedContent{
+		GroupID: []byte("grp"),
+		Epoch:   1,
+		Sender:  framing.Sender{Type: framing.SenderTypeMember, SenderIndex: 0},
+		Body:    framing.ApplicationData{Data: []byte("application data, application ratchet")},
+	}
+
+	pm, err := framing.Encrypt(framing.EncryptParams{
+		Content:          content,
+		SenderLeafIndex:  0,
+		CipherSuite:      cs,
+		SenderDataSecret: ciphersuite.NewSecret(sdSecretBytes),
+		SecretTree:       encTree,
+		SigKey:           sigPriv,
+		GroupContext:     gcBytes,
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if pm.ContentType != framing.ContentTypeApplication {
+		t.Fatalf("ContentType = %d, want ContentTypeApplication", pm.ContentType)
+	}
+
+	// Claim this application-ratchet-encrypted message is a handshake message.
+	pm.ContentType = framing.ContentTypeProposal
+
+	if _, err := framing.Decrypt(pm, framing.DecryptParams{
+		CipherSuite:      cs,
+		SenderDataSecret: ciphersuite.NewSecret(sdSecretBytes),
+		SecretTree:       decTree,
+		SigPubKey:        sigPub,
+		GroupContext:     gcBytes,
+	}); err == nil {
+		t.Fatal("Decrypt should fail: no fallback from the handshake ratchet to the application ratchet")
+	}
+}
+
 func TestDecrypt_TamperedCiphertext(t *testing.T) {
 	cs := ciphersuite.MLS128DHKEMP256
 	encTree, decTree := makeEncDecTrees(t, cs, 2)

@@ -50,6 +50,7 @@
 package credentials
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -796,4 +797,49 @@ func (c *Credential) IsGREASE() bool {
 // Useful for switch/case and logging.
 func (c *Credential) Type() CredentialType {
 	return c.CredentialType
+}
+
+// ValidateWithSignatureKey validates the credential like Validate, and additionally
+// requires that for an X509Credential, the end-entity certificate's public key
+// matches sigKey — the LeafNode's signature_key — per RFC 9420 §5.3 ("The public
+// key encoded in the subjectPublicKeyInfo of the end-entity certificate MUST be
+// identical to the signature_key in the LeafNode containing this credential").
+// For a BasicCredential, sigKey is ignored (there is no certificate to match).
+func (c *Credential) ValidateWithSignatureKey(sigKey []byte) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if c.CredentialType != X509Credential {
+		return nil
+	}
+	if len(c.Certificates) == 0 {
+		return errors.New("X509Credential: no certificates")
+	}
+	endEntity, err := x509.ParseCertificate(c.Certificates[0])
+	if err != nil {
+		return fmt.Errorf("parsing end-entity cert: %w", err)
+	}
+
+	// The LeafNode signature_key is stored as a raw EC point (0x04 || X || Y for
+	// ECDSA) or raw Ed25519 public key. Marshal the certificate's public key to
+	// the same format for comparison.
+	var certKeyBytes []byte
+	switch pub := endEntity.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		ecdhKey, err := pub.ECDH()
+		if err != nil {
+			return fmt.Errorf("converting ECDSA key to ECDH: %w", err)
+		}
+		certKeyBytes = ecdhKey.Bytes()
+	case ed25519.PublicKey:
+		certKeyBytes = pub
+	default:
+		return fmt.Errorf("unsupported certificate public key type: %T", endEntity.PublicKey)
+	}
+
+	if !bytes.Equal(certKeyBytes, sigKey) {
+		return errors.New("X509Credential: certificate public key does not match leaf signature_key")
+	}
+
+	return nil
 }

@@ -187,12 +187,14 @@ func (g *Group) ReceiveMessage(
 	// Resolve sender signature pubkey from ratchet tree.
 	// Use SigKeyBytes() to handle both ECDSA (SignatureKey) and Ed25519 (SignatureKeyRaw).
 	senderLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(senderLeafIdx))
-	var sigPubKey *ciphersuite.MLSSignaturePublicKey
-	if senderLeaf != nil && senderLeaf.LeafData != nil {
-		if raw := senderLeaf.LeafData.SigKeyBytes(); len(raw) > 0 {
-			sigPubKey = ciphersuite.NewMLSSignaturePublicKey(raw, g.cipherSuite.SignatureScheme())
-		}
+	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent || senderLeaf.LeafData == nil {
+		return nil, fmt.Errorf("sender %d has a blank leaf: %w", senderLeafIdx, ErrSenderNotActive)
 	}
+	rawKey := senderLeaf.LeafData.SigKeyBytes()
+	if len(rawKey) == 0 {
+		return nil, fmt.Errorf("sender %d has no signature key: %w", senderLeafIdx, ErrMissingSenderSignature)
+	}
+	sigPubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
 
 	ac, err := framing.Decrypt(pm, framing.DecryptParams{
 		CipherSuite:      g.cipherSuite,

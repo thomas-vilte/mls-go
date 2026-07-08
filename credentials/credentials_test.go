@@ -189,6 +189,54 @@ func TestValidateX509Chain(t *testing.T) {
 	}
 }
 
+// TestValidateWithSignatureKey_X509Match verifies RFC 9420 §5.3: the end-entity
+// certificate's public key MUST be identical to the LeafNode's signature_key.
+func TestValidateWithSignatureKey_X509Match(t *testing.T) {
+	certDER, privKey := generateTestCertificate(t)
+	cred := credentials.NewX509Credential([][]byte{certDER})
+
+	ecdhKey, err := privKey.ECDH()
+	if err != nil {
+		t.Fatalf("ECDH: %v", err)
+	}
+	sigKey := ecdhKey.PublicKey().Bytes()
+
+	if err := cred.ValidateWithSignatureKey(sigKey); err != nil {
+		t.Fatalf("ValidateWithSignatureKey(matching key): %v", err)
+	}
+}
+
+// TestValidateWithSignatureKey_X509Mismatch verifies that a signature_key that
+// does not match the certificate's public key is rejected — the key
+// substitution attack §5.3 exists to prevent.
+func TestValidateWithSignatureKey_X509Mismatch(t *testing.T) {
+	certDER, _ := generateTestCertificate(t)
+	cred := credentials.NewX509Credential([][]byte{certDER})
+
+	otherPrivKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	otherECDH, err := otherPrivKey.ECDH()
+	if err != nil {
+		t.Fatalf("ECDH: %v", err)
+	}
+	otherSigKey := otherECDH.PublicKey().Bytes()
+
+	if err := cred.ValidateWithSignatureKey(otherSigKey); err == nil {
+		t.Fatal("ValidateWithSignatureKey should reject a signature_key that doesn't match the certificate")
+	}
+}
+
+// TestValidateWithSignatureKey_BasicIgnoresSigKey verifies that for a
+// BasicCredential, sigKey is irrelevant (there is no certificate to match).
+func TestValidateWithSignatureKey_BasicIgnoresSigKey(t *testing.T) {
+	cred := credentials.NewBasicCredential([]byte("alice"))
+	if err := cred.ValidateWithSignatureKey([]byte("anything, or even nil")); err != nil {
+		t.Fatalf("ValidateWithSignatureKey(BasicCredential): %v", err)
+	}
+}
+
 // TestGenerateX509CredentialWithKey wraps an existing cert+key into a CredentialWithKey.
 func TestGenerateX509CredentialWithKey(t *testing.T) {
 	certDER, privKey := generateTestCertificate(t)

@@ -114,6 +114,11 @@ func ValidateLeafNodeStructureWithContext(leafData *LeafNodeData, cs ciphersuite
 	if err := leafData.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
 	}
+	// RFC §7.3: for X509 credentials, verify the certificate's public key matches
+	// the LeafNode's signature_key to prevent key substitution attacks.
+	if err := leafData.Credential.ValidateWithSignatureKey(leafData.SigKeyBytes()); err != nil {
+		return fmt.Errorf("credential/signature_key mismatch: %w", err)
+	}
 	if err := leafData.VerifyWithContext(cs, groupID, leafIndex); err != nil {
 		return fmt.Errorf("signature validation failed: %w", err)
 	}
@@ -139,6 +144,11 @@ func ValidateLeafNodeWithContext(leafData *LeafNodeData, cs ciphersuite.CipherSu
 	}
 	if err := leafData.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
+	}
+	// RFC §7.3: for X509 credentials, verify the certificate's public key matches
+	// the LeafNode's signature_key to prevent key substitution attacks.
+	if err := leafData.Credential.ValidateWithSignatureKey(leafData.SigKeyBytes()); err != nil {
+		return fmt.Errorf("credential/signature_key mismatch: %w", err)
 	}
 	if err := ValidateLeafNodeCapabilities(leafData.Capabilities); err != nil {
 		return fmt.Errorf("capabilities validation failed: %w", err)
@@ -174,6 +184,12 @@ func ValidateLeafNode(leafData *LeafNodeData, cs ciphersuite.CipherSuite) error 
 
 	if err := leafData.Credential.Validate(); err != nil {
 		return fmt.Errorf("credential validation failed: %w", err)
+	}
+
+	// RFC §7.3: for X509 credentials, verify the certificate's public key matches
+	// the LeafNode's signature_key to prevent key substitution attacks.
+	if err := leafData.Credential.ValidateWithSignatureKey(leafData.SigKeyBytes()); err != nil {
+		return fmt.Errorf("credential/signature_key mismatch: %w", err)
 	}
 
 	if err := ValidateLeafNodeCapabilities(leafData.Capabilities); err != nil {
