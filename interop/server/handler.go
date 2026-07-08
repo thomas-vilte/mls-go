@@ -73,6 +73,7 @@ type reInitState struct {
 	ReInit           *group.ReInitProposal
 	ResumptionSecret *ciphersuite.Secret
 	OldGroupID       []byte
+	OldEpoch         uint64
 	KeyPackage       *keypackages.KeyPackage
 	PrivKeys         *keypackages.KeyPackagePrivateKeys
 	SigPrivKey       *ciphersuite.SignaturePrivateKey
@@ -1319,6 +1320,7 @@ func (s *Server) finalizeReInitCommit(g *group.Group, proposals []*group.Proposa
 		ReInit:           reInitProposal,
 		ResumptionSecret: resumptionSecret,
 		OldGroupID:       oldGroupID,
+		OldEpoch:         g.Epoch().AsUint64(),
 		KeyPackage:       kp,
 		PrivKeys:         privKeys,
 		SigPrivKey:       sigPrivKey,
@@ -1349,6 +1351,7 @@ func (s *Server) ReInitWelcome(_ context.Context, req *proto.ReInitWelcomeReques
 		state.ReInit,
 		state.ResumptionSecret,
 		state.OldGroupID,
+		state.OldEpoch,
 		state.KeyPackage,
 		state.PrivKeys,
 	)

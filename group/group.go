@@ -2800,6 +2800,7 @@ func NewGroupFromReInit(
 	reInit *ReInitProposal,
 	resumptionSecret *ciphersuite.Secret,
 	oldGroupID []byte,
+	oldEpoch uint64,
 	myKP *keypackages.KeyPackage,
 	myPriv *keypackages.KeyPackagePrivateKeys,
 	opts ...GroupOption,
@@ -2882,10 +2883,12 @@ func NewGroupFromReInit(
 		return nil, fmt.Errorf("generating reinit psk_nonce: %w", err)
 	}
 	resumptionPsk := schedule.Psk{
-		PskType:  schedule.PskTypeResumption,
-		PskID:    oldGroupID,
-		PskNonce: pskNonce,
-		Psk:      resumptionSecret.AsSlice(),
+		PskType:    schedule.PskTypeResumption,
+		PskNonce:   pskNonce,
+		Psk:        resumptionSecret.AsSlice(),
+		Usage:      uint8(schedule.ResumptionUsageReinit),
+		PskGroupID: oldGroupID,
+		PskEpoch:   oldEpoch,
 	}
 	if _, err := keySchedule.ComputePskSecret([]schedule.Psk{resumptionPsk}); err != nil {
 		return nil, fmt.Errorf("computing reinit psk secret: %w", err)
