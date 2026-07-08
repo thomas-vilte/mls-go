@@ -276,7 +276,7 @@ func TestNewGroupFromReInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSecretRandomCS: %v", err)
 	}
-	group, err := NewGroupFromReInit(reinit, resumptionSecret, []byte("old-group-id"), alice.kp, alice.priv)
+	group, err := NewGroupFromReInit(reinit, resumptionSecret, []byte("old-group-id"), 0, alice.kp, alice.priv)
 	if err != nil {
 		t.Fatalf("NewGroupFromReInit: %v", err)
 	}

@@ -25,7 +25,7 @@ const (
 //	MLS-Exporter(Label, Context, Length) =
 //	    ExpandWithLabel(
 //	        DeriveSecret(exporter_secret, Label),
-//	        "exporter", Hash(Context), Length)
+//	        "exported", Hash(Context), Length)
 //
 // Parameters:
 //   - exporterSecret: The exporter_secret from epoch secrets
@@ -40,7 +40,7 @@ const (
 //
 //	exported_secret = ExpandWithLabel(
 //	    DeriveSecret(exporter_secret, Label),
-//	    "exporter",
+//	    "exported",
 //	    Hash(Context),
 //	    Length
 //	)
@@ -61,7 +61,7 @@ func Exporter(exporterSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite, la
 		return nil, fmt.Errorf("MLS-Exporter hashing context: %w", err)
 	}
 
-	result, err := step1.KdfExpandLabel("exporter", contextHash, length)
+	result, err := step1.KdfExpandLabel("exported", contextHash, length)
 	if err != nil {
 		return nil, fmt.Errorf("MLS-Exporter step2: %w", err)
 	}
