@@ -3,8 +3,8 @@ package treesync
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
-	"math/big"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/credentials"
@@ -16,14 +16,14 @@ func testLeaf(t *testing.T, id string) LeafNodeData {
 	if err != nil {
 		t.Fatalf("GenerateCredentialWithKey(%s): %v", id, err)
 	}
+	sigKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
 	return LeafNodeData{
 		EncryptionKey: []byte(id + "-enc"),
-		SignatureKey: &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     big.NewInt(1),
-			Y:     big.NewInt(2),
-		},
-		Credential: cred.Credential,
+		SignatureKey:  &sigKey.PublicKey,
+		Credential:    cred.Credential,
 		Capabilities: &LeafNodeCapabilities{
 			ProtocolVersions: []uint16{1},
 			CipherSuites:     []uint16{2},
