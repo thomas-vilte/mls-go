@@ -78,6 +78,14 @@ func ExternalCommit(
 	if tree == nil {
 		return nil, nil, fmt.Errorf("ratchet tree not present in GroupInfo")
 	}
+
+	// RFC §12.4.3.2: an external joiner performs the same ratchet tree
+	// integrity checks as a Welcome join (RFC §12.4.3.1): tree_hash, leaf node
+	// structure, parent-hash validity, and unmerged_leaves.
+	if err := validateJoinedRatchetTree(tree, groupInfo.GroupContext, cs); err != nil {
+		return nil, nil, err
+	}
+
 	if err := verifyGroupInfoSignature(groupInfo, tree); err != nil {
 		return nil, nil, err
 	}

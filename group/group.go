@@ -3099,6 +3099,44 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		}
 		return nil
 	case framing.SenderTypeNewMemberProposal:
+		// RFC §6.1: The signature key in the LeafNode in the KeyPackage
+		// embedded in an external Add proposal.
+		proposalBody, ok := pm.Content.Body.(framing.ProposalBody)
+		if !ok {
+			return fmt.Errorf("new member proposal has no proposal body")
+		}
+		proposal, err := UnmarshalProposal(proposalBody.Data)
+		if err != nil {
+			return fmt.Errorf("unmarshaling new member proposal: %w", err)
+		}
+
+		// content_type MUST be proposal
+		// proposal_type MUST be add
+		if proposal.Type != ProposalTypeAdd {
+			return fmt.Errorf("new member proposal type must be add, got %d: %w", proposal.Type, ErrInvalidProposal)
+		}
+		if proposal.Add == nil || proposal.Add.KeyPackage == nil {
+			return fmt.Errorf("new member proposal missing KeyPackage")
+		}
+		kpLeaf := proposal.Add.KeyPackage.LeafNode
+		if kpLeaf == nil {
+			return fmt.Errorf("new member proposal KeyPackage has no leaf node")
+		}
+		rawKey := kpLeaf.SignatureKeyBytes
+		if len(rawKey) == 0 {
+			return fmt.Errorf("new member proposal KeyPackage has no signature key")
+		}
+		pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
+
+		ac := &framing.AuthenticatedContent{
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pm.Content,
+			Auth:         pm.Auth,
+			GroupContext: g.groupContext.Marshal(),
+		}
+		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), pm.Auth.Signature); err != nil {
+			return fmt.Errorf("new member proposal signature verification failed: %w", err)
+		}
 		return nil
 	case framing.SenderTypeNewMemberCommit:
 		commitBody, ok := pm.Content.Body.(framing.CommitBody)

@@ -795,6 +795,91 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 	return nil
 }
 
+// VerifyAllParentHashes verifies that every non-blank parent node in the tree
+// is "parent-hash valid" per RFC 9420 §7.9.2:
+//
+//	A parent node P is "parent-hash valid" if it can be chained back to a leaf
+//	node in this way. [...] When joining a group, the new member MUST
+//	authenticate that each non-blank parent node P is parent-hash valid. This
+//	can be done "bottom up" by building chains up from leaves and verifying
+//	that all non-blank parent nodes are covered by exactly one such chain.
+//
+// Unlike VerifyParentHashes (which checks a single leaf's direct path — the
+// right check when processing a Commit, since only the committer's path
+// changed and the rest of the tree was already validated in prior epochs),
+// this walks every leaf's direct path and marks each ancestor it correctly
+// chains to as covered. A non-blank parent node with no leaf chain reaching
+// it is rejected. This is the check a joiner must perform: a freshly-received
+// tree (via Welcome or GroupInfo) carries no prior verified history, so every
+// non-blank parent node must be independently authenticated.
+//
+// A chain from a leaf breaks (and stops extending upward) at the first
+// mismatch; blank endpoints are a transparent pass-through (their parent_hash
+// field, per RFC construction, copies through from higher up) and do not
+// break the chain, matching VerifyParentHashes' treatment of blanks.
+func (t *RatchetTree) VerifyAllParentHashes() error {
+	covered := make([]bool, len(t.Nodes))
+
+	for leafIdx := LeafIndex(0); leafIdx < LeafIndex(t.NumLeaves); leafIdx++ {
+		leafNodeIdx := LeafIndexToNodeIndex(leafIdx)
+		if int(leafNodeIdx) >= len(t.Nodes) {
+			continue
+		}
+		if t.Nodes[leafNodeIdx].State != NodeStatePresent || t.Nodes[leafNodeIdx].LeafData == nil {
+			continue
+		}
+
+		path := t.DirectPath(leafIdx)
+		for i := 0; i < len(path)-1; i++ {
+			nodeIdx := path[i]
+			parentIdx := path[i+1]
+
+			node := &t.Nodes[nodeIdx]
+			parent := &t.Nodes[parentIdx]
+
+			// Blank endpoints are a pass-through: skip verifying this link but
+			// keep walking upward — the chain is not broken by them.
+			if node.State != NodeStatePresent || parent.State != NodeStatePresent {
+				continue
+			}
+
+			var parentKey []byte
+			if parent.EncryptionKey != nil {
+				parentKey = parent.EncryptionKey.Bytes()
+			}
+			siblingIdx := t.GetSibling(nodeIdx)
+			siblingHash := t.HashNode(siblingIdx)
+			expected := ComputeParentHash(parentKey, parent.ParentHash, siblingHash, t.hashFunc())
+
+			var actual []byte
+			if IsLeaf(nodeIdx) && node.LeafData != nil {
+				actual = node.LeafData.ParentHash
+			} else {
+				actual = node.ParentHash
+			}
+
+			if !bytes.Equal(expected, actual) {
+				// Chain broken from this leaf upward. Another leaf's chain
+				// may still authenticate parentIdx and its ancestors.
+				break
+			}
+			covered[parentIdx] = true
+		}
+	}
+
+	for idx := range t.Nodes {
+		nodeIdx := NodeIndex(idx)
+		if IsLeaf(nodeIdx) || t.Nodes[idx].State != NodeStatePresent {
+			continue
+		}
+		if !covered[idx] {
+			return fmt.Errorf("parent node %d is not parent-hash valid: no leaf chain authenticates it", idx)
+		}
+	}
+
+	return nil
+}
+
 // Clone creates a copy of the RatchetTree.
 //
 // Note: This is a shallow copy - Node.LeafData pointers are shared.
