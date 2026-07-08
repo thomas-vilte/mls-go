@@ -2,6 +2,7 @@ package group
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -322,6 +323,141 @@ func TestVerifyPublicMessage_NewMemberCommit_VerifiesSignature(t *testing.T) {
 	sig[0] ^= 0xFF
 	if err := aliceGroup.VerifyPublicMessage(pm); err == nil {
 		t.Fatal("VerifyPublicMessage should fail with tampered new member commit signature")
+	}
+}
+
+// TestVerifyPublicMessage_NewMemberProposal_VerifiesSignature covers RFC 9420
+// §6.1's new_member_proposal case: the signature key in the LeafNode of the
+// KeyPackage embedded in the external Add proposal.
+func TestVerifyPublicMessage_NewMemberProposal_VerifiesSignature(t *testing.T) {
+	aliceGroup, _, _, _ := makeTwoMemberGroups(t)
+	charlie := newTestUser(t, "charlie-new-member-proposal")
+
+	addProposal := NewAddProposal(charlie.kp)
+	content := framing.FramedContent{
+		GroupID: aliceGroup.groupID.AsSlice(),
+		Epoch:   aliceGroup.epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeNewMemberProposal},
+		Body:    framing.ProposalBody{Data: ProposalMarshal(addProposal)},
+	}
+	ac := &framing.AuthenticatedContent{
+		WireFormat:   framing.WireFormatPublicMessage,
+		Content:      content,
+		GroupContext: aliceGroup.groupContext.Marshal(),
+	}
+	sig, err := ciphersuite.SignWithLabel(charlie.sigPriv, "FramedContentTBS", ac.MarshalTBS())
+	if err != nil {
+		t.Fatalf("SignWithLabel: %v", err)
+	}
+	pm := &framing.PublicMessage{
+		Content: content,
+		Auth:    framing.FramedContentAuthData{Signature: sig},
+	}
+
+	if err := aliceGroup.VerifyPublicMessage(pm); err != nil {
+		t.Fatalf("VerifyPublicMessage(valid new_member_proposal): %v", err)
+	}
+
+	sigBytes := pm.Auth.Signature.AsSlice()
+	if len(sigBytes) == 0 {
+		t.Fatal("signature is empty")
+	}
+	sigBytes[0] ^= 0xFF
+	if err := aliceGroup.VerifyPublicMessage(pm); err == nil {
+		t.Fatal("VerifyPublicMessage should fail with tampered new_member_proposal signature")
+	}
+}
+
+// TestVerifyPublicMessage_NewMemberProposal_RejectsWrongProposalType verifies
+// that a new_member_proposal MUST carry an Add proposal (RFC 9420 §6.1):
+// any other proposal type is rejected before signature verification even runs.
+func TestVerifyPublicMessage_NewMemberProposal_RejectsWrongProposalType(t *testing.T) {
+	aliceGroup, _, _, bob := makeTwoMemberGroups(t)
+
+	removeProposal := &Proposal{
+		Type:   ProposalTypeRemove,
+		Remove: &RemoveProposal{Removed: LeafNodeIndex(1)},
+	}
+	content := framing.FramedContent{
+		GroupID: aliceGroup.groupID.AsSlice(),
+		Epoch:   aliceGroup.epoch.AsUint64(),
+		Sender:  framing.Sender{Type: framing.SenderTypeNewMemberProposal},
+		Body:    framing.ProposalBody{Data: ProposalMarshal(removeProposal)},
+	}
+	ac := &framing.AuthenticatedContent{
+		WireFormat:   framing.WireFormatPublicMessage,
+		Content:      content,
+		GroupContext: aliceGroup.groupContext.Marshal(),
+	}
+	sig, err := ciphersuite.SignWithLabel(bob.sigPriv, "FramedContentTBS", ac.MarshalTBS())
+	if err != nil {
+		t.Fatalf("SignWithLabel: %v", err)
+	}
+	pm := &framing.PublicMessage{
+		Content: content,
+		Auth:    framing.FramedContentAuthData{Signature: sig},
+	}
+
+	if err := aliceGroup.VerifyPublicMessage(pm); err == nil {
+		t.Fatal("VerifyPublicMessage should reject a new_member_proposal that isn't an Add")
+	}
+}
+
+// TestReceiveMessage_RejectsBlankSenderLeaf verifies RFC 9420 §6.1's signature
+// verification MUST: a PrivateMessage claiming to be from a blank (removed)
+// leaf must be rejected before any signature check is attempted — not
+// silently accepted with signature verification skipped.
+func TestReceiveMessage_RejectsBlankSenderLeaf(t *testing.T) {
+	aliceGroup, _, alice, _ := makeTwoMemberGroups(t)
+	bobLeafIdx := LeafNodeIndex(1)
+
+	// Add a third member so removing bob leaves an in-bounds blank leaf
+	// instead of one truncated away by TruncateTrailingBlanks (RFC §12.1.3).
+	charlie := newTestUser(t, "charlie-blank-leaf")
+	if _, err := aliceGroup.AddMember(charlie.kp); err != nil {
+		t.Fatalf("AddMember(charlie): %v", err)
+	}
+	sc0, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit(add charlie): %v", err)
+	}
+	if err := aliceGroup.MergeCommit(sc0); err != nil {
+		t.Fatalf("MergeCommit(add charlie): %v", err)
+	}
+
+	if _, err := aliceGroup.RemoveMember(bobLeafIdx); err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+	sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
+	if err != nil {
+		t.Fatalf("Commit(remove bob): %v", err)
+	}
+	if err := aliceGroup.MergeCommit(sc); err != nil {
+		t.Fatalf("MergeCommit: %v", err)
+	}
+
+	if uint32(bobLeafIdx) >= aliceGroup.ratchetTree.NumLeaves {
+		t.Fatalf("bob's leaf index %d should still be in tree bounds (NumLeaves=%d)", bobLeafIdx, aliceGroup.ratchetTree.NumLeaves)
+	}
+	leaf := aliceGroup.ratchetTree.GetLeaf(treesync.LeafIndex(bobLeafIdx))
+	if leaf != nil && leaf.State == treesync.NodeStatePresent {
+		t.Fatal("bob's leaf should be blank after removal")
+	}
+
+	// Any PrivateMessage will do: the blank-leaf check must reject before
+	// decryption/signature verification is even attempted.
+	aliceSigPriv := ciphersuite.NewSignaturePrivateKey(alice.priv.SignatureKey)
+	pm, err := aliceGroup.SendMessage([]byte("hello"), aliceSigPriv)
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	_, err = aliceGroup.ReceiveMessage(pm, bobLeafIdx)
+	if err == nil {
+		t.Fatal("ReceiveMessage should reject a sender claiming to be a blank leaf")
+	}
+	if !errors.Is(err, ErrSenderNotActive) {
+		t.Fatalf("error = %v, want ErrSenderNotActive", err)
 	}
 }
 

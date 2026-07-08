@@ -205,6 +205,57 @@ func TestRatchetTree_VerifyAllParentHashes_DetectsUncoveredBranch(t *testing.T) 
 	}
 }
 
+// TestRatchetTree_VerifyAllParentHashes_AcceptsUnmergedLeaves reproduces the
+// cross-interop failure against mlspp (commit config, force_path=false): after
+// a path commit chains valid parent hashes, an add-only commit places the new
+// member in the unmerged_leaves of its ancestors WITHOUT refreshing their
+// parent_hash. Verification must then hash siblings as
+// original_sibling_tree_hash (RFC §7.9: blank the leaves in P.unmerged_leaves)
+// — using the current sibling hash instead makes joiners reject valid trees.
+func TestRatchetTree_VerifyAllParentHashes_AcceptsUnmergedLeaves(t *testing.T) {
+	tree := NewRatchetTree(4)
+	// Leaves 0..2 present; leaf 3 empty (slot for the add below).
+	for i, id := range []string{"a", "b", "c"} {
+		if err := tree.SetLeaf(LeafIndex(i), testLeaf(t, id)); err != nil {
+			t.Fatalf("SetLeaf(%d): %v", i, err)
+		}
+	}
+	for idx := range tree.Nodes {
+		nodeIdx := NodeIndex(idx)
+		if IsLeaf(nodeIdx) {
+			continue
+		}
+		tree.Nodes[idx].State = NodeStatePresent
+		tree.Nodes[idx].ParentHash = []byte{}
+	}
+	// Chain parent hashes over the CURRENT tree (leaf 3 still empty) — this is
+	// the state a path commit would have left behind.
+	setFullTreeParentHashChain(t, tree)
+	if err := tree.VerifyAllParentHashes(); err != nil {
+		t.Fatalf("VerifyAllParentHashes() before add: %v", err)
+	}
+
+	// Add-only commit (no UpdatePath): fill leaf 3 and register it as
+	// unmerged on its ancestors. Parent hashes are NOT refreshed.
+	if err := tree.SetLeaf(3, testLeaf(t, "d")); err != nil {
+		t.Fatalf("SetLeaf(3): %v", err)
+	}
+	newLeafNode := LeafIndexToNodeIndex(3)
+	current := newLeafNode
+	for current != tree.Root() {
+		parent, err := tree.Parent(current)
+		if err != nil {
+			t.Fatalf("Parent(%d): %v", current, err)
+		}
+		tree.Nodes[parent].UnmergedLeaves = append(tree.Nodes[parent].UnmergedLeaves, 3)
+		current = parent
+	}
+
+	if err := tree.VerifyAllParentHashes(); err != nil {
+		t.Fatalf("VerifyAllParentHashes() must accept unmerged leaves added without a path (original_sibling_tree_hash, RFC §7.9): %v", err)
+	}
+}
+
 func TestRatchetTree_VerifyParentHashes_DetectsDeepMismatch(t *testing.T) {
 	tree := NewRatchetTree(4)
 	for i, id := range []string{"a", "b", "c", "d"} {

@@ -795,6 +795,42 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 	return nil
 }
 
+// originalSiblingTreeHash computes original_sibling_tree_hash per RFC 9420
+// §7.9: the tree hash of the sibling subtree S in a tree modified by blanking
+// every leaf in P.unmerged_leaves and removing those leaves from all
+// unmerged_leaves sets. This reconstructs the sibling hash as it was when P's
+// parent_hash was computed: members added later without an UpdatePath land in
+// P.unmerged_leaves and must be excluded, otherwise the recomputed hash
+// diverges from the stored parent_hash for perfectly valid trees ("Observe
+// that original_sibling_tree_hash does not change between updates of P").
+func (t *RatchetTree) originalSiblingTreeHash(siblingIdx NodeIndex, unmerged []LeafIndex) []byte {
+	if len(unmerged) == 0 {
+		return t.HashNode(siblingIdx)
+	}
+
+	excluded := make(map[LeafIndex]bool, len(unmerged))
+	mod := t.Clone()
+	for _, leaf := range unmerged {
+		excluded[leaf] = true
+		mod.BlankNode(LeafIndexToNodeIndex(leaf))
+	}
+	for i := range mod.Nodes {
+		current := mod.Nodes[i].UnmergedLeaves
+		if len(current) == 0 {
+			continue
+		}
+		// Allocate a fresh slice: Clone shares slice backing arrays.
+		filtered := make([]LeafIndex, 0, len(current))
+		for _, leaf := range current {
+			if !excluded[leaf] {
+				filtered = append(filtered, leaf)
+			}
+		}
+		mod.Nodes[i].UnmergedLeaves = filtered
+	}
+	return mod.HashNode(siblingIdx)
+}
+
 // VerifyAllParentHashes verifies that every non-blank parent node in the tree
 // is "parent-hash valid" per RFC 9420 §7.9.2:
 //
@@ -813,10 +849,12 @@ func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
 // tree (via Welcome or GroupInfo) carries no prior verified history, so every
 // non-blank parent node must be independently authenticated.
 //
-// A chain from a leaf breaks (and stops extending upward) at the first
-// mismatch; blank endpoints are a transparent pass-through (their parent_hash
-// field, per RFC construction, copies through from higher up) and do not
-// break the chain, matching VerifyParentHashes' treatment of blanks.
+// Per §7.9.2 each link runs from a non-blank node D to its next non-blank
+// ancestor P (blank nodes in between are skipped — they were omitted from the
+// filtered direct path when the UpdatePath was created), with S being the
+// immediate child of P on the copath side, hashed as original_sibling_tree_hash.
+// A chain breaks at the first mismatch; ancestors above may still be covered
+// by other leaves' chains.
 func (t *RatchetTree) VerifyAllParentHashes() error {
 	covered := make([]bool, len(t.Nodes))
 
@@ -830,16 +868,13 @@ func (t *RatchetTree) VerifyAllParentHashes() error {
 		}
 
 		path := t.DirectPath(leafIdx)
-		for i := 0; i < len(path)-1; i++ {
-			nodeIdx := path[i]
-			parentIdx := path[i+1]
-
-			node := &t.Nodes[nodeIdx]
+		d := path[0] // current chain node D; starts at the (non-blank) leaf
+		for j := 1; j < len(path); j++ {
+			parentIdx := path[j]
 			parent := &t.Nodes[parentIdx]
-
-			// Blank endpoints are a pass-through: skip verifying this link but
-			// keep walking upward — the chain is not broken by them.
-			if node.State != NodeStatePresent || parent.State != NodeStatePresent {
+			// Blank ancestors are skipped: they were not on the filtered
+			// direct path when D's parent_hash was computed. D stays the same.
+			if parent.State != NodeStatePresent {
 				continue
 			}
 
@@ -847,15 +882,16 @@ func (t *RatchetTree) VerifyAllParentHashes() error {
 			if parent.EncryptionKey != nil {
 				parentKey = parent.EncryptionKey.Bytes()
 			}
-			siblingIdx := t.GetSibling(nodeIdx)
-			siblingHash := t.HashNode(siblingIdx)
+			// S is the immediate child of P on the copath side of this leaf.
+			siblingIdx := t.GetSibling(path[j-1])
+			siblingHash := t.originalSiblingTreeHash(siblingIdx, parent.UnmergedLeaves)
 			expected := ComputeParentHash(parentKey, parent.ParentHash, siblingHash, t.hashFunc())
 
 			var actual []byte
-			if IsLeaf(nodeIdx) && node.LeafData != nil {
-				actual = node.LeafData.ParentHash
+			if IsLeaf(d) {
+				actual = t.Nodes[d].LeafData.ParentHash
 			} else {
-				actual = node.ParentHash
+				actual = t.Nodes[d].ParentHash
 			}
 
 			if !bytes.Equal(expected, actual) {
@@ -864,6 +900,7 @@ func (t *RatchetTree) VerifyAllParentHashes() error {
 				break
 			}
 			covered[parentIdx] = true
+			d = parentIdx
 		}
 	}
 
