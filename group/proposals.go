@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
 )
 
 // AddProposal adds a new member to the group per RFC 9420 §12.1.1.
@@ -179,6 +180,58 @@ func NewGroupContextExtensionsProposal(extensions []Extension) *Proposal {
 		Type: ProposalTypeGroupContextExtensions,
 		GroupContextExtensions: &ContextExtensionsProposal{
 			Extensions: extensions,
+		},
+	}
+}
+
+// NewResumptionPSKProposal creates a PreSharedKey proposal that injects a
+// resumption PSK from a prior epoch into the current commit (RFC 9420 §8.6).
+//
+// The resumption PSK proves the sender was a member of the specified epoch
+// and reinforces forward secrecy and post-compromise security.
+//
+// Parameters:
+//   - groupID: the group ID of the epoch containing the resumption secret
+//   - epoch: the epoch number containing the resumption secret
+//   - nonce: a fresh random nonce of length KDF.Nh (from cipher suite)
+//
+// The proposal is valid in any normal commit; no ReInit is required.
+func NewResumptionPSKProposal(groupID []byte, epoch uint64, nonce []byte) *Proposal {
+	return &Proposal{
+		Type: ProposalTypePreSharedKey,
+		PreSharedKey: &PreSharedKeyProposal{
+			PskType: 2, // resumption
+			PskID: PskID{
+				PskType:    2,
+				Usage:      uint8(schedule.ResumptionUsageApplication),
+				PskGroupID: groupID,
+				PskEpoch:   epoch,
+				Nonce:      nonce,
+			},
+		},
+	}
+}
+
+// NewBranchPSKProposal creates a PreSharedKey proposal for subgroup branching
+// (RFC 9420 §11.3). This proposal MUST appear in the first commit of a
+// branched group and MUST NOT appear in regular commits.
+//
+// Parameters:
+//   - groupID: the group ID of the original (parent) group
+//   - epoch: the epoch of the original group at branching time
+//   - nonce: a fresh random nonce of length KDF.Nh
+func NewBranchPSKProposal(groupID []byte, epoch uint64, nonce []byte) *Proposal {
+	return &Proposal{
+		Type: ProposalTypePreSharedKey,
+		PreSharedKey: &PreSharedKeyProposal{
+			PskType: 2, // resumption
+			PskID: PskID{
+				PskType:    2,
+				Usage:      uint8(schedule.ResumptionUsageBranch),
+				PskGroupID: groupID,
+				PskEpoch:   epoch,
+				Nonce:      nonce,
+			},
 		},
 	}
 }

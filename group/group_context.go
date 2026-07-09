@@ -172,7 +172,11 @@ func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
 	}, nil
 }
 
-// parseExtensions parses a vector of extensions from TLS-encoded data.
+// ParseExtensions parses a TLS-encoded vector of Extension structs.
+func ParseExtensions(data []byte) ([]Extension, error) {
+	return parseExtensions(data)
+}
+
 func parseExtensions(data []byte) ([]Extension, error) {
 	r := tls.NewReader(data)
 	var extensions []Extension

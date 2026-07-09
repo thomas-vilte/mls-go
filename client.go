@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -728,7 +729,38 @@ func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageByte
 // call to [Client.FreshKeyPackageBytes]. JoinGroup matches the Welcome to the
 // most recently generated pending KeyPackage — if no match is found,
 // [ErrNoPendingKeyPackage] is returned.
+//
+// If the Welcome references a resumption or branch PSK (RFC 9420 §8.6, §11.3
+// — e.g. a subgroup created via [group.Branch], or a resumption PSK proposed
+// with [Client.ProposeResumptionPSK]), use [Client.JoinGroupWithPSKs] instead:
+// this method has no way to supply the PSK values the joiner must already
+// hold, so it fails with [ErrWelcomePSKNotFound]/[ErrWelcomeMissingPSK] for
+// such Welcomes.
 func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, error) {
+	return c.joinGroupWithPSKs(ctx, welcomeBytes, nil)
+}
+
+// JoinGroupWithPSKs joins a group from a Welcome message that references
+// resumption or external PSKs (RFC 9420 §8.6 resumption, §11.3 branching).
+//
+// externalPsks must supply, for each PSK the Welcome references, the value
+// the joiner already holds:
+//   - Resumption/branch PSKs: keyed by
+//     [group.ResumptionPskCacheKey](groupID, epoch) — the joiner must already
+//     have participated in that (groupID, epoch), e.g. by having called
+//     [Client.Epoch]/kept the old group's storage around, since the value
+//     itself is never transmitted in the Welcome.
+//   - External PSKs: keyed by the raw psk_id bytes.
+//
+// See [group.Branch] for constructing a subgroup on the committer side; the
+// resulting Welcome's PSK requirements are threaded through automatically by
+// [Client.CommitPendingProposals] (via [group.StagedCommit.PskIDs] and
+// [group.StagedCommit.RawPskSecret]) — only the joiner side needs this method.
+func (c *Client) JoinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, externalPsks map[string][]byte) ([]byte, error) {
+	return c.joinGroupWithPSKs(ctx, welcomeBytes, externalPsks)
+}
+
+func (c *Client) joinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, externalPsks map[string][]byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
@@ -752,7 +784,7 @@ func (c *Client) JoinGroup(ctx context.Context, welcomeBytes []byte) ([]byte, er
 	var matchKey string
 	var joinMatchErr error
 	for key, pe := range c.pendingKPs {
-		g, joinErr := group.JoinFromWelcomeWithContext(ctx, welcome, pe.kp, pe.kpPriv, nil)
+		g, joinErr := group.JoinFromWelcomeWithContext(ctx, welcome, pe.kp, pe.kpPriv, externalPsks)
 		if joinErr != nil {
 			continue
 		}
@@ -1062,6 +1094,158 @@ func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes
 	}
 	c.log(slog.LevelDebug, "processed public message", "group", groupHex(groupID), "from_epoch", oldEpoch, "to_epoch", g.Epoch().AsUint64())
 	return nil
+}
+
+// ProposeGroupContextExtensions stores a GroupContextExtensions proposal locally
+// and returns a signed PublicMessage (RFC 9420 §12.1.7).
+//
+// The proposal updates the group's Extensions field in the GroupContext.
+// Call Commit to apply it.
+func (c *Client) ProposeGroupContextExtensions(ctx context.Context, groupID, extensionsBytes []byte) ([]byte, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse extensions from TLS-encoded Extension vector.
+	var extensions []group.Extension
+	if len(extensionsBytes) > 0 {
+		exts, err := group.ParseExtensions(extensionsBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshaling extensions: %w", err)
+		}
+		extensions = exts
+	}
+
+	proposal := group.NewGroupContextExtensionsProposal(extensions)
+	// Store in the local pending-proposal store so this client's own
+	// CommitPendingProposals includes it (SignProposalAsPublicMessage only
+	// registers the ProposalRef for by-reference resolution).
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing group context extensions proposal: %w", err)
+	}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// ProposeResumptionPSK stores a resumption PSK proposal locally and returns
+// a signed PublicMessage (RFC 9420 §8.6).
+//
+// The proposal injects a resumption PSK from a prior epoch into the current
+// commit, proving the sender's previous membership and reinforcing FS/PCS.
+// The epoch must be one of the two most recent epochs (RFC §8.6 recommendation).
+func (c *Client) ProposeResumptionPSK(ctx context.Context, groupID []byte, epoch uint64) ([]byte, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, err
+	}
+
+	gc := g.GroupContext()
+	if gc == nil {
+		return nil, fmt.Errorf("group context not available")
+	}
+
+	// Generate fresh nonce of length KDF.Nh.
+	nonce := make([]byte, g.CipherSuite().HashLength())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating PSK nonce: %w", err)
+	}
+
+	proposal := group.NewResumptionPSKProposal(gc.GroupID.AsSlice(), epoch, nonce)
+	// Store locally so this client's own CommitPendingProposals includes it.
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing resumption PSK proposal: %w", err)
+	}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// ProposeReInit stores a ReInit proposal locally and returns a signed
+// PublicMessage (RFC 9420 §12.1.5).
+//
+// A ReInit proposal restarts the group with new parameters while preserving
+// membership via resumption secrets. After committing, the new group is
+// created via NewGroupFromReInit.
+func (c *Client) ProposeReInit(ctx context.Context, groupID, newGroupID []byte) ([]byte, error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return nil, err
+	}
+
+	gc := g.GroupContext()
+	if gc == nil {
+		return nil, fmt.Errorf("group context not available")
+	}
+
+	proposal := group.NewReInitProposal(
+		newGroupID,
+		gc.Version,
+		gc.CipherSuite,
+		gc.Extensions,
+	)
+	// Store locally so this client's own CommitPendingProposals includes it.
+	g.Proposals().AddProposal(proposal, g.OwnLeafIndex())
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing reinit proposal: %w", err)
+	}
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // SendMessageOption configures the behavior of a single SendMessage call.
@@ -1546,6 +1730,118 @@ func (c *Client) EpochAuthenticator(ctx context.Context, groupID []byte) ([]byte
 		return nil, err
 	}
 	return cloneBytes(g.EpochAuthenticator()), nil
+}
+
+// ResumptionPSK returns the resumption secret for groupID's current epoch,
+// together with the cache key a joiner passes to [Client.JoinGroupWithPSKs]
+// to resolve it.
+//
+// This is the piece [Client.JoinGroupWithPSKs] cannot derive on its own: RFC
+// 9420 never transmits a resumption/branch PSK value over the wire — a
+// member proves participation in a prior epoch by already holding its
+// resumption_secret. Use this on a client that IS (or recently was) a member
+// of oldGroupID, before calling JoinGroupWithPSKs on the Welcome for the new
+// group (see [group.Branch] / [Client.Branch] for RFC §11.3 subgroup
+// branching, or [Client.ProposeResumptionPSK] for §8.6 usage=application).
+func (c *Client) ResumptionPSK(ctx context.Context, groupID []byte) (key string, secret []byte, err error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	if err != nil {
+		return "", nil, err
+	}
+	if g.EpochSecrets() == nil || g.EpochSecrets().ResumptionSecret == nil {
+		return "", nil, fmt.Errorf("resumption secret not available")
+	}
+	gc := g.GroupContext()
+	key = group.ResumptionPskCacheKey(gc.GroupID.AsSlice(), gc.Epoch.AsUint64())
+	secret = append([]byte(nil), g.EpochSecrets().ResumptionSecret.AsSlice()...)
+	return key, secret, nil
+}
+
+// Branch creates a new subgroup from groupID with a fresh identity for this
+// Client, per RFC 9420 §11.3, and immediately commits its first epoch.
+//
+// otherMemberKPBytes are the marshaled KeyPackages of the other subgroup
+// members (RFC §11.3 step 1: fetch a new KeyPackage per member); each MUST
+// correspond to a current member of groupID — RFC §11.3 requires the
+// receiving clients to verify this via LeafNode credential matching, which
+// happens on the joining side (JoinGroupWithPSKs → validateGroupMembers), not
+// here. version and cipher_suite are inherited from groupID's group, matching
+// the RFC's constraint that a subgroup share them with its parent.
+//
+// Returns the new group's ID plus the commit and Welcome bytes for the other
+// members (Welcome is nil if otherMemberKPBytes is empty). Those members
+// join via [Client.JoinGroupWithPSKs] — see [Client.ResumptionPSK] for how
+// they obtain the PSK value that call requires.
+func (c *Client) Branch(ctx context.Context, groupID []byte, otherMemberKPBytes [][]byte) (newGroupID, commit, welcome []byte, err error) {
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, nil, nil, err
+	}
+	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+
+	entry.mu.Lock()
+	oldGroup, err := c.loadGroupEntry(ctx, groupID, entry)
+	entry.mu.Unlock()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	otherMembers := make([]*keypackages.KeyPackage, len(otherMemberKPBytes))
+	for i, kpBytes := range otherMemberKPBytes {
+		kp, err := keypackages.UnmarshalKeyPackage(kpBytes)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("unmarshaling member %d key package: %w", i, err)
+		}
+		if err := c.validateCredential(ctx, kp.LeafNode.Credential); err != nil {
+			return nil, nil, nil, fmt.Errorf("member %d: %w", i, err)
+		}
+		otherMembers[i] = kp
+	}
+
+	ownKP, ownPrivKeys, err := keypackages.Generate(c.credWithKey, c.cs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generating own branch key package: %w", err)
+	}
+
+	branchGroup, err := group.Branch(oldGroup, ownKP, ownPrivKeys, otherMembers)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("branching group: %w", err)
+	}
+	branchGroup.SetPaddingSize(c.paddingSize)
+
+	branchEntry := &groupEntry{}
+	commit, welcome, err = c.commitPendingProposals(ctx, branchGroup, branchEntry)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("committing branch: %w", err)
+	}
+
+	c.mu.Lock()
+	c.groupEntries[groupCacheKey(branchGroup.ID())] = branchEntry
+	c.mu.Unlock()
+
+	c.log(slog.LevelInfo, "group branched", "old_group", groupHex(groupID), "new_group", groupHex(branchGroup.ID().AsSlice()), "members", len(otherMembers)+1)
+	return cloneBytes(branchGroup.ID().AsSlice()), commit, welcome, nil
 }
 
 // GroupInfo returns a signed GroupInfo structure encoded as MLSMessage bytes

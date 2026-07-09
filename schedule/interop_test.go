@@ -11,20 +11,28 @@ import (
 
 // keyScheduleEpoch mirrors one epoch entry from the key-schedule test vector JSON.
 type keyScheduleEpoch struct {
-	CommitSecret       string `json:"commit_secret"`
-	JoinerSecret       string `json:"joiner_secret"`
-	PskSecret          string `json:"psk_secret"`
-	GroupContext       string `json:"group_context"`
-	WelcomeSecret      string `json:"welcome_secret"`
-	EncryptionSecret   string `json:"encryption_secret"`
-	SenderDataSecret   string `json:"sender_data_secret"`
-	ExporterSecret     string `json:"exporter_secret"`
-	EpochAuthenticator string `json:"epoch_authenticator"`
-	ExternalSecret     string `json:"external_secret"`
-	ConfirmationKey    string `json:"confirmation_key"`
-	MembershipKey      string `json:"membership_key"`
-	ResumptionPsk      string `json:"resumption_psk"`
-	InitSecret         string `json:"init_secret"`
+	CommitSecret       string              `json:"commit_secret"`
+	JoinerSecret       string              `json:"joiner_secret"`
+	PskSecret          string              `json:"psk_secret"`
+	GroupContext       string              `json:"group_context"`
+	WelcomeSecret      string              `json:"welcome_secret"`
+	EncryptionSecret   string              `json:"encryption_secret"`
+	SenderDataSecret   string              `json:"sender_data_secret"`
+	ExporterSecret     string              `json:"exporter_secret"`
+	EpochAuthenticator string              `json:"epoch_authenticator"`
+	ExternalSecret     string              `json:"external_secret"`
+	ConfirmationKey    string              `json:"confirmation_key"`
+	MembershipKey      string              `json:"membership_key"`
+	ResumptionPsk      string              `json:"resumption_psk"`
+	InitSecret         string              `json:"init_secret"`
+	Exporter           *exporterTestVector `json:"exporter,omitempty"`
+}
+
+type exporterTestVector struct {
+	Context string `json:"context"`
+	Label   string `json:"label"`
+	Length  int    `json:"length"`
+	Secret  string `json:"secret"`
 }
 
 type keyScheduleVector struct {
@@ -131,6 +139,20 @@ func TestKeyScheduleInteropVectors(t *testing.T) {
 					}
 					if !bytesEqual(got.AsSlice(), want) {
 						t.Errorf("epoch %d: %s\n  got  %x\n  want %x", i, name, got.AsSlice(), want)
+					}
+				}
+
+				if epoch.Exporter != nil {
+					ctxBytes := mustHex(t, epoch.Exporter.Context)
+					expectedExported := mustHex(t, epoch.Exporter.Secret)
+
+					got, err := Exporter(secrets.ExporterSecret, cs, ExporterLabel(epoch.Exporter.Label), ctxBytes, epoch.Exporter.Length)
+					if err != nil {
+						t.Fatalf("epoch %d: Exporter: %v", i, err)
+					}
+
+					if !bytesEqual(got, expectedExported) {
+						t.Errorf("epoch %d: MLS-Exporter\n got %x\n want %x", i, got, expectedExported)
 					}
 				}
 
