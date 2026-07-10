@@ -249,10 +249,11 @@
 //	    return err
 //	}
 //
-// Creating an UpdatePath:
-//
-//	updatePath := treesync.NewUpdatePath(leafNode, ciphertexts)
-//	data := updatePath.Marshal()
+// UpdatePath (RFC §12.4.1) is not part of this package: it lives in
+// group.UpdatePath (group/commit.go), a struct wrapping a
+// treesync.LeafNodeData plus per-node encrypted path secrets. It has no
+// standalone constructor — Group.Commit builds it internally as part of
+// producing a commit's update path.
 //
 // # Security Considerations
 //

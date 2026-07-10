@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
 	"testing"
 )
@@ -257,23 +256,19 @@ func testEncryptWithLabel(t *testing.T, cs CipherSuite, v cryptoBasicsVector) {
 }
 
 // privKeyFromScalar reconstructs an ECDSA P-256 private key from a raw 32-byte scalar.
-// nolint:staticcheck // Using ScalarBaseMult for test vector compatibility
 func privKeyFromScalar(scalar []byte) *ecdsa.PrivateKey {
-	curve := elliptic.P256()
-	x, y := curve.ScalarBaseMult(scalar)
-	return &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
-		D:         new(big.Int).SetBytes(scalar),
+	privKey, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), scalar)
+	if err != nil {
+		panic(err)
 	}
+	return privKey
 }
 
 // privKeyFromScalarP521 reconstructs an ECDSA P-521 private key from a raw 66-byte scalar.
-// nolint:staticcheck // Using ScalarBaseMult for test vector compatibility
 func privKeyFromScalarP521(scalar []byte) *ecdsa.PrivateKey {
-	curve := elliptic.P521()
-	x, y := curve.ScalarBaseMult(scalar)
-	return &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
-		D:         new(big.Int).SetBytes(scalar),
+	privKey, err := ecdsa.ParseRawPrivateKey(elliptic.P521(), scalar)
+	if err != nil {
+		panic(err)
 	}
+	return privKey
 }
