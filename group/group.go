@@ -2347,6 +2347,108 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	return nil
 }
 
+// Branch creates a new subgroup from an existing group per RFC 9420 §11.3.
+//
+// The new group starts at epoch 0 with the caller as its sole member. A
+// resumption PSK with usage=branch is injected in the first commit to
+// cryptographically bind the new group to the original, and an Add proposal
+// is staged for each of the other subgroup members.
+//
+// Parameters:
+//   - oldGroup: the group to branch from (read-only; not modified)
+//   - ownKeyPackage, ownPrivKeys: the caller's own fresh identity for the
+//     subgroup (RFC §11.3 step 1: "Fetch a new KeyPackage for each group
+//     member"). Unlike the other members (added via proposals the caller
+//     must still commit), the caller's private keys are required immediately:
+//     NewGroup needs them to hold the leaf's encryption key material for any
+//     future commit the caller sends or receives in the new group.
+//   - otherMembers: key packages for the other subgroup members (added as
+//     pending Add proposals — the caller commits them; use
+//     [StagedCommit.PskIDs] and [StagedCommit.RawPskSecret] to wire the
+//     resulting Welcome, matching the branch PSK proposal below)
+//   - opts: optional GroupOption settings (extensions, PSK stores, etc.)
+//
+// Returns the new Group with proposals staged. The caller should commit via
+// newGroup.Commit() and create a Welcome via newGroup.CreateWelcomeWithOpts().
+//
+// RFC 9420 §11.3 constraints:
+//   - All members MUST be current members of oldGroup
+//   - version and cipher_suite MUST match the original group
+func Branch(
+	oldGroup *Group,
+	ownKeyPackage *keypackages.KeyPackage,
+	ownPrivKeys *keypackages.KeyPackagePrivateKeys,
+	otherMembers []*keypackages.KeyPackage,
+	opts ...GroupOption,
+) (*Group, error) {
+	if oldGroup == nil {
+		return nil, fmt.Errorf("old group is nil")
+	}
+	if ownKeyPackage == nil || ownKeyPackage.LeafNode == nil {
+		return nil, fmt.Errorf("own key package is nil")
+	}
+	if ownKeyPackage.LeafNode.Credential == nil {
+		return nil, fmt.Errorf("own key package has nil credential")
+	}
+
+	oldGC := oldGroup.GroupContext()
+	if oldGC == nil {
+		return nil, fmt.Errorf("old group context is nil")
+	}
+
+	if oldGroup.EpochSecrets() == nil || oldGroup.EpochSecrets().ResumptionSecret == nil {
+		return nil, fmt.Errorf("resumption secret not available for branch")
+	}
+
+	cs := oldGroup.CipherSuite()
+
+	// RFC §11.3: version and cipher suite MUST match the original group.
+	for i, kp := range otherMembers {
+		if kp == nil || kp.LeafNode == nil {
+			return nil, fmt.Errorf("member %d: nil key package", i)
+		}
+		if kp.LeafNode.Credential == nil {
+			return nil, fmt.Errorf("member %d: nil credential", i)
+		}
+	}
+
+	newGroup, err := NewGroup(
+		NewGroupID(oldGroup.groupID.AsSlice()),
+		cs,
+		ownKeyPackage,
+		ownPrivKeys,
+		opts...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating branch group: %w", err)
+	}
+
+	// Inject the resumption PSK from the old group into the new group's cache.
+	branchNonce := make([]byte, cs.HashLength())
+	if _, err := rand.Read(branchNonce); err != nil {
+		return nil, fmt.Errorf("generating branch psk nonce: %w", err)
+	}
+	oldGroupID := oldGC.GroupID.AsSlice()
+	oldEpoch := oldGC.Epoch.AsUint64()
+	resumptionKey := ResumptionPskCacheKey(oldGroupID, oldEpoch)
+	newGroup.LoadPsk([]byte(resumptionKey), oldGroup.EpochSecrets().ResumptionSecret.AsSlice())
+
+	// RFC §11.3: first commit MUST include a resumption PSK proposal with usage=branch.
+	branchProposal := NewBranchPSKProposal(oldGroupID, oldEpoch, branchNonce)
+	newGroup.Proposals().AddProposal(branchProposal, newGroup.OwnLeafIndex())
+
+	// Add the other members as Add proposals.
+	for _, kp := range otherMembers {
+		addProp := &Proposal{
+			Type: ProposalTypeAdd,
+			Add:  &AddProposal{KeyPackage: kp},
+		}
+		newGroup.Proposals().AddProposal(addProp, newGroup.OwnLeafIndex())
+	}
+
+	return newGroup, nil
+}
+
 // collectPSKsFromProposals resolves PSK values for all PreSharedKey proposals in the list.
 // Used by both CommitWithContext (sender) and MergeCommit (receiver) to populate the key schedule.
 func (g *Group) collectPSKsFromProposals(proposals []*Proposal) ([]schedule.Psk, error) {

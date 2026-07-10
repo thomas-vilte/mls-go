@@ -13,19 +13,27 @@ import (
 )
 
 type keyScheduleEpochVector struct {
-	CommitSecret     string `json:"commit_secret"`
-	ConfirmationKey  string `json:"confirmation_key"`
-	EncryptionSecret string `json:"encryption_secret"`
-	ExporterSecret   string `json:"exporter_secret"`
-	ExternalSecret   string `json:"external_secret"`
-	GroupContext     string `json:"group_context"`
-	InitSecret       string `json:"init_secret"`
-	JoinerSecret     string `json:"joiner_secret"`
-	MembershipKey    string `json:"membership_key"`
-	PskSecret        string `json:"psk_secret"`
-	ResumptionPsk    string `json:"resumption_psk"`
-	SenderDataSecret string `json:"sender_data_secret"`
-	WelcomeSecret    string `json:"welcome_secret"`
+	CommitSecret     string              `json:"commit_secret"`
+	ConfirmationKey  string              `json:"confirmation_key"`
+	EncryptionSecret string              `json:"encryption_secret"`
+	ExporterSecret   string              `json:"exporter_secret"`
+	ExternalSecret   string              `json:"external_secret"`
+	GroupContext     string              `json:"group_context"`
+	InitSecret       string              `json:"init_secret"`
+	JoinerSecret     string              `json:"joiner_secret"`
+	MembershipKey    string              `json:"membership_key"`
+	PskSecret        string              `json:"psk_secret"`
+	ResumptionPsk    string              `json:"resumption_psk"`
+	SenderDataSecret string              `json:"sender_data_secret"`
+	WelcomeSecret    string              `json:"welcome_secret"`
+	Exporter         *exporterTestVector `json:"exporter,omitempty"`
+}
+
+type exporterTestVector struct {
+	Context string `json:"context"`
+	Label   string `json:"label"`
+	Length  int    `json:"length"`
+	Secret  string `json:"secret"`
 }
 
 type keyScheduleVector struct {
@@ -115,6 +123,20 @@ func TestKeyScheduleVectors(t *testing.T) {
 				derived, err := ks.DeriveEpochSecrets()
 				if err != nil {
 					t.Fatalf("DeriveEpochSecrets: %v", err)
+				}
+
+				if epoch.Exporter != nil {
+					ctxBytes := mustHex(t, epoch.Exporter.Context)
+					expectedExported := mustHex(t, epoch.Exporter.Secret)
+
+					got, err := schedule.Exporter(derived.ExporterSecret, cs, schedule.ExporterLabel(epoch.Exporter.Label), ctxBytes, epoch.Exporter.Length)
+					if err != nil {
+						t.Fatalf("epoch %d: Exporter: %v", i, err)
+					}
+
+					if !bytes.Equal(got, expectedExported) {
+						t.Errorf("epoch %d: MLS-Exporter\n got %x\n want %x", i, got, expectedExported)
+					}
 				}
 
 				if !bytes.Equal(derived.SenderDataSecret.AsSlice(), mustHex(t, epoch.SenderDataSecret)) {

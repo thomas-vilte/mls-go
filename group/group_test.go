@@ -8,6 +8,7 @@ import (
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/keypackages"
+	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
@@ -894,5 +895,267 @@ func TestProcessPrivateMessage_NoSecrets(t *testing.T) {
 
 	if err := group.ProcessPrivateMessage(pm); err == nil {
 		t.Error("expected error when secrets not available")
+	}
+}
+
+func TestBranch(t *testing.T) {
+	// Create a 3-member group
+	cred1, _, err := credentials.GenerateCredentialWithKey([]byte("Alice"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp1, kpPriv1, err := keypackages.Generate(cred1, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp1, kpPriv1)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+
+	// Add Bob
+	cred2, _, _ := credentials.GenerateCredentialWithKey([]byte("Bob"))
+	kp2, _, _ := keypackages.Generate(cred2, keypackages.MLS128DHKEMP256)
+	_, err = g.AddMember(kp2)
+	if err != nil {
+		t.Fatalf("AddMember bob: %v", err)
+	}
+	sigPriv1 := ciphersuite.NewSignaturePrivateKey(kpPriv1.SignatureKey)
+	stagedCommit, err := g.Commit(sigPriv1, sigPriv1.PublicKey(), nil)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	err = g.MergeCommit(stagedCommit)
+	if err != nil {
+		t.Fatalf("MergeCommit: %v", err)
+	}
+
+	// Add Charlie
+	cred3, _, _ := credentials.GenerateCredentialWithKey([]byte("Charlie"))
+	kp3, _, _ := keypackages.Generate(cred3, keypackages.MLS128DHKEMP256)
+	_, err = g.AddMember(kp3)
+	if err != nil {
+		t.Fatalf("AddMember charlie: %v", err)
+	}
+	stagedCommit, err = g.Commit(sigPriv1, sigPriv1.PublicKey(), nil)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	err = g.MergeCommit(stagedCommit)
+	if err != nil {
+		t.Fatalf("MergeCommit: %v", err)
+	}
+
+	if g.MemberCount() != 3 {
+		t.Fatalf("expected 3 members, got %d", g.MemberCount())
+	}
+
+	// Branch: create sub-group with Alice (own identity) + Charlie
+	credBranch1, _, _ := credentials.GenerateCredentialWithKey([]byte("Alice-Branch"))
+	kpBranch1, kpPrivBranch1, err := keypackages.Generate(credBranch1, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	credBranch2, _, _ := credentials.GenerateCredentialWithKey([]byte("Charlie-Branch"))
+	kpBranch2, _, err := keypackages.Generate(credBranch2, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	branchGroup, err := Branch(g, kpBranch1, kpPrivBranch1, []*keypackages.KeyPackage{kpBranch2})
+	if err != nil {
+		t.Fatalf("Branch: %v", err)
+	}
+
+	// The branch group should have 1 member (committer) + 1 pending Add proposal
+	if branchGroup.MemberCount() != 1 {
+		t.Fatalf("expected 1 member in branch group, got %d", branchGroup.MemberCount())
+	}
+
+	proposals := branchGroup.Proposals()
+	if len(proposals.Proposals) != 2 { // 1 Branch PSK + 1 Add
+		t.Fatalf("expected 2 proposals (branch PSK + add), got %d", len(proposals.Proposals))
+	}
+
+	// First proposal should be Branch PSK
+	var foundBranch bool
+	var foundAdd bool
+	for _, sp := range proposals.Proposals {
+		if sp.Proposal.Type == ProposalTypePreSharedKey {
+			foundBranch = true
+			if sp.Proposal.PreSharedKey.PskID.Usage != uint8(schedule.ResumptionUsageBranch) {
+				t.Errorf("expected Branch PSK usage, got %d", sp.Proposal.PreSharedKey.PskID.Usage)
+			}
+		}
+		if sp.Proposal.Type == ProposalTypeAdd {
+			foundAdd = true
+		}
+	}
+	if !foundBranch {
+		t.Error("branch PSK proposal not found")
+	}
+	if !foundAdd {
+		t.Error("add proposal not found")
+	}
+
+	// Branch group should have a resumption PSK cached
+	oldGC := g.GroupContext()
+	resumptionKey := ResumptionPskCacheKey(oldGC.GroupID.AsSlice(), oldGC.Epoch.AsUint64())
+	if _, ok := branchGroup.cachedPsks[resumptionKey]; !ok {
+		t.Error("resumption PSK not loaded in branch group")
+	}
+}
+
+func TestBranch_NilGroup(t *testing.T) {
+	t.Parallel()
+	cred, _, _ := credentials.GenerateCredentialWithKey([]byte("A"))
+	kp, kpPriv, _ := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	_, err := Branch(nil, kp, kpPriv, nil)
+	if err == nil {
+		t.Fatal("expected error for nil group")
+	}
+}
+
+func TestBranch_NilOwnKeyPackage(t *testing.T) {
+	t.Parallel()
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("A"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp, kpPriv, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+	_, err = Branch(g, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil own key package")
+	}
+}
+
+// TestBranch_NoOtherMembers verifies a branch with only the caller (no other
+// subgroup members yet) is valid — RFC §11.3 doesn't require more than one
+// initial member; others can be added later via separate proposals.
+func TestBranch_NoOtherMembers(t *testing.T) {
+	t.Parallel()
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("A"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp, kpPriv, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	branchGroup, err := Branch(g, kpBranch, kpPrivBranch, nil)
+	if err != nil {
+		t.Fatalf("Branch: %v", err)
+	}
+	if branchGroup.MemberCount() != 1 {
+		t.Fatalf("expected 1 member, got %d", branchGroup.MemberCount())
+	}
+}
+
+func setupSoloGroupForBranch(t *testing.T) *Group {
+	t.Helper()
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("A"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp, kpPriv, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+	return g
+}
+
+func TestBranch_OwnKeyPackageNilCredential(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	kpBranch.LeafNode.Credential = nil
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, nil)
+	if err == nil {
+		t.Fatal("expected error for own key package with nil credential")
+	}
+}
+
+func TestBranch_OtherMemberNilKeyPackage(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, []*keypackages.KeyPackage{nil})
+	if err == nil {
+		t.Fatal("expected error for nil other member key package")
+	}
+}
+
+func TestBranch_OtherMemberNilCredential(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	credOther, _, err := credentials.GenerateCredentialWithKey([]byte("Other-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpOther, _, err := keypackages.Generate(credOther, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	kpOther.LeafNode.Credential = nil
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, []*keypackages.KeyPackage{kpOther})
+	if err == nil {
+		t.Fatal("expected error for other member with nil credential")
 	}
 }

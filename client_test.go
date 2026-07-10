@@ -17,7 +17,9 @@ import (
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/group"
+	"github.com/thomas-vilte/mls-go/internal/tls"
 	filestore "github.com/thomas-vilte/mls-go/storage/file"
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
@@ -1729,5 +1731,117 @@ func TestClientStagedCommit_ConcurrentCommitConflict(t *testing.T) {
 	}
 	if len(members) != 3 {
 		t.Fatalf("alice sees %d members, want 3", len(members))
+	}
+}
+
+func TestClientProposeGroupContextExtensions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+
+	// Build TLS-encoded extensions: extension_type(uint16) + extension_data(VLBytes)
+	w := tls.NewWriter()
+	w.WriteUint16(uint16(mlsext.ExtensionTypeApplicationID))
+	extData := []byte("test-app-id")
+	w.WriteVLBytes(extData)
+	extensionsBytes := w.Bytes()
+
+	msg, err := alice.ProposeGroupContextExtensions(ctx, groupID, extensionsBytes)
+	if err != nil {
+		t.Fatalf("ProposeGroupContextExtensions: %v", err)
+	}
+	if len(msg) == 0 {
+		t.Fatal("expected non-empty proposal message")
+	}
+}
+
+func TestClientProposeGroupContextExtensions_Empty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+
+	msg, err := alice.ProposeGroupContextExtensions(ctx, groupID, nil)
+	if err != nil {
+		t.Fatalf("ProposeGroupContextExtensions: %v", err)
+	}
+	if len(msg) == 0 {
+		t.Fatal("expected non-empty proposal message")
+	}
+}
+
+func TestClientProposeResumptionPSK(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	bob, err := NewClient([]byte("bob"), cs)
+	if err != nil {
+		t.Fatalf("creating bob client: %v", err)
+	}
+	bobKP, err := bob.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("creating bob key package: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+	_, welcome, err := alice.InviteMember(ctx, groupID, bobKP)
+	if err != nil {
+		t.Fatalf("inviting bob: %v", err)
+	}
+	if _, err := bob.JoinGroup(ctx, welcome); err != nil {
+		t.Fatalf("bob joining group: %v", err)
+	}
+
+	// Propose resumption PSK from epoch 0
+	msg, err := alice.ProposeResumptionPSK(ctx, groupID, 0)
+	if err != nil {
+		t.Fatalf("ProposeResumptionPSK: %v", err)
+	}
+	if len(msg) == 0 {
+		t.Fatal("expected non-empty proposal message")
+	}
+}
+
+func TestClientProposeReInit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cs := ciphersuite.MLS128DHKEMP256
+	alice, err := NewClient([]byte("alice"), cs)
+	if err != nil {
+		t.Fatalf("creating alice client: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+
+	newGroupID := []byte("new-group-id-proposal")
+	msg, err := alice.ProposeReInit(ctx, groupID, newGroupID)
+	if err != nil {
+		t.Fatalf("ProposeReInit: %v", err)
+	}
+	if len(msg) == 0 {
+		t.Fatal("expected non-empty proposal message")
 	}
 }
