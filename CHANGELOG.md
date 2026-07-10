@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v1.6.0] - 2026-07-10
+
+[v1.6.0]: https://github.com/thomas-vilte/mls-go/compare/v1.5.0...v1.6.0
+
+We have focused this release on deepening our support for the RFC 9420 standard by introducing advanced group branching and stricter validation checks. We also expanded our cryptographic capabilities with the addition of a new high-security cipher suite to ensure more robust messaging environments.
+
+### 🛡️ Security & Protocol Compliance
+
+- We implemented stricter RFC 9420 validation checks to ensure higher protocol integrity and security.
+- We added support for the MLS_256_DHKEMP521_AES256GCM (CS5) cipher suite, providing more robust cryptographic options for secure communication.
+
+### ✨ Group Management Features
+
+- We introduced support for RFC 9420 group branching and advanced proposals, allowing for more complex and flexible group management scenarios.
+
+### 🔧 Protocol Improvements
+
+- We enhanced the reinitialization PSK and exporter labels to align more closely with the latest RFC 9420 specifications.
+- We improved public key parsing efficiency and reliability by utilizing specialized uncompressed key parsing methods.
+
 ## [v1.5.0] - 2026-07-01
 
 [v1.5.0]: https://github.com/thomas-vilte/mls-go/compare/v1.4.0...v1.5.0
