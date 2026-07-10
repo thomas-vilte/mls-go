@@ -31,7 +31,16 @@ func TestCipherSuite_IsSupported(t *testing.T) {
 		t.Error("MLS256DHKEMP521AES256GCM (cs=5) should be supported")
 	}
 
-	// Unsupported cipher suites (cs=6,7,8,9 are placeholders)
+	// CS6 (X448+ChaCha20) is defined but not implemented
+	if MLS256DHKEMX448ChaCha20Poly1305.IsSupported() {
+		t.Error("MLS256DHKEMX448ChaCha20Poly1305 (cs=6) should NOT be supported: constant only")
+	}
+	// CS7 (P-384) is defined but not implemented
+	if MLS256DHKEMP384AES256GCM.IsSupported() {
+		t.Error("MLS256DHKEMP384AES256GCM (cs=7) should NOT be supported: constant only")
+	}
+
+	// Unsupported cipher suites (cs=8,9 are placeholders)
 	var unsupported CipherSuite = 0x0006
 	if unsupported.IsSupported() {
 		t.Error("Unknown cipher suite 0x0006 should not be supported")

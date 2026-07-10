@@ -4,20 +4,21 @@
 //
 // This package provides the cryptographic building blocks required by the Messaging Layer
 // Security (MLS) protocol, as defined in RFC 9420 Section 5. It implements cipher suites
-// 1, 2, and 3 for MLS 1.0, with placeholders for suites 4-7.
+// 1, 2, 3, and 5 for MLS 1.0. Cipher suites 4, 6, and 7 are defined as constants for
+// interop purposes but are not implemented (IsSupported() returns false).
 //
 // # Implemented Cipher Suites
 //
-//   - CS1 (0x0001): MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ✅
-//   - CS2 (0x0002): MLS_128_DHKEMP256_AES128GCM_SHA256_P256 ✅
-//   - CS3 (0x0003): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ✅
+//   - CS1 (0x0001): MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+//   - CS2 (0x0002): MLS_128_DHKEMP256_AES128GCM_SHA256_P256
+//   - CS3 (0x0003): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+//   - CS5 (0x0005): MLS_256_DHKEMP521_AES256GCM_SHA512_P521
 //
-// # Placeholder Cipher Suites (not implemented)
+// # Cipher Suites (constants only, not implemented)
 //
-//   - CS4 (0x0004): MLS_256_DHKEMP384_AES256GCM_SHA384_P384 ⏳
-//   - CS5 (0x0005): MLS_256_DHKEMP521_AES256GCM_SHA512_P521 ⏳
-//   - CS6 (0x0006): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ⏳
-//   - CS7 (0x0007): MLS_256_DHKEMP384_CHACHA20POLY1305_SHA384_P384 ⏳
+//   - CS4 (0x0004): MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448
+//   - CS6 (0x0006): MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448
+//   - CS7 (0x0007): MLS_256_DHKEMP384_AES256GCM_SHA384_P384
 //
 // # Components
 //
@@ -138,9 +139,13 @@ const (
 	// RFC 9420 §17.1: P-521 + AES-256-GCM + SHA-512 + ECDSA-P521
 	MLS256DHKEMP521AES256GCM CipherSuite = 0x0005
 
-	// MLS256DHKEMX448ChaCha20Poly1305 is a deprecated alias kept for backward compatibility.
-	// The correct name for cipher suite 0x0005 is MLS256DHKEMP521AES256GCM.
-	MLS256DHKEMX448ChaCha20Poly1305 = MLS256DHKEMP521AES256GCM //nolint:revive // deprecated alias
+	// MLS256DHKEMX448ChaCha20Poly1305 is cipher suite 6: MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448
+	// Constant only — not implemented, IsSupported() returns false.
+	MLS256DHKEMX448ChaCha20Poly1305 CipherSuite = 0x0006 //nolint:revive // constant naming
+
+	// MLS256DHKEMP384AES256GCM is cipher suite 7: MLS_256_DHKEMP384_AES256GCM_SHA384_P384
+	// Constant only — not implemented, IsSupported() returns false.
+	MLS256DHKEMP384AES256GCM CipherSuite = 0x0007 //nolint:revive // constant naming
 )
 
 // String returns the name of the cipher suite.
@@ -251,7 +256,7 @@ func (cs CipherSuite) HashLength() int {
 	switch cs {
 	case MLS128DHKEMX25519, MLS128DHKEMX25519ChaCha20, MLS128DHKEMP256:
 		return 32 // SHA-256
-	case MLS256DHKEMX448AES256GCM, MLS256DHKEMX448ChaCha20Poly1305:
+	case MLS256DHKEMX448AES256GCM, MLS256DHKEMP521AES256GCM, MLS256DHKEMX448ChaCha20Poly1305:
 		return 64 // SHA-512
 	default:
 		return 0

@@ -3,21 +3,21 @@
 // # Overview
 //
 // This package implements the cryptographic building blocks required by MLS as defined in
-// RFC 9420 Section 5. It provides cipher suites 1, 2, and 3 for MLS 1.0, with placeholders
-// for suites 4-7.
+// RFC 9420 Section 5. It provides cipher suites 1, 2, 3, and 5 for MLS 1.0, with
+// placeholders for suites 4, 6, and 7.
 //
 // # Implemented Cipher Suites
 //
 //	CS1 (0x0001): MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ✅
 //	CS2 (0x0002): MLS_128_DHKEMP256_AES128GCM_SHA256_P256 ✅ (mandatory for MLS 1.0)
 //	CS3 (0x0003): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ✅
+//	CS5 (0x0005): MLS_256_DHKEMP521_AES256GCM_SHA512_P521 ✅
 //
 // # Placeholder Cipher Suites (not implemented)
 //
-//	CS4 (0x0004): MLS_256_DHKEMP384_AES256GCM_SHA384_P384 ⏳
-//	CS5 (0x0005): MLS_256_DHKEMP521_AES256GCM_SHA512_P521 ⏳
-//	CS6 (0x0006): MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 ⏳
-//	CS7 (0x0007): MLS_256_DHKEMP384_CHACHA20POLY1305_SHA384_P384 ⏳
+//	CS4 (0x0004): MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448 ❌
+//	CS6 (0x0006): MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448 ❌
+//	CS7 (0x0007): MLS_256_DHKEMP384_AES256GCM_SHA384_P384 ❌
 //
 // # Architecture
 //
