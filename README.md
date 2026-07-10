@@ -1,10 +1,20 @@
-# mls-go
+<p align="center">
+  <img src="assets/mls-go-icon-v2.png" alt="mls-go mascot" width="160">
+</p>
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/thomas-vilte/mls-go.svg)](https://pkg.go.dev/github.com/thomas-vilte/mls-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/thomas-vilte/mls-go)](https://goreportcard.com/report/github.com/thomas-vilte/mls-go)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<h1 align="center">mls-go</h1>
 
-Pure Go implementation of Messaging Layer Security (MLS) per [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420).
+<p align="center">
+  Pure Go implementation of Messaging Layer Security (MLS) per <a href="https://www.rfc-editor.org/rfc/rfc9420">RFC 9420</a>.
+</p>
+
+<p align="center">
+  <a href="https://pkg.go.dev/github.com/thomas-vilte/mls-go"><img src="https://pkg.go.dev/badge/github.com/thomas-vilte/mls-go.svg" alt="Go Reference"></a>
+  <a href="https://github.com/thomas-vilte/mls-go/actions/workflows/ci.yml"><img src="https://github.com/thomas-vilte/mls-go/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/thomas-vilte/mls-go"><img src="https://codecov.io/gh/thomas-vilte/mls-go/branch/master/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://www.rfc-editor.org/rfc/rfc9420"><img src="https://img.shields.io/badge/RFC-9420-blue" alt="RFC 9420"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
 ## Performance
 
@@ -15,8 +25,15 @@ UpdatePath path-secret encryption runs in parallel (one goroutine per filtered c
 |-----------------|-----------|------------|------------|-------------|-------------|
 | Commit          | 468 us    | 1.15 ms    | 3.48 ms    | 6.80 ms     | 34.7 ms     |
 | JoinFromWelcome | 693 us    | 1.92 ms    | 8.08 ms    | 15.8 ms     | 77.7 ms     |
+| SendMessage     | 50.4 us   | 49.3 us    | 52.1 us    | 49.8 us     | 51.3 us     |
+| ReceiveMessage  | 87.3 us   | 87.9 us    | 89.8 us    | 89.3 us     | 90.5 us     |
 
-Run with: `go test ./group/... -run=^$ -bench=BenchmarkCommit -benchmem -count=5` and `go test ./group/... -run=^$ -bench=BenchmarkJoinFromWelcome -benchmem -count=5`.
+`Commit` and `JoinFromWelcome` scale with group size because they walk the ratchet
+tree. `SendMessage`/`ReceiveMessage` stay flat: each message only advances the
+sender's own secret tree ratchet, independent of how many other members are in
+the group.
+
+Run with: `go test ./group/... -run=^$ -bench=BenchmarkCommit -benchmem -count=5` and `go test ./group/... -run=^$ -bench=BenchmarkJoinFromWelcome -benchmem -count=5` (swap in `BenchmarkSendMessage` / `BenchmarkReceiveMessage` for the messaging rows).
 
 **Current status:** `v1.3.0` — stable, interop-verified.
 
@@ -28,9 +45,7 @@ Use it if you need group key exchange in Go: encrypted messaging, E2EE group cha
 
 ## Overview
 
-The library is organized around the RFC 9420 spec:
-
-Main packages:
+Main packages, organized around the RFC 9420 spec:
 
 | Package           | Purpose                                                         |
 |-------------------|-----------------------------------------------------------------|
@@ -128,6 +143,10 @@ func main() {
     fmt.Println(string(msg.Plaintext)) // hello
 }
 ```
+
+More runnable examples live under [`examples/`](examples/README.md): the low-level
+`group` package flow, a Delivery Service (HTTP + SSE) with a CLI client, and a WASM
+build.
 
 ## Client API
 
@@ -248,7 +267,7 @@ client, err := mls.NewClient(identity, cs, mls.WithStorage(encStore, encStore))
 > production. The in-memory store is safe for tests and ephemeral processes
 > where state is never written to disk.
 
-## Build And Test
+## Build and Test
 
 ```bash
 go build ./...
