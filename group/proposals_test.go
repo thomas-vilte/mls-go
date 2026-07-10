@@ -121,6 +121,39 @@ func TestNewGroupContextExtensionsProposal(t *testing.T) {
 	}
 }
 
+// TestParseExtensions_RoundTrip verifies ParseExtensions (the exported
+// wrapper Client.ProposeGroupContextExtensions uses to decode caller-supplied
+// TLS-encoded extension bytes) round-trips a real extension correctly.
+//
+// NOTE: `go test ./...` (no -coverpkg) attributes coverage per-package, so a
+// root-package test calling this indirectly does not count towards group's
+// own coverage — this direct test is what actually closes that gap.
+func TestParseExtensions_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ext := Extension{Type: 0xff01, Data: []byte("hello")}
+	data := ext.Marshal()
+
+	got, err := ParseExtensions(data)
+	if err != nil {
+		t.Fatalf("ParseExtensions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 extension, got %d", len(got))
+	}
+	if got[0].Type != ext.Type || !bytes.Equal(got[0].Data, ext.Data) {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", got[0], ext)
+	}
+}
+
+func TestParseExtensions_Invalid(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseExtensions([]byte{0xFF, 0xFF, 0xFF}); err == nil {
+		t.Fatal("expected error for malformed extension bytes")
+	}
+}
+
 func TestNewGroupContextExtensionsProposal_Empty(t *testing.T) {
 	t.Parallel()
 

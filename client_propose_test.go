@@ -2,9 +2,11 @@ package mls
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/group"
 )
 
@@ -119,5 +121,123 @@ func TestProposeReInit_EntersOwnStore(t *testing.T) {
 	types := pendingProposalTypes(t, alice, groupID)
 	if len(types) != 1 || types[0] != group.ProposalTypeReInit {
 		t.Fatalf("pending store = %v, want exactly [ReInit]", types)
+	}
+}
+
+// TestProposeGroupContextExtensions_ParsesRealExtensions exercises the
+// non-empty extensionsBytes path (group.ParseExtensions), unlike the
+// nil-extensions case covered by TestProposeGroupContextExtensions_EntersOwnCommit.
+func TestProposeGroupContextExtensions_ParsesRealExtensions(t *testing.T) {
+	ctx := context.Background()
+	alice, _, groupID := setupTwoClientGroup(t)
+
+	ext := extensions.Extension{Type: extensions.ExtensionTypeApplicationID, Data: []byte("app-id")}
+	extBytes := ext.Marshal()
+
+	if _, err := alice.ProposeGroupContextExtensions(ctx, groupID, extBytes); err != nil {
+		t.Fatalf("ProposeGroupContextExtensions: %v", err)
+	}
+
+	types := pendingProposalTypes(t, alice, groupID)
+	if len(types) != 1 || types[0] != group.ProposalTypeGroupContextExtensions {
+		t.Fatalf("pending store = %v, want exactly [GroupContextExtensions]", types)
+	}
+}
+
+// TestProposeGroupContextExtensions_InvalidBytes verifies malformed
+// extensionsBytes are rejected with a parse error, not silently ignored.
+func TestProposeGroupContextExtensions_InvalidBytes(t *testing.T) {
+	ctx := context.Background()
+	alice, _, groupID := setupTwoClientGroup(t)
+
+	garbage := []byte{0xFF, 0xFF, 0xFF} // claims a type + truncated VL length
+	if _, err := alice.ProposeGroupContextExtensions(ctx, groupID, garbage); err == nil {
+		t.Fatal("expected error for malformed extensions bytes")
+	}
+}
+
+// TestClientNewProposeMethods_ClosedClient verifies the P2 branching/proposal
+// methods added alongside Client.Branch all respect a closed client, matching
+// the convention in TestClientClose for the pre-existing methods.
+func TestClientNewProposeMethods_ClosedClient(t *testing.T) {
+	ctx := context.Background()
+	client, err := NewClient([]byte("closed-propose"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	groupID := []byte("does-not-matter")
+	if _, err := client.ProposeGroupContextExtensions(ctx, groupID, nil); !errors.Is(err, ErrClientClosed) {
+		t.Errorf("ProposeGroupContextExtensions: expected ErrClientClosed, got %v", err)
+	}
+	if _, err := client.ProposeResumptionPSK(ctx, groupID, 0); !errors.Is(err, ErrClientClosed) {
+		t.Errorf("ProposeResumptionPSK: expected ErrClientClosed, got %v", err)
+	}
+	if _, err := client.ProposeReInit(ctx, groupID, groupID); !errors.Is(err, ErrClientClosed) {
+		t.Errorf("ProposeReInit: expected ErrClientClosed, got %v", err)
+	}
+	if _, _, err := client.ResumptionPSK(ctx, groupID); !errors.Is(err, ErrClientClosed) {
+		t.Errorf("ResumptionPSK: expected ErrClientClosed, got %v", err)
+	}
+	if _, _, _, err := client.Branch(ctx, groupID, nil); !errors.Is(err, ErrClientClosed) {
+		t.Errorf("Branch: expected ErrClientClosed, got %v", err)
+	}
+}
+
+// TestClientNewProposeMethods_UnknownGroup verifies each method surfaces
+// ErrGroupNotFound (via loadGroupEntry) for a group the client never joined.
+func TestClientNewProposeMethods_UnknownGroup(t *testing.T) {
+	ctx := context.Background()
+	client, err := NewClient([]byte("unknown-group-propose"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	groupID := []byte("never-joined-this-group")
+	if _, err := client.ProposeGroupContextExtensions(ctx, groupID, nil); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("ProposeGroupContextExtensions: expected ErrGroupNotFound, got %v", err)
+	}
+	if _, err := client.ProposeResumptionPSK(ctx, groupID, 0); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("ProposeResumptionPSK: expected ErrGroupNotFound, got %v", err)
+	}
+	if _, err := client.ProposeReInit(ctx, groupID, groupID); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("ProposeReInit: expected ErrGroupNotFound, got %v", err)
+	}
+	if _, _, err := client.ResumptionPSK(ctx, groupID); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("ResumptionPSK: expected ErrGroupNotFound, got %v", err)
+	}
+	if _, _, _, err := client.Branch(ctx, groupID, nil); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("Branch: expected ErrGroupNotFound, got %v", err)
+	}
+}
+
+// TestClientNewProposeMethods_CanceledContext verifies the same methods
+// respect an already-canceled context before touching any locks.
+func TestClientNewProposeMethods_CanceledContext(t *testing.T) {
+	client, err := NewClient([]byte("canceled-propose"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	groupID := []byte("does-not-matter")
+	if _, err := client.ProposeGroupContextExtensions(ctx, groupID, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("ProposeGroupContextExtensions: expected context.Canceled, got %v", err)
+	}
+	if _, err := client.ProposeResumptionPSK(ctx, groupID, 0); !errors.Is(err, context.Canceled) {
+		t.Errorf("ProposeResumptionPSK: expected context.Canceled, got %v", err)
+	}
+	if _, err := client.ProposeReInit(ctx, groupID, groupID); !errors.Is(err, context.Canceled) {
+		t.Errorf("ProposeReInit: expected context.Canceled, got %v", err)
+	}
+	if _, _, err := client.ResumptionPSK(ctx, groupID); !errors.Is(err, context.Canceled) {
+		t.Errorf("ResumptionPSK: expected context.Canceled, got %v", err)
+	}
+	if _, _, _, err := client.Branch(ctx, groupID, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("Branch: expected context.Canceled, got %v", err)
 	}
 }

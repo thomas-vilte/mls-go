@@ -115,6 +115,82 @@ func TestClientBranch_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestClientBranch_InvalidMemberKeyPackage verifies a malformed member
+// KeyPackage is rejected with a clear unmarshal error, not silently dropped.
+func TestClientBranch_InvalidMemberKeyPackage(t *testing.T) {
+	ctx := context.Background()
+	alice, err := NewClient([]byte("alice-branch-invalid-kp"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	_, _, _, err = alice.Branch(ctx, groupID, [][]byte{[]byte("not a key package")})
+	if err == nil {
+		t.Fatal("expected error for malformed member key package")
+	}
+}
+
+// TestClientBranch_DuplicateMemberFailsCommit verifies that a duplicate
+// member KeyPackage (accepted by group.Branch's per-item validation, since
+// uniqueness is only enforced at commit time) surfaces as a wrapped
+// "committing branch" error rather than silently producing a broken group.
+func TestClientBranch_DuplicateMemberFailsCommit(t *testing.T) {
+	ctx := context.Background()
+	alice, err := NewClient([]byte("alice-branch-dup"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	charlie, err := NewClient([]byte("charlie-branch-dup"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	charlieKPBytes, err := charlie.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes: %v", err)
+	}
+
+	_, _, _, err = alice.Branch(ctx, groupID, [][]byte{charlieKPBytes, charlieKPBytes})
+	if err == nil {
+		t.Fatal("expected error for duplicate member key package")
+	}
+}
+
+// TestClientBranch_RejectedMemberCredential verifies a member rejected by
+// the configured CredentialValidator surfaces a wrapped "member %d" error.
+func TestClientBranch_RejectedMemberCredential(t *testing.T) {
+	ctx := context.Background()
+	alice, err := NewClient([]byte("alice-branch-reject"), ciphersuite.MLS128DHKEMP256,
+		WithCredentialValidator(rejectingValidator{rejectIdentity: "charlie-branch-reject"}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	charlie, err := NewClient([]byte("charlie-branch-reject"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	groupID, err := alice.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	charlieKPBytes, err := charlie.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes: %v", err)
+	}
+
+	_, _, _, err = alice.Branch(ctx, groupID, [][]byte{charlieKPBytes})
+	if err == nil {
+		t.Fatal("expected error for member rejected by credential validator")
+	}
+}
+
 // TestClientBranch_NoOtherMembers verifies branching with only the caller
 // (no Welcome needed) works and doesn't require the joiner-side PSK dance.
 func TestClientBranch_NoOtherMembers(t *testing.T) {

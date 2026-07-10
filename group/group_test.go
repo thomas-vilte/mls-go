@@ -1073,3 +1073,89 @@ func TestBranch_NoOtherMembers(t *testing.T) {
 		t.Fatalf("expected 1 member, got %d", branchGroup.MemberCount())
 	}
 }
+
+func setupSoloGroupForBranch(t *testing.T) *Group {
+	t.Helper()
+	cred, _, err := credentials.GenerateCredentialWithKey([]byte("A"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kp, kpPriv, err := keypackages.Generate(cred, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	groupID, _ := NewGroupIDRandom()
+	g, err := NewGroup(groupID, ciphersuite.MLS128DHKEMP256, kp, kpPriv)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+	return g
+}
+
+func TestBranch_OwnKeyPackageNilCredential(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	kpBranch.LeafNode.Credential = nil
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, nil)
+	if err == nil {
+		t.Fatal("expected error for own key package with nil credential")
+	}
+}
+
+func TestBranch_OtherMemberNilKeyPackage(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, []*keypackages.KeyPackage{nil})
+	if err == nil {
+		t.Fatal("expected error for nil other member key package")
+	}
+}
+
+func TestBranch_OtherMemberNilCredential(t *testing.T) {
+	t.Parallel()
+	g := setupSoloGroupForBranch(t)
+
+	credBranch, _, err := credentials.GenerateCredentialWithKey([]byte("A-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpBranch, kpPrivBranch, err := keypackages.Generate(credBranch, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	credOther, _, err := credentials.GenerateCredentialWithKey([]byte("Other-Branch"))
+	if err != nil {
+		t.Fatalf("GenerateCredentialWithKey: %v", err)
+	}
+	kpOther, _, err := keypackages.Generate(credOther, keypackages.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	kpOther.LeafNode.Credential = nil
+
+	_, err = Branch(g, kpBranch, kpPrivBranch, []*keypackages.KeyPackage{kpOther})
+	if err == nil {
+		t.Fatal("expected error for other member with nil credential")
+	}
+}
