@@ -465,6 +465,10 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading cipher_suite: %w", err)
 	}
+	// RFC 9420 §10: a KeyPackage names a cipher suite that the client supports.
+	if !CipherSuite(cipherSuite).IsSupported() {
+		return nil, fmt.Errorf("%w: 0x%04x", ciphersuite.ErrUnsupportedSuite, cipherSuite)
+	}
 
 	initKey, err := buf.ReadVLBytes()
 	if err != nil {
@@ -535,6 +539,10 @@ func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
 	cipherSuite, err := r.ReadUint16()
 	if err != nil {
 		return nil, fmt.Errorf("reading cipher_suite: %w", err)
+	}
+	// RFC 9420 §10: a KeyPackage names a cipher suite that the client supports.
+	if !CipherSuite(cipherSuite).IsSupported() {
+		return nil, fmt.Errorf("%w: 0x%04x", ciphersuite.ErrUnsupportedSuite, cipherSuite)
 	}
 	initKey, err := r.ReadVLBytes()
 	if err != nil {

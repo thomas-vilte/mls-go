@@ -386,6 +386,59 @@ func TestClientConcurrentGroupReadsAndWrites(t *testing.T) {
 	}
 }
 
+// TestClientRejectsUnsupportedKeyPackage checks that client operations reject
+// KeyPackages with unsupported cipher suites without panicking.
+func TestClientRejectsUnsupportedKeyPackage(t *testing.T) {
+	ctx := t.Context()
+	c, err := NewClient([]byte("alice"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	groupID, err := c.CreateGroup(ctx)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	// The KeyPackage must come from another client: its signature key is not yet in the tree.
+	other, err := NewClient([]byte("bob"), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("NewClient(other): %v", err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	valid, err := other.FreshKeyPackageBytes(ctx)
+	if err != nil {
+		t.Fatalf("FreshKeyPackageBytes: %v", err)
+	}
+	bad := bytes.Clone(valid)
+	bad[2], bad[3] = 0x00, 0x80 // protocol_version(2) || cipher_suite(2)
+
+	cases := []struct {
+		name string
+		run  func() error
+	}{
+		{"InviteMember", func() error { _, _, err := c.InviteMember(ctx, groupID, bad); return err }},
+		{"ProposeAddMember", func() error { _, err := c.ProposeAddMember(ctx, groupID, bad); return err }},
+		{"Branch", func() error { _, _, _, err := c.Branch(ctx, groupID, [][]byte{bad}); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s panicked: %v", tc.name, r)
+				}
+			}()
+			if err := tc.run(); err == nil {
+				t.Errorf("%s accepted a KeyPackage with unsupported cipher suite 0x0080", tc.name)
+			}
+		})
+	}
+
+	// Control: the valid KeyPackage must still be accepted by InviteMember.
+	if _, _, err := c.InviteMember(ctx, groupID, valid); err != nil {
+		t.Errorf("control InviteMember(valid KP): %v", err)
+	}
+}
+
 func TestClientCloseConcurrentIdentityRead(t *testing.T) {
 	ctx := t.Context()
 	for range 20 {

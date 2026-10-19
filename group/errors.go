@@ -3,6 +3,8 @@ package group
 import (
 	"errors"
 	"fmt"
+
+	"github.com/thomas-vilte/mls-go/ciphersuite"
 )
 
 // Typed errors for semantic error handling
@@ -154,6 +156,13 @@ var (
 	ErrWelcomeInvalidGroupSecrets = errors.New("group: invalid group secrets")
 	// ErrWelcomeJoinerSecretMissing is returned when the joiner secret is nil.
 	ErrWelcomeJoinerSecretMissing = errors.New("group: joiner secret is nil")
+	// ErrUnsupportedCipherSuite is returned when a Welcome or GroupInfo names a cipher suite
+	// that is not implemented (RFC 9420 §5.1). It is the ciphersuite package sentinel, so
+	// errors.Is matches it for every parser that rejects a suite.
+	ErrUnsupportedCipherSuite = ciphersuite.ErrUnsupportedSuite
+	// ErrWelcomeCipherSuiteMismatch is returned when the cipher suite of a Welcome differs from the
+	// one of the KeyPackage used to join, or from the one of the GroupInfo it carries (RFC 9420 §12.4.3.1).
+	ErrWelcomeCipherSuiteMismatch = errors.New("group: welcome cipher suite does not match key package or group info")
 	// ErrGroupInfoUnmarshal is returned when group info cannot be unmarshaled.
 	ErrGroupInfoUnmarshal = errors.New("group: cannot unmarshal group info")
 	// ErrRatchetTreeUnmarshal is returned when the ratchet tree cannot be unmarshaled.

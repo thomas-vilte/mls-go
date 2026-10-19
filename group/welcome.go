@@ -225,6 +225,10 @@ func UnmarshalGroupInfo(data []byte) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
+	// RFC 9420 §5.1: a cipher suite that is not implemented cannot be processed.
+	if !ciphersuite.CipherSuite(cipherSuite).IsSupported() {
+		return nil, fmt.Errorf("%w: 0x%04x", ErrUnsupportedCipherSuite, cipherSuite)
+	}
 	groupID, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
@@ -329,6 +333,11 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	// RFC 9420 §12.4.3.1: the Welcome cipher_suite selects the hash used for new_member,
+	// so an unimplemented suite cannot be processed.
+	if !ciphersuite.CipherSuite(cipherSuite).IsSupported() {
+		return nil, fmt.Errorf("%w: 0x%04x", ErrUnsupportedCipherSuite, cipherSuite)
+	}
 
 	secretsData, err := r.ReadVLBytes()
 	if err != nil {
@@ -375,14 +384,19 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 }
 
 // keyPackageRef calculates the reference of a KeyPackage (hash).
-func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) []byte {
+// It returns an error if cs has no hash function, i.e. the suite is not implemented.
+func keyPackageRef(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) ([]byte, error) {
 	if kp == nil {
-		return nil
+		return nil, nil
+	}
+	hashFn := cs.HashFunction()
+	if hashFn == nil {
+		return nil, fmt.Errorf("%w: 0x%04x", ErrUnsupportedCipherSuite, uint16(cs))
 	}
 	if len(kp.Raw) > 0 {
-		return ciphersuite.MakeKeyPackageRef(kp.Raw, cs.HashFunction()).AsSlice()
+		return ciphersuite.MakeKeyPackageRef(kp.Raw, hashFn).AsSlice(), nil
 	}
-	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), cs.HashFunction()).AsSlice()
+	return ciphersuite.MakeKeyPackageRef(kp.Marshal(), hashFn).AsSlice(), nil
 }
 
 // createWelcomeConfig stores CreateWelcomeWithOpts settings.
@@ -569,7 +583,10 @@ func (g *Group) createWelcome(
 
 	for _, kp := range newMemberKeyPackages {
 		// Compute key_package_ref (hash of the key package)
-		kpRef := keyPackageRef(kp, g.cipherSuite)
+		kpRef, err := keyPackageRef(kp, g.cipherSuite)
+		if err != nil {
+			return nil, fmt.Errorf("computing key_package_ref: %w", err)
+		}
 
 		// Compute per-joiner path_secret from the staged commit if available.
 		// RFC 9420 §12.4.3.1: the path_secret for a joiner is the one at the
@@ -657,8 +674,25 @@ func JoinFromWelcomeWithContext(
 	default:
 	}
 
+	// RFC 9420 §12.4.3.1: the Welcome cipher_suite selects the hash for key_package_ref and
+	// the primitives used below. A Welcome can be built by hand, so this is checked here as
+	// well as in UnmarshalWelcome.
+	if !welcome.CipherSuite.IsSupported() {
+		return nil, fmt.Errorf("%w: 0x%04x", ErrUnsupportedCipherSuite, uint16(welcome.CipherSuite))
+	}
+
+	// RFC 9420 §12.4.3.1: the Welcome cipher_suite must match the one of the KeyPackage used
+	// to join. It is checked before key_package_ref and before any HPKE operation.
+	if myKeyPackage != nil && myKeyPackage.CipherSuite != welcome.CipherSuite {
+		return nil, fmt.Errorf("%w: welcome 0x%04x, key package 0x%04x",
+			ErrWelcomeCipherSuiteMismatch, uint16(welcome.CipherSuite), uint16(myKeyPackage.CipherSuite))
+	}
+
 	// Compute my key_package_ref
-	myRef := keyPackageRef(myKeyPackage, welcome.CipherSuite)
+	myRef, err := keyPackageRef(myKeyPackage, welcome.CipherSuite)
+	if err != nil {
+		return nil, fmt.Errorf("computing key_package_ref: %w", err)
+	}
 
 	// Find my encrypted GroupSecrets
 	var myEncryptedSecrets *EncryptedGroupSecrets
@@ -785,7 +819,14 @@ func JoinFromWelcomeWithContext(
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling group info: %w", ErrGroupInfoUnmarshal)
 	}
-	welcome.GroupInfo = groupInfo
+
+	// RFC 9420 §12.4.3.1: the cipher_suite in the GroupInfo must match the one of the KeyPackage,
+	// which the check above already ties to the Welcome. It runs before the tree and signature
+	// checks, so a mismatch is reported as such instead of as a signature or confirmation_tag error.
+	if groupInfo.GroupContext.CipherSuite != welcome.CipherSuite {
+		return nil, fmt.Errorf("%w: welcome 0x%04x, group info 0x%04x",
+			ErrWelcomeCipherSuiteMismatch, uint16(welcome.CipherSuite), uint16(groupInfo.GroupContext.CipherSuite))
+	}
 
 	// Reconstruct ratchet tree: first look for ratchet_tree extension,
 	// otherwise use the tree in memory (for tests), otherwise create empty tree.
@@ -1020,6 +1061,9 @@ func JoinFromWelcomeWithContext(
 		return nil, fmt.Errorf("initializing secret tree: %w", err)
 	}
 
+	// Record the GroupInfo on the caller's Welcome only once the join has succeeded.
+	// A failed join must leave the Welcome unchanged.
+	welcome.GroupInfo = groupInfo
 	return group, nil
 }
 
