@@ -2254,12 +2254,6 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 		}
 
 		newGCBytes := g.groupContext.Marshal()
-		// Snapshot values before key schedule zeroes them (for debugging)
-		dbgInitSecret := append([]byte(nil), initSecretForNewEpoch.AsSlice()...)
-		var dbgCommitSecret []byte
-		if commitSecret != nil {
-			dbgCommitSecret = append([]byte(nil), commitSecret.AsSlice()...)
-		}
 		// Derive epoch secrets for the new epoch
 		newKS := schedule.NewKeySchedule(g.cipherSuite, initSecretForNewEpoch)
 		newKS.SetCommitSecret(commitSecret)
@@ -2285,13 +2279,10 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			confirmedTranscriptHash,
 		)
 		if !ciphersuite.EqualCT(expectedTag, stagedCommit.authenticatedContent.Auth.ConfirmationTag) {
-			return fmt.Errorf("confirmation tag mismatch [leaf=%d interimHash=%x confirmedHash=%x treeHash=%x initSecret=%x commitSecret=%x]",
+			return fmt.Errorf(
+				"%w (leaf=%d)",
+				ErrConfirmationTagMismatch,
 				g.ownLeafIndex,
-				g.interimTranscriptHash,
-				confirmedTranscriptHash,
-				treeHash,
-				dbgInitSecret,
-				dbgCommitSecret,
 			)
 		}
 
