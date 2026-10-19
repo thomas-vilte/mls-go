@@ -409,7 +409,8 @@ func testPathSecretInWelcome(t *testing.T, cs uint32) {
 	if daveKP == nil {
 		t.Fatal("CreateKeyPackage(dave) returned nil")
 	}
-	if _, err := server.AddProposal(ctx, &proto.AddProposalRequest{StateId: aliceState.StateId, KeyPackage: daveKP.KeyPackage}); err != nil {
+	daveAdd, err := server.AddProposal(ctx, &proto.AddProposalRequest{StateId: aliceState.StateId, KeyPackage: daveKP.KeyPackage})
+	if err != nil {
 		t.Fatalf("AddProposal(alice): %v", err)
 	}
 	commit2, err := server.Commit(ctx, &proto.CommitRequest{StateId: aliceState.StateId})
@@ -420,15 +421,17 @@ func testPathSecretInWelcome(t *testing.T, cs uint32) {
 		t.Fatal("Commit2 returned nil")
 	}
 
-	// Bob and Charlie handle commit2
-	bobHandle2, err := server.HandleCommit(ctx, &proto.HandleCommitRequest{StateId: bobJoin.StateId, Commit: commit2.Commit})
+	// Bob and Charlie handle commit2. commit2 references Dave's Add by reference
+	// (RFC 9420 §12.4), so each receiver must have observed that proposal. The
+	// proposal is delivered alongside the commit, as the Delivery Service would.
+	bobHandle2, err := server.HandleCommit(ctx, &proto.HandleCommitRequest{StateId: bobJoin.StateId, Proposal: [][]byte{daveAdd.Proposal}, Commit: commit2.Commit})
 	if err != nil {
 		t.Fatalf("HandleCommit(bob, commit2): %v", err)
 	}
 	if bobHandle2 == nil {
 		t.Fatal("HandleCommit(bob, commit2) returned nil")
 	}
-	charlieHandle2, err := server.HandleCommit(ctx, &proto.HandleCommitRequest{StateId: charlieJoin.StateId, Commit: commit2.Commit})
+	charlieHandle2, err := server.HandleCommit(ctx, &proto.HandleCommitRequest{StateId: charlieJoin.StateId, Proposal: [][]byte{daveAdd.Proposal}, Commit: commit2.Commit})
 	if err != nil {
 		t.Fatalf("HandleCommit(charlie, commit2): %v", err)
 	}

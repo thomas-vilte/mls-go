@@ -26,16 +26,11 @@ import (
 
 func loadGroupForTest(t *testing.T, c *Client, groupIDBytes []byte) *group.Group {
 	t.Helper()
-	ctx := context.Background()
-	c.mu.Lock()
-	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupIDBytes))
-	c.mu.Unlock()
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	g, err := c.loadGroupEntry(ctx, groupIDBytes, entry)
+	entry, g, err := c.lockGroup(t.Context(), groupIDBytes)
 	if err != nil {
 		t.Fatalf("loadGroupForTest: %v", err)
 	}
+	defer entry.mu.Unlock()
 	return g
 }
 

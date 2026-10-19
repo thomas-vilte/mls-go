@@ -41,16 +41,11 @@ func setupTwoClientGroup(t *testing.T) (alice, bob *Client, groupID []byte) {
 // local pending store for the group — what CommitPendingProposals would commit.
 func pendingProposalTypes(t *testing.T, c *Client, groupID []byte) []group.ProposalType {
 	t.Helper()
-	ctx := context.Background()
-	c.mu.Lock()
-	entry := c.getOrCreateEntryLocked(groupCacheKeyBytes(groupID))
-	c.mu.Unlock()
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	g, err := c.loadGroupEntry(ctx, groupID, entry)
+	entry, g, err := c.lockGroup(t.Context(), groupID)
 	if err != nil {
 		t.Fatalf("loadGroupEntry: %v", err)
 	}
+	defer entry.mu.Unlock()
 	var types []group.ProposalType
 	for _, sp := range g.StoredProposals() {
 		types = append(types, sp.Proposal.Type)
