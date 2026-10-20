@@ -98,6 +98,11 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading cipher_suite: %w", err)
 	}
+	// RFC 9420 §12.4.3.1: the Welcome cipher_suite selects the hash and the HPKE primitives of
+	// the join, so a suite that is not implemented cannot be processed.
+	if !ciphersuite.CipherSuite(cipherSuite).IsSupported() {
+		return nil, fmt.Errorf("reading cipher_suite: %w: 0x%04x", ciphersuite.ErrUnsupportedSuite, cipherSuite)
+	}
 
 	secretsBytes, err := buf.ReadVLBytes()
 	if err != nil {
@@ -251,6 +256,11 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	groupContext, err := UnmarshalGroupContext(buf.BytesAfterPosition())
 	if err != nil {
 		return nil, fmt.Errorf("parsing GroupContext: %w", err)
+	}
+	// RFC 9420 §12.4.3.1 compares the GroupInfo cipher_suite with the KeyPackage's, so a value
+	// that is not implemented cannot be processed.
+	if !groupContext.CipherSuite.IsSupported() {
+		return nil, fmt.Errorf("parsing GroupContext: %w: 0x%04x", ciphersuite.ErrUnsupportedSuite, uint16(groupContext.CipherSuite))
 	}
 	buf.Skip(len(groupContext.Marshal()))
 
