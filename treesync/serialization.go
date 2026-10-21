@@ -3,7 +3,7 @@ package treesync
 import (
 	"crypto/ecdh"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/internal/tls"
@@ -48,7 +48,7 @@ func (t *RatchetTree) MarshalTree() []byte {
 			// RFC §7.1: unmerged_leaves MUST be sorted in increasing order.
 			sortedUnmerged := make([]LeafIndex, len(node.UnmergedLeaves))
 			copy(sortedUnmerged, node.UnmergedLeaves)
-			sort.Slice(sortedUnmerged, func(i, j int) bool { return sortedUnmerged[i] < sortedUnmerged[j] })
+			slices.Sort(sortedUnmerged)
 			unmergedBuf := tls.NewWriter()
 			for _, li := range sortedUnmerged {
 				unmergedBuf.WriteUint32(uint32(li))
@@ -119,7 +119,7 @@ func (t *RatchetTree) MarshalTreeRFC() []byte {
 			nodesBuf.WriteVLBytes(node.ParentHash)
 			sortedUnmerged := make([]LeafIndex, len(node.UnmergedLeaves))
 			copy(sortedUnmerged, node.UnmergedLeaves)
-			sort.Slice(sortedUnmerged, func(i, j int) bool { return sortedUnmerged[i] < sortedUnmerged[j] })
+			slices.Sort(sortedUnmerged)
 			unmergedBuf := tls.NewWriter()
 			for _, li := range sortedUnmerged {
 				unmergedBuf.WriteUint32(uint32(li))
@@ -144,10 +144,18 @@ func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error
 		return nil, fmt.Errorf("num_leaves must be > 0")
 	}
 
-	expectedNodes := int(numLeaves*2 - 1)
+	// Every node occupies at least one byte on the wire (nodeTypeEmpty is a single
+	// byte), so the node count implied by num_leaves cannot exceed the bytes that
+	// remain. Check this before reserving memory: num_leaves = 1<<30 implies 2^31-1
+	// nodes, which a 4-byte input could otherwise force into a ~144 GiB allocation.
+	nodeCount := uint64(numLeaves)*2 - 1
+	if nodeCount > uint64(r.Remaining()) {
+		return nil, fmt.Errorf("num_leaves %d implies %d nodes but only %d bytes remain", numLeaves, nodeCount, r.Remaining())
+	}
+	expectedNodes := int(nodeCount)
 	nodes := make([]Node, expectedNodes)
 
-	for i := 0; i < expectedNodes; i++ {
+	for i := range expectedNodes {
 		nodeType, err := r.ReadUint8()
 		if err != nil {
 			return nil, fmt.Errorf("reading node type at index %d: %w", i, err)
@@ -237,14 +245,22 @@ func UnmarshalTreeFromExtension(data []byte, cs ciphersuite.CipherSuite) (*Ratch
 
 	nodeReader := tls.NewReader(nodesData)
 	nodes := make([]Node, 0)
+	// Blank nodes are only counted in pendingBlanks. They are stored when a present
+	// node follows them. A run of blank nodes at the end of the vector is always
+	// rejected below, so it is never materialized: 1 MiB of zero bytes used to
+	// allocate about 392 MB before the rejection.
+	pendingBlanks := 0
 	for nodeReader.Remaining() > 0 {
 		present, err := nodeReader.ReadUint8()
 		if err != nil {
 			return nil, fmt.Errorf("reading node presence: %w", err)
 		}
 		if present == 0 {
-			nodes = append(nodes, Node{State: NodeStateEmpty})
+			pendingBlanks++
 			continue
+		}
+		for ; pendingBlanks > 0; pendingBlanks-- {
+			nodes = append(nodes, Node{State: NodeStateEmpty})
 		}
 
 		nodeType, err := nodeReader.ReadUint8()
@@ -304,12 +320,13 @@ func UnmarshalTreeFromExtension(data []byte, cs ciphersuite.CipherSuite) (*Ratch
 		}
 	}
 
-	if len(nodes) == 0 {
+	if len(nodes) == 0 && pendingBlanks == 0 {
 		return UnmarshalTree(data, cs)
 	}
 	// RFC 9420 §12.4.3.3 requires the serialized ratchet_tree to end at the
-	// rightmost non-blank node, with no trailing blank entries.
-	if nodes[len(nodes)-1].State == NodeStateEmpty || nodes[len(nodes)-1].State == NodeStateBlank {
+	// rightmost non-blank node, with no trailing blank entries. Blank nodes still
+	// pending here are exactly the trailing ones.
+	if pendingBlanks > 0 {
 		return nil, fmt.Errorf("ratchet_tree extension: last node must be non-blank")
 	}
 

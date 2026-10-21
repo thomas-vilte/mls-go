@@ -39,7 +39,8 @@ func (l *LeafNodeData) MarshalTBS() []byte {
 	buf.WriteVLBytes(l.marshalSignatureKey())
 
 	// Credential credential (inline struct, no outer VL wrapper)
-	// RFC 9420 §5.3: credential_type (uint16) + body. Type 0 is a nil placeholder.
+	// RFC 9420 §5.3: credential_type (uint16) + body. Type 0 (RESERVED, §17.5) is the nil
+	// placeholder; the parsers reject it, so a leaf without a credential is not decodable.
 	if l.Credential != nil {
 		buf.WriteRaw(l.Credential.Marshal())
 	} else {

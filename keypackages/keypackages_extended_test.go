@@ -268,3 +268,24 @@ func TestLeafNode_Validate_NilCredential(t *testing.T) {
 		t.Fatal("expected error for nil credential")
 	}
 }
+
+func TestLeafNode_NilCredentialFailsClosed(t *testing.T) {
+	ln := generateKP(t).LeafNode
+	ln.Credential = nil
+
+	// A nil credential is encoded as the reserved type 0x0000, which the parser rejects.
+	if _, err := UnmarshalLeafNode(ln.Marshal()); err == nil {
+		t.Fatal("UnmarshalLeafNode accepted a leaf node encoded without a credential")
+	}
+	if len(ln.marshalTBS()) == 0 {
+		t.Fatal("marshalTBS() returned empty for a leaf node without a credential")
+	}
+}
+
+func TestKeyPackage_Verify_NilCredential(t *testing.T) {
+	kp := generateKP(t)
+	kp.LeafNode.Credential = nil
+	if err := kp.Verify(MLS128DHKEMP256); err == nil {
+		t.Fatal("Verify() accepted a key package without a credential")
+	}
+}

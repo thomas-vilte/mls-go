@@ -400,3 +400,10 @@ func TestMarshalSender_Invalid(t *testing.T) {
 		t.Error("UnmarshalSender should fail with invalid sender type")
 	}
 }
+
+func TestValidateSenderContentTypeUnknownSender(t *testing.T) {
+	err := framing.ValidateSenderContentType(framing.SenderType(0xFF), framing.ContentTypeProposal)
+	if !errors.Is(err, framing.ErrInvalidSenderType) {
+		t.Fatalf("ValidateSenderContentType(unknown sender) = %v, want ErrInvalidSenderType", err)
+	}
+}
