@@ -103,15 +103,20 @@ func (fc *FramedContent) Marshal() []byte {
 	return w.Bytes()
 }
 
-// validateSenderContentType enforces RFC §6.1 sender/content-type compatibility.
+// ValidateSenderContentType enforces RFC §6.1 sender/content-type compatibility.
 //
 // Restrictions:
 //   - external → proposal only
 //   - new_member_commit → commit only
 //   - new_member_proposal → proposal only
 //   - member → unrestricted
-func validateSenderContentType(st SenderType, ct ContentType) error {
+//
+// Reserved and unknown sender types are rejected with ErrInvalidSenderType, so no
+// sender type can skip the checks in the receive path.
+func ValidateSenderContentType(st SenderType, ct ContentType) error {
 	switch st {
+	case SenderTypeMember:
+		// member senders may send any content type.
 	case SenderTypeExternal:
 		if ct != ContentTypeProposal {
 			return fmt.Errorf("%w: external sender must send proposals, got content_type %d", ErrInvalidContentType, ct)
@@ -124,6 +129,8 @@ func validateSenderContentType(st SenderType, ct ContentType) error {
 		if ct != ContentTypeProposal {
 			return fmt.Errorf("%w: new_member_proposal sender must send proposals, got content_type %d", ErrInvalidContentType, ct)
 		}
+	default:
+		return fmt.Errorf("%w: %d", ErrInvalidSenderType, st)
 	}
 	return nil
 }

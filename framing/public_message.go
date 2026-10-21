@@ -41,7 +41,7 @@ func NewPublicMessage(
 	cs ciphersuite.CipherSuite,
 ) (*PublicMessage, error) {
 	// RFC §6.1: sender/content-type compatibility
-	if err := validateSenderContentType(content.Sender.Type, content.ContentType()); err != nil {
+	if err := ValidateSenderContentType(content.Sender.Type, content.ContentType()); err != nil {
 		return nil, err
 	}
 	// RFC §6.1: GroupContext required for member and new_member_commit senders

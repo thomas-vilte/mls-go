@@ -547,18 +547,18 @@ func TestX509CredentialWireFormat(t *testing.T) {
 // UnmarshalCredentialFromReader edge cases
 // ============================================================================
 
-func TestUnmarshalCredentialFromReader_Nil(t *testing.T) {
-	// type=0 (nil placeholder)
+func TestUnmarshalCredentialFromReaderReservedType0(t *testing.T) {
+	// type=0 is reserved by RFC 9420 §17.5 and must be rejected.
 	w := tls.NewWriter()
 	w.WriteUint16(0x0000)
 	w.WriteVLBytes(nil)
 	r := tls.NewReader(w.Bytes())
 	cred, err := credentials.UnmarshalCredentialFromReader(r)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatalf("expected error for reserved credential_type 0x0000, got credential %v", cred)
 	}
 	if cred != nil {
-		t.Errorf("expected nil credential for type=0, got %v", cred)
+		t.Errorf("expected nil credential alongside error, got %v", cred)
 	}
 }
 

@@ -363,7 +363,15 @@ func (ln *LeafNode) marshalTBS() []byte {
 		buf.WriteVLBytes(marshalP256PublicKey(ln.SignatureKey))
 	}
 
-	buf.WriteRaw(ln.Credential.Marshal())
+	// RFC 9420 §5.3: a nil credential is encoded as the reserved type 0x0000 with an empty
+	// body, as treesync does. Both parsers reject that type, so the bytes fail closed on the
+	// receiving side instead of dereferencing nil.
+	if ln.Credential != nil {
+		buf.WriteRaw(ln.Credential.Marshal())
+	} else {
+		buf.WriteUint16(0)    // credential_type = 0 (reserved, nil placeholder)
+		buf.WriteVLBytes(nil) // empty body
+	}
 
 	if ln.Capabilities != nil {
 		ln.Capabilities.Marshal(buf)
@@ -863,6 +871,9 @@ func (kp *KeyPackage) MarshalTBS() []byte {
 func (kp *KeyPackage) Verify(cs ciphersuite.CipherSuite) error {
 	if kp.LeafNode == nil || (kp.LeafNode.SignatureKey == nil && len(kp.LeafNode.SignatureKeyBytes) == 0) {
 		return errors.New("keypackage: missing leaf node or signature key")
+	}
+	if kp.LeafNode.Credential == nil {
+		return errors.New("keypackage: missing credential")
 	}
 
 	// Serialize TBS

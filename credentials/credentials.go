@@ -333,6 +333,10 @@ func UnmarshalCredential(data []byte) (*Credential, error) {
 			Certificates:   certificates,
 		}, nil
 
+	case 0:
+		// RFC 9420 §17.5: credential_type 0x0000 is RESERVED and never a valid credential.
+		return nil, errors.New("reserved credential_type 0x0000")
+
 	default:
 		// GREASE or unknown: skip data
 		_, err := buf.ReadVLBytes()
@@ -356,12 +360,10 @@ func UnmarshalCredentialFromReader(r *tls.Reader) (*Credential, error) {
 	ct := CredentialType(credType)
 
 	switch ct {
-	case 0: // nil placeholder (type=0 reserved): discard empty body, return nil
-		_, err := r.ReadVLBytes()
-		if err != nil {
-			return nil, fmt.Errorf("reading nil credential body: %w", err)
-		}
-		return nil, nil
+	case 0:
+		// RFC 9420 §17.5: credential_type 0x0000 is RESERVED and never a valid credential.
+		// It is not returned as a nil *Credential: callers dereference the result.
+		return nil, errors.New("reserved credential_type 0x0000")
 
 	case BasicCredential:
 		identity, err := r.ReadVLBytes()

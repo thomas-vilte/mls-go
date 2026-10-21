@@ -451,19 +451,31 @@ func (t *RatchetTree) addToUnmergedLeaves(leafIdx LeafIndex) {
 	}
 }
 
-// GetLeaf returns a leaf node.
+// GetLeaf returns the leaf node at idx, or nil if idx is not a leaf of the tree.
+//
+// The bound is checked against NumLeaves before the node index is computed.
+// LeafIndexToNodeIndex works in uint32, so for idx >= 2^31 the node index wraps
+// onto an existing node (0x80000000 maps to node 0). Such an index must not alias
+// a real leaf.
 func (t *RatchetTree) GetLeaf(idx LeafIndex) *Node {
-	nodeIdx := LeafIndexToNodeIndex(idx)
-	if int(nodeIdx) >= len(t.Nodes) {
+	if uint64(idx) >= uint64(t.NumLeaves) {
+		return nil
+	}
+	nodeIdx := uint64(idx) * 2
+	if nodeIdx >= uint64(len(t.Nodes)) {
 		return nil
 	}
 	return &t.Nodes[nodeIdx]
 }
 
-// SetLeaf updates a leaf.
+// SetLeaf updates the leaf at idx. It fails for an index outside [0, NumLeaves),
+// including indices that would wrap onto another node (see GetLeaf).
 func (t *RatchetTree) SetLeaf(idx LeafIndex, leaf LeafNodeData) error {
-	nodeIdx := LeafIndexToNodeIndex(idx)
-	if int(nodeIdx) >= len(t.Nodes) {
+	if uint64(idx) >= uint64(t.NumLeaves) {
+		return fmt.Errorf("leaf out of range")
+	}
+	nodeIdx := uint64(idx) * 2
+	if nodeIdx >= uint64(len(t.Nodes)) {
 		return fmt.Errorf("leaf out of range")
 	}
 	t.Nodes[nodeIdx] = Node{

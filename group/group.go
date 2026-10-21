@@ -1516,6 +1516,13 @@ func (g *Group) ProcessReceivedCommit(
 		return ErrNotACommit
 	}
 
+	// RFC §6.1: only member and new_member_commit senders may send a commit. Checked
+	// before the signature switch below, so a commit relabelled with any other sender
+	// type is rejected instead of being applied unauthenticated.
+	if err := framing.ValidateSenderContentType(ac.Content.Sender.Type, framing.ContentTypeCommit); err != nil {
+		return err
+	}
+
 	commit, err := UnmarshalCommit(commitBody.Data)
 	if err != nil {
 		return fmt.Errorf("unmarshaling commit: %w", err)
@@ -1524,6 +1531,11 @@ func (g *Group) ProcessReceivedCommit(
 	switch ac.Content.Sender.Type {
 	case framing.SenderTypeMember:
 		// RFC §12.4.2: verify signature using the sender's leaf key from the tree.
+		// A member sender must be a leaf of the current tree. The check comes first, so an
+		// index that wraps onto another node cannot pick up that node's key.
+		if uint64(senderLeafIdx) >= uint64(g.ratchetTree.NumLeaves) {
+			return fmt.Errorf("sender leaf index %d outside tree with %d leaves", senderLeafIdx, g.ratchetTree.NumLeaves)
+		}
 		senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx)
 		if senderLeaf == nil || senderLeaf.LeafData == nil {
 			return fmt.Errorf("missing sender signature key")
@@ -1549,6 +1561,10 @@ func (g *Group) ProcessReceivedCommit(
 		if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
 			return fmt.Errorf("external commit signature verification failed: %w", err)
 		}
+
+	default:
+		// Unreachable after ValidateSenderContentType; no sender type may skip verification.
+		return fmt.Errorf("commit sender type %d not allowed: %w", ac.Content.Sender.Type, framing.ErrInvalidSenderType)
 	}
 
 	isExternalCommit := ac.Content.Sender.Type == framing.SenderTypeNewMemberCommit
@@ -3146,9 +3162,25 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		return fmt.Errorf("public message is nil")
 	}
 
+	// RFC §6.1: reject sender/content-type pairs the spec does not allow before any
+	// signature is checked or content is returned to the caller. ProcessPublicMessage
+	// verifies through this function, so it is covered as well.
+	if pm.Content.Body == nil {
+		return fmt.Errorf("public message has no content body: %w", framing.ErrInvalidContentType)
+	}
+
+	if err := framing.ValidateSenderContentType(pm.Content.Sender.Type, pm.Content.ContentType()); err != nil {
+		return err
+	}
+
 	switch pm.Content.Sender.Type {
 	case framing.SenderTypeMember:
 		senderIdx := LeafNodeIndex(pm.Content.Sender.LeafIndex)
+		// Reject indices outside the tree before GetLeaf: LeafIndexToNodeIndex wraps for
+		// indices >= 2^31, so 0x80000000 would otherwise alias leaf 0.
+		if uint64(senderIdx) >= uint64(g.ratchetTree.NumLeaves) {
+			return fmt.Errorf("sender leaf index %d outside tree with %d leaves", senderIdx, g.ratchetTree.NumLeaves)
+		}
 		leaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(senderIdx))
 		if leaf == nil || leaf.LeafData == nil {
 			return fmt.Errorf("missing sender signature key")
@@ -3262,7 +3294,8 @@ func (g *Group) VerifyPublicMessage(pm *framing.PublicMessage) error {
 		}
 		return nil
 	default:
-		return nil
+		// Unreachable after ValidateSenderContentType; never report an unknown sender as verified.
+		return fmt.Errorf("%w: %d", framing.ErrInvalidSenderType, pm.Content.Sender.Type)
 	}
 }
 
