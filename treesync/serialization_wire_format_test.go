@@ -1,6 +1,8 @@
 package treesync
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
 	"runtime"
 	"testing"
 
@@ -67,5 +69,27 @@ func TestUnmarshalTreeExtensionKeepsBlankPositions(t *testing.T) {
 	}
 	if tree.NumLeaves != 2 {
 		t.Fatalf("NumLeaves = %d, want 2", tree.NumLeaves)
+	}
+}
+
+// TestMarshalTreeRFCSortsUnmergedLeaves checks that unmerged_leaves are written in
+// increasing order, as RFC 9420 §7.8 requires, whatever order they were added in.
+func TestMarshalTreeRFCSortsUnmergedLeaves(t *testing.T) {
+	tree := createTestTreeExt(t, 2)
+	encPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	tree.Nodes[1].State = NodeStatePresent
+	tree.Nodes[1].EncryptionKey = encPriv.PublicKey()
+	tree.Nodes[1].ParentHash = []byte{0x01}
+	tree.Nodes[1].UnmergedLeaves = []LeafIndex{1, 0}
+
+	got, err := UnmarshalTreeFromExtension(tree.MarshalTreeRFC(), ciphersuite.MLS128DHKEMP256)
+	if err != nil {
+		t.Fatalf("UnmarshalTreeFromExtension: %v", err)
+	}
+	if ul := got.Nodes[1].UnmergedLeaves; len(ul) != 2 || ul[0] != 0 || ul[1] != 1 {
+		t.Fatalf("UnmergedLeaves = %v, want [0 1]", ul)
 	}
 }

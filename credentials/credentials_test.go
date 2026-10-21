@@ -588,6 +588,13 @@ func TestBasicCredentialValidate_TooLong(t *testing.T) {
 	}
 }
 
+func TestUnmarshalCredentialReservedType0(t *testing.T) {
+	// credential_type 0x0000 is reserved by RFC 9420 §17.5 and must be rejected.
+	if _, err := credentials.UnmarshalCredential([]byte{0x00, 0x00, 0x00, 0x00}); err == nil {
+		t.Fatal("expected error for reserved credential_type 0x0000")
+	}
+}
+
 // ============================================================================
 // Benchmarks
 // ============================================================================
