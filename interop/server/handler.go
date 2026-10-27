@@ -1046,6 +1046,7 @@ func (s *Server) HandleCommit(_ context.Context, req *proto.HandleCommitRequest)
 			CipherSuite:      g.CipherSuite(),
 			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 			SecretTree:       g.SecretTree(),
+			VerifySignature:  g.VerifySenderSignature,
 			GroupContext:     gc.Marshal(),
 		})
 		if decErr != nil {
@@ -1248,6 +1249,7 @@ func (s *Server) HandleReInitCommit(_ context.Context, req *proto.HandleCommitRe
 			CipherSuite:      g.CipherSuite(),
 			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 			SecretTree:       g.SecretTree(),
+			VerifySignature:  g.VerifySenderSignature,
 			GroupContext:     gc.Marshal(),
 		})
 		if decErr != nil {

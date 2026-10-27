@@ -268,39 +268,30 @@ func (g *Group) ReceiveApplicationMessage(pm *framing.PrivateMessage) (plaintext
 		}
 	}
 
-	ac, decErr := framing.Decrypt(pm, framing.DecryptParams{
-		CipherSuite:      cs,
-		SenderDataSecret: senderDataSecret,
-		SecretTree:       secretTree,
-		GroupContext:     groupContextBytes,
-	})
-	if decErr != nil {
-		return nil, nil, 0, &ErrDecryptionFailed{Reason: "message", Err: decErr}
-	}
-
-	senderLeafIdx = treesync.LeafIndex(ac.Content.Sender.LeafIndex)
 	if ratchetTree == nil {
 		return nil, nil, 0, fmt.Errorf("ratchet tree not available for epoch %d: %w", pm.Epoch, ErrRatchetTreeMissing)
 	}
 
-	if uint32(senderLeafIdx) >= ratchetTree.NumLeaves {
-		return nil, nil, 0, &ErrUnknownMember{LeafIndex: uint32(senderLeafIdx)}
+	// The sender's signature is checked after the content is decrypted and before the generation is
+	// consumed (RFC 9420 §6.1, §9.2). Sender validation errors are returned directly.
+	var senderErr error
+	ac, decErr := framing.Decrypt(pm, framing.DecryptParams{
+		CipherSuite:      cs,
+		SenderDataSecret: senderDataSecret,
+		SecretTree:       secretTree,
+		VerifySignature: func(leafIndex uint32, tbs []byte, signature *ciphersuite.Signature) error {
+			senderErr = verifyLeafSignature(ratchetTree, cs, leafIndex, tbs, signature)
+			return senderErr
+		},
+		GroupContext: groupContextBytes,
+	})
+	if decErr != nil {
+		if senderErr != nil {
+			return nil, nil, 0, senderErr
+		}
+		return nil, nil, 0, &ErrDecryptionFailed{Reason: "message", Err: decErr}
 	}
-
-	senderLeaf := ratchetTree.GetLeaf(senderLeafIdx)
-	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent || senderLeaf.LeafData == nil {
-		return nil, nil, 0, fmt.Errorf("sender %d is not an active member: %w", senderLeafIdx, ErrSenderNotActive)
-	}
-
-	rawKey := senderLeaf.LeafData.SigKeyBytes()
-	if len(rawKey) == 0 {
-		return nil, nil, 0, ErrMissingSenderSignature
-	}
-
-	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
-	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
-		return nil, nil, 0, &ErrInvalidSignature{Context: "private message", Err: err}
-	}
+	senderLeafIdx = treesync.LeafIndex(ac.Content.Sender.LeafIndex)
 
 	data, ok := ac.Content.ApplicationData()
 	if !ok {
