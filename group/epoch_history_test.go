@@ -45,16 +45,14 @@ func newSingleMemberGroup(t *testing.T, identity string) (*Group, *keypackages.K
 	return g, kpPriv
 }
 
-// advanceEpoch commits a self-update on g, advancing it by one epoch.
-// This is the simplest way to trigger cacheOldEpoch via MergeCommit.
+// advanceEpoch commits an empty commit (no proposals) on g, advancing it by one epoch.
+// This is the simplest way to trigger cacheOldEpoch via MergeCommit. An Update proposal
+// is not used here: an Update sent by value in a commit is invalid (RFC 9420 §12.2).
 func advanceEpoch(t *testing.T, g *Group, privKeys *keypackages.KeyPackagePrivateKeys) {
 	t.Helper()
 	sigPriv := ciphersuite.NewSignaturePrivateKey(privKeys.SignatureKey)
 	sigPub := sigPriv.PublicKey()
 
-	if _, err := g.SelfUpdate(sigPriv); err != nil {
-		t.Fatalf("SelfUpdate: %v", err)
-	}
 	staged, err := g.Commit(sigPriv, sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)

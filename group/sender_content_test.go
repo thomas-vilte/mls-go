@@ -20,13 +20,10 @@ func forgeCommitSender(ac *framing.AuthenticatedContent, st framing.SenderType) 
 	return &forged
 }
 
-// newSenderTestCommit has bob commit a self-update, which carries an UpdatePath, and returns
-// the staged commit without merging it on bob's side.
+// newSenderTestCommit has Bob commit with no proposals and an UpdatePath.
+// It returns the staged commit without merging it on Bob's side.
 func newSenderTestCommit(t *testing.T, bobGroup *Group, bob *testUser) *StagedCommit {
 	t.Helper()
-	if _, err := bobGroup.SelfUpdate(bob.sigPriv); err != nil {
-		t.Fatalf("SelfUpdate(bob): %v", err)
-	}
 	sc, err := bobGroup.Commit(bob.sigPriv, bob.sigPub, nil)
 	if err != nil {
 		t.Fatalf("Commit(bob): %v", err)

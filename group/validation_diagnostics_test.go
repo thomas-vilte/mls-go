@@ -119,11 +119,9 @@ func TestMemberSenderLeafIndexBounds(t *testing.T) {
 // TestReceivedCommitSenderLeafIndexBounds rejects sender indices
 // that wrap onto an existing leaf.
 func TestReceivedCommitSenderLeafIndexBounds(t *testing.T) {
-	run := func(senderIdx treesync.LeafIndex) (procErr error, sameAuth bool, bobEpoch uint64, panicVal any) {
+	run := func(senderIdx treesync.LeafIndex) (sameAuth bool, bobEpoch uint64, panicVal any, procErr error) {
 		aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
-		if _, err := aliceGroup.SelfUpdate(alice.sigPriv); err != nil {
-			t.Fatalf("SelfUpdate(alice): %v", err)
-		}
+		// A commit with no proposals carries Alice's UpdatePath.
 		sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
 		if err != nil {
 			t.Fatalf("Commit(alice): %v", err)
@@ -137,10 +135,10 @@ func TestReceivedCommitSenderLeafIndexBounds(t *testing.T) {
 		if procErr == nil && panicVal == nil {
 			sameAuth = bytes.Equal(aliceGroup.EpochAuthenticator(), bobGroup.EpochAuthenticator())
 		}
-		return procErr, sameAuth, bobGroup.epoch.AsUint64(), panicVal
+		return sameAuth, bobGroup.epoch.AsUint64(), panicVal, procErr
 	}
 
-	ctrlErr, ctrlSame, ctrlEpoch, ctrlPanic := run(0)
+	ctrlSame, ctrlEpoch, ctrlPanic, ctrlErr := run(0)
 	if ctrlPanic != nil || ctrlErr != nil {
 		t.Fatalf("control ProcessReceivedCommit(senderLeafIdx=0) panic=%v err=%v", ctrlPanic, ctrlErr)
 	}
@@ -148,7 +146,7 @@ func TestReceivedCommitSenderLeafIndexBounds(t *testing.T) {
 		t.Fatalf("control: epoch(bob)=%d, authenticators equal=%v", ctrlEpoch, ctrlSame)
 	}
 
-	wrapErr, wrapSame, wrapEpoch, wrapPanic := run(treesync.LeafIndex(0x80000000))
+	wrapSame, wrapEpoch, wrapPanic, wrapErr := run(treesync.LeafIndex(0x80000000))
 	if wrapPanic != nil {
 		t.Errorf("ProcessReceivedCommit(senderLeafIdx=0x80000000) panicked: %v", wrapPanic)
 		return

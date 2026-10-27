@@ -1270,7 +1270,9 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 }
 
 // SelfUpdate rotates the local member's leaf encryption key and returns the
-// commit bytes to broadcast (RFC 9420 §12.1.2).
+// commit bytes to broadcast. The rotation travels in the UpdatePath of a commit
+// with no proposals (RFC 9420 §12.4): an Update sent by value is not valid in a
+// commit (RFC 9420 §12.2).
 //
 // A self-update is the primary mechanism for post-compromise security: it
 // replaces the member's HPKE encryption key in the ratchet tree, forcing a
@@ -1282,9 +1284,6 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 		return nil, err
 	}
 	defer entry.mu.Unlock()
-	if _, err := g.SelfUpdate(c.sigKey); err != nil {
-		return nil, fmt.Errorf("creating self-update proposal: %w", err)
-	}
 	commit, err := c.commitCurrentState(ctx, g, entry, "creating self-update commit")
 	if err != nil {
 		return nil, err

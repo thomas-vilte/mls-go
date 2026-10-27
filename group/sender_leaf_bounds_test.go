@@ -61,9 +61,7 @@ func TestReceivedCommitSenderLeafBounds(t *testing.T) {
 	newCommit := func(t *testing.T) (*Group, *Group, *testUser, *StagedCommit) {
 		t.Helper()
 		aliceGroup, bobGroup, alice, _ := makeTwoMemberGroups(t)
-		if _, err := aliceGroup.SelfUpdate(alice.sigPriv); err != nil {
-			t.Fatalf("SelfUpdate(alice): %v", err)
-		}
+		// A commit with no proposals carries Alice's UpdatePath.
 		sc, err := aliceGroup.Commit(alice.sigPriv, alice.sigPub, nil)
 		if err != nil {
 			t.Fatalf("Commit(alice): %v", err)
