@@ -1618,24 +1618,16 @@ func (g *Group) ProcessReceivedCommit(
 		}
 	}
 
-	// RFC §12.4.3.2: an external commit MUST contain exactly one ExternalInit proposal.
+	// RFC §12.2 and §12.4.3.2: validate proposals. For member commits, all proposals are from
+	// internal senders (IsExternal=false), and FilterAndValidateProposals checks them.
+	// An external commit follows the external Commit rules instead: its joiner is not a tree
+	// member yet, so the list is checked against the joiner's credential from the UpdatePath.
+	pf := NewProposalFilter(g.groupContext, LeafNodeIndex(senderLeafIdx), g.members, g.cipherSuite, g.ratchetTree)
 	if isExternalCommit {
-		extInitCount := 0
-		for _, p := range proposals {
-			if p.Type == ProposalTypeExternalInit {
-				extInitCount++
-			}
+		if err := pf.validateExternalCommitProposals(proposals, commit.Path.LeafNode); err != nil {
+			return fmt.Errorf("external commit contains invalid proposals: %w", err)
 		}
-		if extInitCount != 1 {
-			return fmt.Errorf("external commit must contain exactly one ExternalInit proposal, got %d: %w",
-				extInitCount, ErrInvalidProposal)
-		}
-	}
-
-	// RFC §12.4.2: validate proposals. Build FilteredProposals for validation.
-	// For member commits, all proposals are from internal senders (IsExternal=false).
-	// External commit proposals are not filtered here — they are validated inline above.
-	if !isExternalCommit {
+	} else {
 		filteredForValidation := make([]FilteredProposal, len(proposals))
 		for i, p := range proposals {
 			filteredForValidation[i] = FilteredProposal{
@@ -1643,7 +1635,6 @@ func (g *Group) ProcessReceivedCommit(
 				Sender:   proposalSenders[i],
 			}
 		}
-		pf := NewProposalFilter(g.groupContext, LeafNodeIndex(senderLeafIdx), g.members, g.cipherSuite, g.ratchetTree)
 		if _, err := pf.FilterAndValidateProposals(filteredForValidation, nil); err != nil {
 			return fmt.Errorf("commit contains invalid proposals: %w", err)
 		}

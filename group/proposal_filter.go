@@ -1,7 +1,9 @@
 package group
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"crypto/x509"
 	"fmt"
 	"sort"
 
@@ -420,6 +422,111 @@ func (pf *ProposalFilter) checkAddKeyUniqueness(proposals []FilteredProposal) er
 	}
 
 	return nil
+}
+
+// validateExternalCommitProposals validates the proposal list of an external Commit (RFC 9420
+// §12.2 and §12.4.3.2). For an external Commit the list is valid only if it contains:
+//
+//   - exactly one ExternalInit;
+//   - at most one Remove, which removes a prior version of the joiner: the removed leaf must be
+//     present, and its credential must identify the same participant as the joiner's LeafNode;
+//   - zero or more PreSharedKey proposals.
+//
+// No other proposal type is allowed. The general checks of §12.2 (PSK nonce length, duplicate
+// PSK IDs, resumption PSK usage) still apply. Proposals by reference are rejected by the caller
+// before they are resolved.
+func (pf *ProposalFilter) validateExternalCommitProposals(
+	proposals []*Proposal,
+	joiner *treesync.LeafNodeData,
+) error {
+	filtered := make([]FilteredProposal, 0, len(proposals))
+	extInitCount, removeCount := 0, 0
+	for _, p := range proposals {
+		if err := ValidateProposal(p, nil); err != nil {
+			return err
+		}
+		switch p.Type {
+		case ProposalTypeExternalInit:
+			extInitCount++
+		case ProposalTypeRemove:
+			removeCount++
+			// The joiner is not a tree member yet, so its identity is the credential of the
+			// UpdatePath LeafNode.
+			leaf := pf.tree.GetLeaf(treesync.LeafIndex(p.Remove.Removed))
+			if leaf == nil || leaf.State != treesync.NodeStatePresent || leaf.LeafData == nil {
+				return fmt.Errorf("external commit removes blank or missing leaf %d: %w",
+					p.Remove.Removed, ErrInvalidProposal)
+			}
+			if !sameCredentialIdentity(leaf.LeafData.Credential, joiner.Credential) {
+				return fmt.Errorf("external commit removes leaf %d of another participant: %w",
+					p.Remove.Removed, ErrInvalidProposal)
+			}
+			// The identity match above is the RFC 9420 §12.4.3.2 rule: the removed identifiers must be
+			// acceptable to the application. A member that resyncs as itself signs with a new key, so
+			// the key is not compared. A BasicCredential is only a name and is not bound to any key:
+			// with BasicCredential, any joiner that claims the name may remove that member. Applications
+			// that expose GroupInfo and use BasicCredential must restrict external removals with a
+			// credential validator or a proposal policy (see SECURITY.md).
+		case ProposalTypePreSharedKey:
+			if err := pf.validateSingleProposal(FilteredProposal{Proposal: p, Sender: pf.committer}, nil); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("external commit cannot contain proposal type %d: %w", p.Type, ErrInvalidProposal)
+		}
+		filtered = append(filtered, FilteredProposal{Proposal: p, Sender: pf.committer})
+	}
+	if extInitCount != 1 {
+		return fmt.Errorf("external commit must contain exactly one ExternalInit proposal, got %d: %w",
+			extInitCount, ErrInvalidProposal)
+	}
+	if removeCount > 1 {
+		return fmt.Errorf("external commit must contain at most one Remove proposal, got %d: %w",
+			removeCount, ErrInvalidProposal)
+	}
+	if err := pf.validateProposalCombinations(filtered); err != nil {
+		return err
+	}
+	return pf.checkDuplicates(filtered)
+}
+
+// sameCredentialIdentity reports whether two leaf credentials identify the same participant.
+// A BasicCredential is identified by its identity bytes. An X509Credential is identified by the
+// issuer and subject of its end-entity certificate, so a renewed certificate from the same issuer
+// for the same subject is the same participant even though its key differs. RFC 9420 §12.2 asks
+// that the identifiers be acceptable to the application, not that the whole chain be identical.
+// A certificate that does not parse is compared as a whole chain. An empty identity never matches,
+// and neither does any other credential type.
+func sameCredentialIdentity(a, b *credentials.Credential) bool {
+	if a == nil || b == nil || a.Type() != b.Type() {
+		return false
+	}
+	switch a.Type() {
+	case credentials.BasicCredential:
+		return len(a.Identity) > 0 && bytes.Equal(a.Identity, b.Identity)
+	case credentials.X509Credential:
+		if len(a.Certificates) == 0 || len(b.Certificates) == 0 {
+			return false
+		}
+		issuerA, subjectA, okA := x509Identity(a.Certificates[0])
+		issuerB, subjectB, okB := x509Identity(b.Certificates[0])
+		if !okA || !okB {
+			return bytes.Equal(a.Marshal(), b.Marshal())
+		}
+		return bytes.Equal(issuerA, issuerB) && bytes.Equal(subjectA, subjectB)
+	default:
+		return false
+	}
+}
+
+// x509Identity returns the issuer and subject of a DER certificate. ok is false when the certificate
+// does not parse or has an empty subject, because an empty subject does not identify anyone.
+func x509Identity(der []byte) (issuer, subject []byte, ok bool) {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil || len(cert.RawSubject) == 0 {
+		return nil, nil, false
+	}
+	return cert.RawIssuer, cert.RawSubject, true
 }
 
 // sortProposals sorts proposals according to RFC 9420 §12.4.2 application order.

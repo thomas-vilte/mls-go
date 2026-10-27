@@ -23,7 +23,9 @@ import (
 //
 // If removePriorLeaf is non-nil, a Remove proposal for that leaf index is included before
 // the ExternalInit proposal (RFC §12.4.3.2: external commit may contain Remove proposals
-// to remove prior appearance of this member).
+// to remove prior appearance of this member). Receivers accept the Remove only when the leaf's
+// credential identifies the same participant as credential (RFC 9420 §12.2), so removePriorLeaf
+// must point at the joiner's own prior leaf.
 func ExternalCommit(
 	groupInfo *Info,
 	cs ciphersuite.CipherSuite,
