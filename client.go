@@ -688,6 +688,11 @@ func (c *Client) InviteMember(ctx context.Context, groupID, memberKeyPackageByte
 	if err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling member key package: %w", err)
 	}
+	// RFC 9420 §12.1.1, §10.1: refuse an invalid KeyPackage (including an X.509 certificate that
+	// does not match its signature_key) before the policy reviews the invitation.
+	if err := group.ValidateAddKeyPackage(memberKP, g.CipherSuite()); err != nil {
+		return nil, nil, fmt.Errorf("invalid member key package: %w", err)
+	}
 	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, nil, err
 	}
@@ -816,6 +821,10 @@ func (c *Client) ProposeAddMember(ctx context.Context, groupID, memberKPBytes []
 	memberKP, err := keypackages.UnmarshalKeyPackage(memberKPBytes)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling member key package: %w", err)
+	}
+	// RFC 9420 §12.1.1, §10.1: refuse an invalid KeyPackage before the policy reviews the proposal.
+	if err := group.ValidateAddKeyPackage(memberKP, g.CipherSuite()); err != nil {
+		return nil, fmt.Errorf("invalid member key package: %w", err)
 	}
 	if err := c.validateCredential(ctx, memberKP.LeafNode.Credential); err != nil {
 		return nil, err
