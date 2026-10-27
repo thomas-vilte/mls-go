@@ -19,16 +19,13 @@ func TestExternalCommit_RejectsTamperedRatchetTree(t *testing.T) {
 
 	// Force a real UpdatePath (the first Add-only commit in makeTwoMemberGroups
 	// has LeafCount()==1 beforehand, so it omits the path and leaves root
-	// blank). With 2 members present, a self-update commit must include one,
+	// blank). With 2 members present, a commit with no proposals must include one,
 	// populating the root's parent-hash chain — matching what a real,
 	// multi-epoch group looks like when a new member arrives via ExternalCommit.
-	_, err := bobGroup.SelfUpdate(bob.sigPriv)
-	if err != nil {
-		t.Fatalf("SelfUpdate: %v", err)
-	}
+	// bob refreshes his own leaf through that path; an Update sent by value is invalid.
 	sc, err := bobGroup.Commit(bob.sigPriv, bob.sigPub, nil)
 	if err != nil {
-		t.Fatalf("Commit(bob self-update): %v", err)
+		t.Fatalf("Commit(bob path-only): %v", err)
 	}
 	if err := bobGroup.MergeCommit(sc); err != nil {
 		t.Fatalf("MergeCommit(bob): %v", err)

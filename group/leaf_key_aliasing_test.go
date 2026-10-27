@@ -12,9 +12,8 @@ func TestMyLeafEncryptionKey_NotZeroedAfterMergeCommit(t *testing.T) {
 	group, _, kpPrivKeys, _ := setupTwoMemberGroup(t)
 	sigPriv := ciphersuite.NewSignaturePrivateKey(kpPrivKeys.SignatureKey)
 
-	if _, err := group.SelfUpdate(sigPriv); err != nil {
-		t.Fatalf("SelfUpdate: %v", err)
-	}
+	// A commit with no proposals refreshes the sender's leaf through its UpdatePath (RFC 9420
+	// §12.4), which fills pendingLeafKey. An Update sent by value would be rejected.
 	if _, err := group.Commit(sigPriv, sigPriv.PublicKey(), nil); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
