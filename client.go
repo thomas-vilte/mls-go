@@ -941,10 +941,12 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 			c.log(slog.LevelWarn, "processing private commit failed: missing secret tree", "group", groupHex(groupID))
 			return fmt.Errorf("secret tree not available for private commit")
 		}
+		// The sender's signature is checked before the generation is consumed (RFC 9420 §6.1, §9.2).
 		decrypted, err := framing.Decrypt(privMsg, framing.DecryptParams{
 			CipherSuite:      g.CipherSuite(),
 			SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 			SecretTree:       g.SecretTree(),
+			VerifySignature:  g.VerifySenderSignature,
 			GroupContext:     g.GroupContext().Marshal(),
 		})
 		if err != nil {
@@ -2491,7 +2493,7 @@ func (c *Client) reviewableProposalFromPublicMessage(g *group.Group, pm *framing
 	if err != nil {
 		return ReviewableProposal{}, fmt.Errorf("unmarshaling proposal for policy review: %w", err)
 	}
-	senderIdentity := []byte(nil)
+	var senderIdentity []byte
 	if pm.Content.Sender.Type == framing.SenderTypeMember {
 		senderIdentity = senderIdentityForLeaf(g, group.LeafNodeIndex(pm.Content.Sender.LeafIndex))
 	}
@@ -2502,5 +2504,6 @@ func (c *Client) checkOpen() error {
 	if c == nil || c.closed {
 		return ErrClientClosed
 	}
+
 	return nil
 }

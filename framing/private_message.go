@@ -282,13 +282,20 @@ type DecryptParams struct {
 	SenderDataSecret *ciphersuite.Secret
 	SecretTree       *secrettree.Tree
 	// SigPubKey is used to verify the sender's signature after decryption.
-	// If nil, verification is skipped (not recommended in production).
+	// If nil, VerifySignature is used when provided.
 	SigPubKey    *ciphersuite.MLSSignaturePublicKey
 	GroupContext []byte // Serialized GroupContext; required for TBS verification
+	// VerifySignature verifies the sender's signature when SigPubKey is nil, for callers whose
+	// signing key depends on the sender. It receives the sender's leaf index from the decrypted
+	// MLSSenderData (RFC 9420 §6.3.2), the FramedContentTBS bytes and the signature. Its error is
+	// returned by Decrypt unchanged, and the generation is not consumed.
+	VerifySignature func(leafIndex uint32, tbs []byte, signature *ciphersuite.Signature) error
 }
 
 // Decrypt decrypts a PrivateMessage and returns the AuthenticatedContent.
-// Verifies the sender's signature if SigPubKey is present.
+// When SigPubKey or VerifySignature is set, the sender's signature is verified before
+// the generation is consumed. Failed authentication does not consume the generation
+// or advance the ratchet.
 func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error) {
 	// Extract ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
 	// Needed to derive sender_data key/nonce BEFORE decrypting sender_data
@@ -326,7 +333,8 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 		return nil, fmt.Errorf("framing: parsing sender_data: %w", err)
 	}
 
-	// Derive content key/nonce from SecretTree
+	// Derive the content key and nonce from the SecretTree without moving the ratchet. The ratchet
+	// advances only after the message is authenticated, so a forged message leaves it unchanged.
 	leaf, err := p.SecretTree.LeafForIndex(senderData.LeafIndex)
 	if err != nil {
 		return nil, fmt.Errorf("framing: getting leaf secret: %w", err)
@@ -335,49 +343,37 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 	// Build PrivateContentAAD and decrypt content
 	aad := buildPrivateContentAAD(pm.GroupID, pm.Epoch, pm.ContentType, pm.AuthenticatedData)
 
-	decryptWithRatchet := func(handshake bool) ([]byte, error) {
-		var key []byte
-		var nonce []byte
-		var err error
-		if handshake {
-			key, err = leaf.HandshakeKey(senderData.Generation)
-			if err != nil {
-				return nil, fmt.Errorf("framing: deriving handshake content key: %w", err)
-			}
-			nonce, err = leaf.HandshakeNonce(senderData.Generation)
-			if err != nil {
-				return nil, fmt.Errorf("framing: deriving handshake content nonce: %w", err)
-			}
-		} else {
-			key, err = leaf.ApplicationKey(senderData.Generation)
-			if err != nil {
-				return nil, fmt.Errorf("framing: deriving application content key: %w", err)
-			}
-			nonce, err = leaf.ApplicationNonce(senderData.Generation)
-			if err != nil {
-				return nil, fmt.Errorf("framing: deriving application content nonce: %w", err)
-			}
-		}
+	// The handshake and application ratchets are independent (both start at gen 0), so their
+	// replay windows are tracked separately (RFC 9420 §9.2).
+	isHandshake := pm.ContentType != ContentTypeApplication
 
-		for i := range ciphersuite.ReuseGuardBytes {
-			nonce[i] ^= senderData.ReuseGuard[i]
-		}
-
-		return ciphersuite.DecryptWithCipherSuite(key, nonce, pm.Ciphertext, aad, p.CipherSuite)
+	// RFC 9420 §9.2: a generation that was already processed is refused before any key is derived.
+	if replayErr := leaf.CheckGenerationUnused(senderData.Generation, isHandshake); replayErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, replayErr)
 	}
 
-	var plaintext []byte
-	isHandshake := pm.ContentType != ContentTypeApplication
-	plaintext, err = decryptWithRatchet(isHandshake)
+	pending, err := leaf.BeginDecryption(senderData.Generation)
+	if err != nil {
+		return nil, fmt.Errorf("framing: deriving content key: %w", err)
+	}
+	// Unless the message is accepted and Commit runs below, the derived secrets are wiped here.
+	defer pending.Discard()
+
+	key, err := pending.Key(isHandshake)
+	if err != nil {
+		return nil, fmt.Errorf("framing: deriving content key: %w", err)
+	}
+	nonce, err := pending.Nonce(isHandshake)
+	if err != nil {
+		return nil, fmt.Errorf("framing: deriving content nonce: %w", err)
+	}
+	for i := range ciphersuite.ReuseGuardBytes {
+		nonce[i] ^= senderData.ReuseGuard[i]
+	}
+
+	plaintext, err := ciphersuite.DecryptWithCipherSuite(key, nonce, pm.Ciphertext, aad, p.CipherSuite)
 	if err != nil {
 		return nil, fmt.Errorf("%w: content: %v", ErrDecryptionFailed, err)
-	}
-
-	// RFC 9420 §9.2: mark generation as consumed to reject replays.
-	// The handshake and application ratchets are independent (both start at gen 0),
-	// so their replay windows are tracked separately.
-	if replayErr := leaf.MarkGenerationUsed(senderData.Generation, isHandshake); replayErr != nil {
-		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, replayErr)
 	}
 
 	// Parse body + auth from PrivateMessageContent
@@ -403,15 +399,36 @@ func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error)
 		GroupContext: p.GroupContext,
 	}
 
-	// Verify signature if public key is provided
-	if p.SigPubKey != nil {
-		tbs := ac.MarshalTBS()
-		if err := ciphersuite.VerifyWithLabel(p.SigPubKey, "FramedContentTBS", tbs, pmc.Auth.Signature); err != nil {
-			return nil, ErrVerificationFailed
-		}
+	// RFC 9420 §6.1: verify the signature before the generation is consumed. A forged message
+	// (valid AEAD, invalid signature) must not burn the generation an honest message uses.
+	if err := p.verifySignature(senderData.LeafIndex, ac); err != nil {
+		return nil, err
 	}
 
+	// RFC 9420 §9.2: record the generation as consumed. A replay that raced past the check above
+	// is refused here, still before the ratchet moves.
+	if replayErr := leaf.MarkGenerationUsed(senderData.Generation, isHandshake); replayErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, replayErr)
+	}
+
+	// The message is authenticated and recorded, so the ratchet moves to its generation.
+	pending.Commit()
 	return ac, nil
+}
+
+// verifySignature checks the signature of a decrypted PrivateMessage (RFC 9420 §6.1). SigPubKey
+// takes precedence over VerifySignature. With neither set, nothing is checked and the caller is
+// responsible for the sender.
+func (p DecryptParams) verifySignature(senderLeafIndex uint32, ac *AuthenticatedContent) error {
+	switch {
+	case p.SigPubKey != nil:
+		if err := ciphersuite.VerifyWithLabel(p.SigPubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
+			return ErrVerificationFailed
+		}
+	case p.VerifySignature != nil:
+		return p.VerifySignature(senderLeafIndex, ac.MarshalTBS(), ac.Auth.Signature)
+	}
+	return nil
 }
 
 // buildPrivateContentAAD builds the AAD for PrivateMessageContent AEAD (RFC §6.3.1).

@@ -2610,38 +2610,52 @@ func (g *Group) ProcessPrivateMessage(pm *framing.PrivateMessage) error {
 // decryptPrivateMessage decrypts a PrivateMessage and returns the AuthenticatedContent
 // along with the sender leaf index extracted from the MLSSenderData.
 func (g *Group) decryptPrivateMessage(pm *framing.PrivateMessage) (*framing.AuthenticatedContent, treesync.LeafIndex, error) {
-	// decrypt without verifying signature (sender encrypted in MLSSenderData, still unknown)
+	// The sender is known only from the MLSSenderData, so its signature is checked through
+	// VerifySignature: after the content is decrypted and before the generation is consumed
+	// (RFC 9420 §6.1, §9.2).
 	ac, err := framing.Decrypt(pm, framing.DecryptParams{
 		CipherSuite:      g.cipherSuite,
 		SenderDataSecret: g.epochSecrets.SenderDataSecret,
 		SecretTree:       g.secretTree,
-		SigPubKey:        nil,
+		VerifySignature:  g.VerifySenderSignature,
 		GroupContext:     g.groupContext.Marshal(),
 	})
 	if err != nil {
 		return nil, 0, err
 	}
+	return ac, treesync.LeafIndex(ac.Content.Sender.LeafIndex), nil
+}
 
-	// extract sender leaf index from FramedContent (which came from MLSSenderData)
-	senderLeafIdx := treesync.LeafIndex(ac.Content.Sender.LeafIndex)
+// VerifySenderSignature verifies the signature of a FramedContent sent by leafIndex, with the
+// signature key of that leaf in the current ratchet tree (RFC 9420 §6.1). It has the signature of
+// framing.DecryptParams.VerifySignature.
+func (g *Group) VerifySenderSignature(leafIndex uint32, tbs []byte, signature *ciphersuite.Signature) error {
+	return verifyLeafSignature(g.ratchetTree, g.cipherSuite, leafIndex, tbs, signature)
+}
 
-	// verify that the sender exists in the RatchetTree and is active
-	senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx)
-	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent {
-		return nil, 0, fmt.Errorf("sender %d is not an active member", senderLeafIdx)
+// verifyLeafSignature checks that leafIndex is a present leaf of tree and that signature verifies
+// over tbs with the leaf's signature key (RFC 9420 §6.1).
+func verifyLeafSignature(tree *treesync.RatchetTree, cs ciphersuite.CipherSuite, leafIndex uint32, tbs []byte, signature *ciphersuite.Signature) error {
+	if tree == nil {
+		return ErrRatchetTreeMissing
 	}
-
-	// RFC 9420 §6.1: verify the FramedContent signature with the sender's public key.
+	if leafIndex >= tree.NumLeaves {
+		return &ErrUnknownMember{LeafIndex: leafIndex}
+	}
+	senderLeaf := tree.GetLeaf(treesync.LeafIndex(leafIndex))
+	if senderLeaf == nil || senderLeaf.State != treesync.NodeStatePresent || senderLeaf.LeafData == nil {
+		return fmt.Errorf("sender %d is not an active member: %w", leafIndex, ErrSenderNotActive)
+	}
 	rawKey := senderLeaf.LeafData.SigKeyBytes()
 	if len(rawKey) == 0 {
-		return nil, 0, fmt.Errorf("missing sender signature key")
+		return ErrMissingSenderSignature
 	}
-	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, g.cipherSuite.SignatureScheme())
-	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", ac.MarshalTBS(), ac.Auth.Signature); err != nil {
-		return nil, 0, fmt.Errorf("private message signature invalid: %w", err)
+	pubKey := ciphersuite.NewMLSSignaturePublicKey(rawKey, cs.SignatureScheme())
+	if err := ciphersuite.VerifyWithLabel(pubKey, "FramedContentTBS", tbs, signature); err != nil {
+		return &ErrInvalidSignature{Context: "private message", Err: err}
 	}
 
-	return ac, senderLeafIdx, nil
+	return nil
 }
 
 // processProposalContent processes the content of a proposal (shared between Public and Private).

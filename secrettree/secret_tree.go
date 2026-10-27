@@ -41,6 +41,9 @@ type Tree struct {
 	leafCount        uint32
 	generation       uint64
 	leafCache        map[uint32]*LeafSecret // persisted per-leaf ratchet state
+	// maxForwardDistance is the forward-jump limit copied into every LeafSecret
+	// created by this tree (see DefaultMaxForwardDistance).
+	maxForwardDistance uint32
 }
 
 // LeafSecret holds the per-leaf ratchet state as defined in RFC 9420 §9.1.
@@ -100,6 +103,24 @@ type TreeState struct {
 // for out-of-order delivery. RFC 9420 §9.2 leaves this as a local decision.
 const maxCachedGenerations = 2048
 
+// DefaultMaxForwardDistance is the default limit on how many generations a
+// single message may move a leaf's ratchet forward (RFC 9420 §15.3).
+//
+// RFC 9420 §15.3 asks applications to limit the number of steps a client takes
+// in response to one message. Without a limit, a group member who knows the
+// sender data secret can encode any uint32 generation, and the ratchet is
+// advanced before the AEAD check. A generation near 0xffffffff would cost about
+// 4 billion ratchet steps (two HKDF derivations each), and it would leave the
+// leaf past every legitimate generation.
+//
+// 1000 caps the work one message can cause at 2000 HKDF-Expand-Label calls (two
+// per step). That is well above the reordering and short loss runs expected
+// within one epoch, so in-order traffic and modest gaps are not affected. A
+// rejected generation does not change the ratchet, so messages inside the window
+// keep decrypting. Applications that need another trade-off can change the limit
+// per tree with Tree.SetMaxForwardDistance.
+const DefaultMaxForwardDistance uint32 = 1000
+
 // LeafSecret tracks the per-leaf secret ratchets used for message protection.
 type LeafSecret struct {
 	cs                       ciphersuite.CipherSuite
@@ -109,10 +130,14 @@ type LeafSecret struct {
 	handshakeRatchetSecret   *ciphersuite.Secret
 	applicationRatchetSecret *ciphersuite.Secret
 	sequenceNumber           uint64 // message counter (separate from ratchet generation)
+	maxForwardDistance       uint32 // largest forward jump one message may cause (see DefaultMaxForwardDistance)
 	// secretCache retains ratchet secrets for past generations to support
-	// out-of-order decryption. Entries are evicted when the cache exceeds
-	// maxCachedGenerations to bound memory usage.
+	// out-of-order decryption. At most maxCachedGenerations are kept: when the cache is
+	// full, the oldest generation is evicted to make room (see storeCachedSecret).
 	secretCache map[uint32]*cachedGenSecret
+	// secretCacheOrder lists the generations in secretCache, oldest first. Generations are
+	// stored in increasing order, so the front entry is the one evicted next.
+	secretCacheOrder []uint32
 	// usedApplicationGenerations / usedHandshakeGenerations track which generations
 	// have already been decrypted per ratchet type. RFC 9420 §9.2 requires replay
 	// protection, and the two ratchets are independent (each starts at generation 0),
@@ -145,11 +170,12 @@ func NewTree(encryptionSecret *ciphersuite.Secret, leafCount uint32, cs ciphersu
 		return nil, fmt.Errorf("leaf_count must be > 0")
 	}
 	return &Tree{
-		cs:               cs,
-		encryptionSecret: encryptionSecret,
-		leafCount:        leafCount,
-		generation:       0,
-		leafCache:        make(map[uint32]*LeafSecret),
+		cs:                 cs,
+		encryptionSecret:   encryptionSecret,
+		leafCount:          leafCount,
+		generation:         0,
+		leafCache:          make(map[uint32]*LeafSecret),
+		maxForwardDistance: DefaultMaxForwardDistance,
 	}, nil
 }
 
@@ -161,6 +187,28 @@ func (t *Tree) Generation() uint64 { return t.generation }
 
 // IncrementGeneration increments the epoch generation counter.
 func (t *Tree) IncrementGeneration() { t.generation++ }
+
+// MaxForwardDistance returns how many generations a single message may move a
+// leaf's ratchet forward. The default is DefaultMaxForwardDistance.
+func (t *Tree) MaxForwardDistance() uint32 { return t.maxForwardDistance }
+
+// SetMaxForwardDistance changes the forward-jump limit for this tree and for the
+// leaves it has already created. d must be at least 1: with d = 0 even the next
+// in-order generation (one step ahead) would be rejected. The limit is local
+// policy, so it is not part of the serialized state; UnmarshalFull restores
+// DefaultMaxForwardDistance.
+func (t *Tree) SetMaxForwardDistance(d uint32) error {
+	if d == 0 {
+		return fmt.Errorf("max forward distance must be > 0")
+	}
+	t.maxForwardDistance = d
+	for _, leaf := range t.leafCache {
+		if leaf != nil {
+			leaf.maxForwardDistance = d
+		}
+	}
+	return nil
+}
 
 // LeafForIndex returns a LeafSecret for the given leaf index (RFC 9420 §9, Figure 25).
 // Each call creates a fresh LeafSecret starting at ratchet generation t.generation.
@@ -215,6 +263,7 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 		handshakeRatchetSecret:   handshakeRatchetSecret,
 		applicationRatchetSecret: applicationRatchetSecret,
 		sequenceNumber:           0,
+		maxForwardDistance:       t.maxForwardDistance,
 	}
 	if err := ls.ratchetTo(uint32(t.generation)); err != nil {
 		return nil, fmt.Errorf("advancing to epoch generation %d: %w", t.generation, err)
@@ -356,16 +405,8 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 		}
 
 		// Cache secrets at generation g before advancing, for out-of-order delivery.
-		if ls.secretCache == nil {
-			ls.secretCache = make(map[uint32]*cachedGenSecret)
-		}
-		if len(ls.secretCache) < maxCachedGenerations {
-			// Clone secrets before zeroing so cache holds the gen-g value.
-			ls.secretCache[g] = &cachedGenSecret{
-				application: ls.applicationRatchetSecret.Clone(),
-				handshake:   ls.handshakeRatchetSecret.Clone(),
-			}
-		}
+		// Clone secrets before zeroing so cache holds the gen-g value.
+		ls.storeCachedSecret(g, ls.applicationRatchetSecret.Clone(), ls.handshakeRatchetSecret.Clone())
 
 		ls.applicationRatchetSecret.SecureZero() // RFC §9.2: delete consumed secret
 		ls.applicationRatchetSecret = next
@@ -373,6 +414,57 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 		ls.handshakeRatchetSecret = nextHs
 
 		ls.generation++
+	}
+	return nil
+}
+
+// storeCachedSecret keeps the secrets of generation gen for out-of-order decryption. When the
+// cache already holds maxCachedGenerations entries, the oldest generation is evicted first, so the
+// newest generations stay available. A cache that stopped storing once full would make every
+// later reordered or skipped message undecryptable. The cache takes ownership of both secrets.
+func (ls *LeafSecret) storeCachedSecret(gen uint32, application, handshake *ciphersuite.Secret) {
+	if ls.secretCache == nil {
+		ls.secretCache = make(map[uint32]*cachedGenSecret)
+	}
+	if _, already := ls.secretCache[gen]; already {
+		application.SecureZero()
+		handshake.SecureZero()
+		return
+	}
+	if len(ls.secretCache) >= maxCachedGenerations {
+		ls.evictOldestCachedSecret()
+	}
+	ls.secretCache[gen] = &cachedGenSecret{application: application, handshake: handshake}
+	ls.secretCacheOrder = append(ls.secretCacheOrder, gen)
+}
+
+// evictOldestCachedSecret removes the oldest cached generation and wipes its secrets.
+func (ls *LeafSecret) evictOldestCachedSecret() {
+	for len(ls.secretCacheOrder) > 0 {
+		oldest := ls.secretCacheOrder[0]
+		ls.secretCacheOrder = ls.secretCacheOrder[1:]
+		if cached, ok := ls.secretCache[oldest]; ok {
+			cached.application.SecureZero()
+			cached.handshake.SecureZero()
+			delete(ls.secretCache, oldest)
+			return
+		}
+	}
+}
+
+// checkForwardDistance rejects a generation that is more than maxForwardDistance
+// steps ahead of the current generation (see DefaultMaxForwardDistance).
+//
+// It runs before ratchetTo, so a rejected generation leaves the ratchet where it
+// was and no key derivation is done. RFC 9420 §15.3 describes the same attack:
+// a message with a huge generation forces billions of derivations unless the
+// application limits how far the ratchet moves. Generations at or behind the
+// current position are not checked here; they are served from secretCache or
+// rejected by ratchetTo.
+func (ls *LeafSecret) checkForwardDistance(gen uint32) error {
+	if uint64(gen) > ls.generation+uint64(ls.maxForwardDistance) {
+		return fmt.Errorf("generation %d is more than %d steps ahead of current generation %d",
+			gen, ls.maxForwardDistance, ls.generation)
 	}
 	return nil
 }
@@ -411,10 +503,15 @@ func (ls *LeafSecret) CurrentGeneration() uint32 {
 // is somehow duplicated.
 //
 // Parameters:
-//   - gen: Target generation (will advance ratchet if needed)
+//   - gen: Target generation. A generation more than the forward limit
+//     (DefaultMaxForwardDistance) ahead of the current one is rejected
+//     without advancing the ratchet.
 //
 // Returns the 16-byte application encryption key, or an error if derivation fails.
 func (ls *LeafSecret) ApplicationKey(generation uint32) ([]byte, error) {
+	if err := ls.checkForwardDistance(generation); err != nil {
+		return nil, err
+	}
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
@@ -445,10 +542,15 @@ func (ls *LeafSecret) ApplicationKey(generation uint32) ([]byte, error) {
 //	)
 //
 // Parameters:
-//   - gen: Target generation (will advance ratchet if needed)
+//   - gen: Target generation. A generation more than the forward limit
+//     (DefaultMaxForwardDistance) ahead of the current one is rejected
+//     without advancing the ratchet.
 //
 // Returns the 12-byte nonce for AES-GCM encryption, or an error if derivation fails.
 func (ls *LeafSecret) ApplicationNonce(generation uint32) ([]byte, error) {
+	if err := ls.checkForwardDistance(generation); err != nil {
+		return nil, err
+	}
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
@@ -483,10 +585,15 @@ func (ls *LeafSecret) ApplicationNonce(generation uint32) ([]byte, error) {
 // isolation between handshake and application message security.
 //
 // Parameters:
-//   - gen: Target generation (will advance ratchet if needed)
+//   - gen: Target generation. A generation more than the forward limit
+//     (DefaultMaxForwardDistance) ahead of the current one is rejected
+//     without advancing the ratchet.
 //
 // Returns the 16-byte handshake encryption key, or an error if derivation fails.
 func (ls *LeafSecret) HandshakeKey(generation uint32) ([]byte, error) {
+	if err := ls.checkForwardDistance(generation); err != nil {
+		return nil, err
+	}
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
@@ -517,10 +624,15 @@ func (ls *LeafSecret) HandshakeKey(generation uint32) ([]byte, error) {
 //	)
 //
 // Parameters:
-//   - gen: Target generation (will advance ratchet if needed)
+//   - gen: Target generation. A generation more than the forward limit
+//     (DefaultMaxForwardDistance) ahead of the current one is rejected
+//     without advancing the ratchet.
 //
 // Returns the 12-byte nonce for handshake message encryption, or an error if derivation fails.
 func (ls *LeafSecret) HandshakeNonce(generation uint32) ([]byte, error) {
+	if err := ls.checkForwardDistance(generation); err != nil {
+		return nil, err
+	}
 	if err := ls.ratchetTo(generation); err != nil {
 		return nil, err
 	}
@@ -596,22 +708,35 @@ func (ls *LeafSecret) NextSequenceNumber() uint64 {
 // already processed. The two ratchets are independent, so their replay windows
 // are tracked separately.
 func (ls *LeafSecret) MarkGenerationUsed(gen uint32, handshake bool) error {
+	if err := ls.CheckGenerationUnused(gen, handshake); err != nil {
+		return err
+	}
 	if handshake {
 		if ls.usedHandshakeGenerations == nil {
 			ls.usedHandshakeGenerations = make(map[uint32]struct{})
-		}
-		if _, already := ls.usedHandshakeGenerations[gen]; already {
-			return fmt.Errorf("replay detected: generation %d already processed for leaf %d (handshake)", gen, ls.leafIndex)
 		}
 		ls.usedHandshakeGenerations[gen] = struct{}{}
 	} else {
 		if ls.usedApplicationGenerations == nil {
 			ls.usedApplicationGenerations = make(map[uint32]struct{})
 		}
-		if _, already := ls.usedApplicationGenerations[gen]; already {
-			return fmt.Errorf("replay detected: generation %d already processed for leaf %d", gen, ls.leafIndex)
-		}
 		ls.usedApplicationGenerations[gen] = struct{}{}
+	}
+	return nil
+}
+
+// CheckGenerationUnused returns the replay error if generation gen was already processed on the
+// given ratchet. It records nothing, so a decryption can check for a replay before it verifies
+// the message and marks the generation with MarkGenerationUsed only once the message is accepted.
+func (ls *LeafSecret) CheckGenerationUnused(gen uint32, handshake bool) error {
+	if handshake {
+		if _, already := ls.usedHandshakeGenerations[gen]; already {
+			return fmt.Errorf("replay detected: generation %d already processed for leaf %d (handshake)", gen, ls.leafIndex)
+		}
+		return nil
+	}
+	if _, already := ls.usedApplicationGenerations[gen]; already {
+		return fmt.Errorf("replay detected: generation %d already processed for leaf %d", gen, ls.leafIndex)
 	}
 	return nil
 }
@@ -652,6 +777,7 @@ func (ls *LeafSecret) DeleteLeaf() {
 		}
 	}
 	ls.secretCache = nil
+	ls.secretCacheOrder = nil
 	ls.sequenceNumber = 0
 }
 
@@ -752,11 +878,12 @@ func Unmarshal(data []byte, cs ciphersuite.CipherSuite) (*Tree, error) {
 	}
 
 	return &Tree{
-		cs:               cs,
-		encryptionSecret: ciphersuite.NewSecret(encSecretBytes),
-		leafCount:        leafCount,
-		generation:       generation,
-		leafCache:        make(map[uint32]*LeafSecret),
+		cs:                 cs,
+		encryptionSecret:   ciphersuite.NewSecret(encSecretBytes),
+		leafCount:          leafCount,
+		generation:         generation,
+		leafCache:          make(map[uint32]*LeafSecret),
+		maxForwardDistance: DefaultMaxForwardDistance,
 	}, nil
 }
 
@@ -772,11 +899,12 @@ func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) 
 		return nil, fmt.Errorf("tree state leaf_count must be > 0")
 	}
 	tree := &Tree{
-		cs:               cs,
-		encryptionSecret: ciphersuite.NewSecret(state.EncryptionSecret),
-		leafCount:        state.LeafCount,
-		generation:       state.Generation,
-		leafCache:        make(map[uint32]*LeafSecret),
+		cs:                 cs,
+		encryptionSecret:   ciphersuite.NewSecret(state.EncryptionSecret),
+		leafCount:          state.LeafCount,
+		generation:         state.Generation,
+		leafCache:          make(map[uint32]*LeafSecret),
+		maxForwardDistance: DefaultMaxForwardDistance,
 	}
 	for leafIndex, leafState := range state.LeafStates {
 		if leafIndex >= state.LeafCount {
@@ -790,6 +918,7 @@ func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) 
 			handshakeRatchetSecret:   ciphersuite.NewSecret(leafState.HandshakeSecret),
 			applicationRatchetSecret: ciphersuite.NewSecret(leafState.ApplicationSecret),
 			sequenceNumber:           leafState.SequenceNumber,
+			maxForwardDistance:       tree.maxForwardDistance,
 			secretCache:              make(map[uint32]*cachedGenSecret),
 		}
 		tree.leafCache[leafIndex] = leaf
