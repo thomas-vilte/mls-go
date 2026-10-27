@@ -105,6 +105,41 @@ func (pf *ProposalFilter) FilterAndValidateProposals(
 	return sorted, nil
 }
 
+// ValidateAddKeyPackage validates the KeyPackage carried by an Add proposal (RFC 9420 §12.1.1, §10.1).
+//
+// It is the one validator used on every path that accepts an Add: AddMember and InviteMember on the
+// committer side, the inline and by-reference Add proposals of a commit, and standalone Add proposals.
+// It checks the KeyPackage structure and its signature by leaf_node.signature_key, then the LeafNode
+// (RFC 9420 §7.3): the X.509 binding between the end-entity certificate and signature_key (§5.3),
+// the capabilities compatible with the group, and the lifetime. A certificate that belongs to another
+// key is refused, because the Add would otherwise present that certificate's identity to the group.
+//
+// A nil KeyPackage returns ErrNilKeyPackage. Other validation failures wrap ErrInvalidProposal
+// (RFC 9420 §12.1.1).
+func ValidateAddKeyPackage(kp *keypackages.KeyPackage, cs ciphersuite.CipherSuite) error {
+	if kp == nil {
+		return ErrNilKeyPackage
+	}
+	if err := kp.Validate(); err != nil {
+		return fmt.Errorf("%w: add proposal key package invalid: %w", ErrInvalidProposal, err)
+	}
+	// RFC 9420 §10.1: the KeyPackage signature must verify with leaf_node.signature_key.
+	if err := kp.Verify(cs); err != nil {
+		return fmt.Errorf("%w: add proposal keypackage signature invalid: %w", ErrInvalidProposal, err)
+	}
+	// RFC 9420 §7.3, §5.3: a KeyPackage LeafNode (source key_package) has no group context in its
+	// TBS, so ValidateLeafNode applies. It also checks the credential and the X.509 binding.
+	leafData := keyPackageLeafToTreeSync(kp.LeafNode)
+	if err := treesync.ValidateLeafNode(leafData, cs); err != nil {
+		return fmt.Errorf("%w: add proposal leaf node invalid: %w", ErrInvalidProposal, err)
+	}
+	// validateCapabilitiesCompatible already wraps ErrInvalidProposal.
+	if err := validateCapabilitiesCompatible(cs, leafData.Capabilities, nil); err != nil {
+		return fmt.Errorf("add proposal capabilities invalid: %w", err)
+	}
+	return nil
+}
+
 // validateSingleProposal validates an individual proposal.
 func (pf *ProposalFilter) validateSingleProposal(
 	fp FilteredProposal,
@@ -139,9 +174,10 @@ func (pf *ProposalFilter) validateSingleProposal(
 					return err
 				}
 			}
-			// RFC 9420 §12.2: Verify KeyPackage signature in Add proposals
-			if err := proposal.Add.KeyPackage.Verify(pf.cipherSuite); err != nil {
-				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
+			// RFC 9420 §12.2, §10.1: the KeyPackage goes through the validator shared with every
+			// other path that accepts an Add (signature, X.509 binding, capabilities, lifetime).
+			if err := ValidateAddKeyPackage(proposal.Add.KeyPackage, pf.cipherSuite); err != nil {
+				return err
 			}
 		}
 

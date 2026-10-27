@@ -5,10 +5,13 @@ package group
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/framing"
+	"github.com/thomas-vilte/mls-go/keypackages"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
@@ -180,4 +183,72 @@ func TestExternalCommitBasicIdentityDoesNotBindSigningKey(t *testing.T) {
 		t.Fatalf("epoch after Basic identity resync = %d, want %d", got, epochBefore+1)
 	}
 	t.Logf("Basic identity %q permits resync with a new signing key; identity authentication is application policy", bob.kp.LeafNode.Credential.Identity)
+}
+
+// TestExternalCommitAcceptsRenewedCertificateResync checks that resynchronization accepts a renewed certificate for the same participant.
+func TestExternalCommitAcceptsRenewedCertificateResync(t *testing.T) {
+	aliceGroup, bobGroup, alice, _ := newCredentialBindingTestGroups(t)
+	renewedKey := newCredentialBindingTestKey(t)
+	renewed := newCredentialBindingTestUser(t, renewedKey, renewedKey)
+	bobLeaf := bobGroup.ownLeafIndex
+	staged := newExternalCommitTestCommit(t, aliceGroup, alice, renewed, &bobLeaf)
+	if err := aliceGroup.ProcessReceivedCommit(staged.authenticatedContent, treesync.LeafIndex(0), aliceGroup.myLeafEncryptionKey); err != nil {
+		t.Errorf("resync of bob with a renewed X.509 certificate (same subject, new key) rejected: %v", err)
+	}
+}
+
+// TestReceivedMemberCommitRejectsCertificateMismatch checks certificate/signature-key binding on the member commit receive path.
+func TestReceivedMemberCommitRejectsCertificateMismatch(t *testing.T) {
+	t.Run("control_matching_path_credential", func(t *testing.T) {
+		aliceGroup, bobGroup, bob := newMemberCommitCredentialTestGroups(t)
+		sc, err := bobGroup.Commit(bob.sigPriv, bob.sigPub, nil)
+		if err != nil {
+			t.Fatalf("Commit(bob): %v", err)
+		}
+		if err := aliceGroup.ProcessReceivedCommit(sc.authenticatedContent, treesync.LeafIndex(bobGroup.ownLeafIndex), aliceGroup.myLeafEncryptionKey); err != nil {
+			t.Fatalf("ProcessReceivedCommit(bob, matching certificate): %v", err)
+		}
+	})
+	t.Run("attack_path_certificate_of_other_key", func(t *testing.T) {
+		aliceGroup, bobGroup, bob := newMemberCommitCredentialTestGroups(t)
+		bobLeaf := bobGroup.ownLeafIndex
+		otherKey := newCredentialBindingTestKey(t)
+		bobGroup.members[bobLeaf].Credential = credentials.NewX509Credential([][]byte{newCredentialBindingTestCertificate(t, otherKey)})
+		sc, err := bobGroup.Commit(bob.sigPriv, bob.sigPub, nil)
+		if err != nil {
+			t.Fatalf("Commit(bob) with the certificate of another key: %v", err)
+		}
+		err = aliceGroup.ProcessReceivedCommit(sc.authenticatedContent, treesync.LeafIndex(bobLeaf), aliceGroup.myLeafEncryptionKey)
+		if err == nil || !strings.Contains(err.Error(), credentialBindingMismatchText) {
+			t.Errorf("ProcessReceivedCommit(bob's UpdatePath with a certificate of another key): err = %v, want the X.509 binding rejection; alice epoch now %d",
+				err, aliceGroup.epoch.AsUint64())
+		}
+	})
+}
+
+// newMemberCommitCredentialTestGroups returns the newCredentialBindingTestGroups groups with bob as the only committer.
+func newMemberCommitCredentialTestGroups(t *testing.T) (aliceGroup, bobGroup *Group, bob *testUser) {
+	t.Helper()
+	aliceGroup, bobGroup, _, bob = newCredentialBindingTestGroups(t)
+	return aliceGroup, bobGroup, bob
+}
+
+// TestProposalFilterRejectsMalformedAdd checks that an Add with no KeyPackage or LeafNode is rejected.
+func TestProposalFilterRejectsMalformedAdd(t *testing.T) {
+	aliceGroup, _, _, _ := newCredentialBindingTestGroups(t)
+	cases := []struct {
+		name string
+		p    *Proposal
+	}{
+		{"key_package_without_leaf_node", &Proposal{Type: ProposalTypeAdd, Add: &AddProposal{KeyPackage: &keypackages.KeyPackage{}}}},
+		{"nil_key_package", &Proposal{Type: ProposalTypeAdd, Add: &AddProposal{KeyPackage: nil}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pf := NewProposalFilter(aliceGroup.groupContext, 0, aliceGroup.members, aliceGroup.cipherSuite, aliceGroup.ratchetTree)
+			if _, err := pf.FilterAndValidateProposals([]FilteredProposal{{Proposal: tc.p, Sender: 0}}, nil); err == nil {
+				t.Errorf("FilterAndValidateProposals accepted an Add with %s without running ValidateAddKeyPackage", tc.name)
+			}
+		})
+	}
 }

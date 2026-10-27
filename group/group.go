@@ -612,7 +612,9 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 	if keyPackage == nil {
 		return nil, ErrNilKeyPackage
 	}
-	if err := keyPackage.Validate(); err != nil {
+	// RFC 9420 §12.1.1, §10.1: an Add with an invalid KeyPackage is refused before the proposal is
+	// stored, so the committer never holds a proposal that every receiver would reject.
+	if err := ValidateAddKeyPackage(keyPackage, g.cipherSuite); err != nil {
 		return nil, fmt.Errorf("invalid key package: %w", err)
 	}
 	if err := g.validateAddKeyPackageUniqueness(keyPackage); err != nil {
@@ -1736,6 +1738,18 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("external commit missing update path")
 		}
 		extLeafIdx, _ := treeAfterProposals.AddLeaf(*commit.Path.LeafNode)
+		// RFC 9420 §12.4.3.2, §7.3: the joiner's UpdatePath LeafNode (source=commit) is validated as a
+		// full LeafNode with the group context and leaf index its signature covers. Its X.509
+		// credential must match signature_key (§5.3), so a mismatched certificate is refused here,
+		// before the path secret is decrypted.
+		if err := treesync.ValidateLeafNodeWithContext(
+			commit.Path.LeafNode,
+			g.cipherSuite,
+			g.groupContext.GroupID.AsSlice(),
+			uint32(extLeafIdx),
+		); err != nil {
+			return fmt.Errorf("%w: invalid external commit leaf node: %w", ErrInvalidProposal, err)
+		}
 		treeAfterProposals = treeAfterProposals.ExpandToPowerOf2()
 		senderLeafIdx = extLeafIdx
 		// The external joiner is excluded from copath resolution (same as newly added
@@ -1749,6 +1763,22 @@ func (g *Group) ProcessReceivedCommit(
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
+		// RFC 9420 §7.3, §12.4.2: the UpdatePath LeafNode of a member commit (source=commit) is
+		// validated as a full LeafNode with the group context and the committer's leaf index that its
+		// signature covers, as the external commit leaf is. Its X.509 credential must match
+		// signature_key (§5.3), so a certificate of another key is refused before the path secret is
+		// decrypted. The signature alone does not show that the credential belongs to the key.
+		if commit.Path.LeafNode == nil {
+			return fmt.Errorf("%w: commit update path has no leaf node", ErrInvalidProposal)
+		}
+		if err := treesync.ValidateLeafNodeWithContext(
+			commit.Path.LeafNode,
+			g.cipherSuite,
+			g.groupContext.GroupID.AsSlice(),
+			uint32(senderLeafIdx),
+		); err != nil {
+			return fmt.Errorf("%w: invalid update path leaf node: %w", ErrInvalidProposal, err)
+		}
 		// RFC §12.4.2: the UpdatePath.LeafNode.EncryptionKey MUST differ from the
 		// sender's current leaf key (forward secrecy — the old key must be retired).
 		if senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx); senderLeaf != nil && senderLeaf.LeafData != nil {
@@ -2404,6 +2434,11 @@ func Branch(
 		if kp.LeafNode.Credential == nil {
 			return nil, fmt.Errorf("member %d: nil credential", i)
 		}
+		// RFC 9420 §12.1.1, §10.1: each member is staged as an Add, so its KeyPackage gets the same
+		// validation as AddMember before the new group holds it.
+		if err := ValidateAddKeyPackage(kp, cs); err != nil {
+			return nil, fmt.Errorf("member %d: %w", i, err)
+		}
 	}
 
 	newGroup, err := NewGroup(
@@ -2664,19 +2699,10 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 			if err := g.validateAddKeyPackageUniqueness(proposal.Add.KeyPackage); err != nil {
 				return err
 			}
-			// RFC §12.2: Verify KeyPackage signature
-			if err := proposal.Add.KeyPackage.Verify(g.cipherSuite); err != nil {
-				return fmt.Errorf("add proposal keypackage signature invalid: %w", err)
-			}
-			// RFC §7.3, §12.2: full LeafNode validation (key_package source, lifetime,
-			// capabilities, credential, signature). Use ValidateLeafNode since Add
-			// proposals carry source=key_package (no group context in TBS).
-			leafData := keyPackageLeafToTreeSync(proposal.Add.KeyPackage.LeafNode)
-			if err := treesync.ValidateLeafNode(leafData, g.cipherSuite); err != nil {
-				return fmt.Errorf("invalid add proposal leaf node: %w", err)
-			}
-			if err := validateCapabilitiesCompatible(g.cipherSuite, leafData.Capabilities, nil); err != nil {
-				return fmt.Errorf("invalid add proposal capabilities: %w", err)
+			// RFC §12.2, §10.1: the KeyPackage goes through the validator shared with every other
+			// path that accepts an Add (signature, X.509 binding, capabilities, lifetime).
+			if err := ValidateAddKeyPackage(proposal.Add.KeyPackage, g.cipherSuite); err != nil {
+				return err
 			}
 		}
 	case ProposalTypeUpdate:
