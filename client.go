@@ -968,6 +968,12 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 	} else {
 		return ErrUnexpectedMessageType
 	}
+	// Review the proposals carried by value before the commit is applied, so a rejected
+	// commit does not advance the epoch or change the stored state.
+	if err := c.reviewInlineCommitProposals(ctx, g, ac, senderLeafIdx); err != nil {
+		c.log(slog.LevelWarn, "processing commit failed: proposal review", "group", groupHex(groupID), "error", err)
+		return err
+	}
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
 		c.log(slog.LevelWarn, "processing commit failed: group processing error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("processing received commit: %w", err)
@@ -998,6 +1004,26 @@ func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes
 	if !ok {
 		c.log(slog.LevelWarn, "processing public message failed: unexpected type", "group", groupHex(groupID))
 		return ErrUnexpectedMessageType
+	}
+	if pubMsg.Content.ContentType() == framing.ContentTypeCommit {
+		// A commit's proposals carried by value are reviewed before the commit is applied, as
+		// ProcessCommit does. The message is authenticated first, so the ProposalPolicy and
+		// the CredentialValidator never run on a message that fails verification.
+		if err := g.VerifyPublicMessage(pubMsg); err != nil {
+			c.log(slog.LevelWarn, "processing public message failed: verification", "group", groupHex(groupID), "error", err)
+			return fmt.Errorf("processing public message: %w", err)
+		}
+		commitAC := &framing.AuthenticatedContent{
+			WireFormat:   framing.WireFormatPublicMessage,
+			Content:      pubMsg.Content,
+			Auth:         pubMsg.Auth,
+			GroupContext: g.GroupContext().Marshal(),
+		}
+		senderLeafIdx := treesync.LeafIndex(pubMsg.Content.Sender.LeafIndex)
+		if err := c.reviewInlineCommitProposals(ctx, g, commitAC, senderLeafIdx); err != nil {
+			c.log(slog.LevelWarn, "processing public message failed: proposal review", "group", groupHex(groupID), "error", err)
+			return err
+		}
 	}
 	if err := g.ProcessPublicMessage(pubMsg); err != nil {
 		c.log(slog.LevelWarn, "processing public message failed: group processing error", "group", groupHex(groupID), "error", err)
@@ -2508,10 +2534,54 @@ func (c *Client) reviewableProposalFromPublicMessage(g *group.Group, pm *framing
 	return reviewableProposalFromProposal(g, proposal, senderIdentity), nil
 }
 
+// reviewInlineCommitProposals applies the ProposalPolicy and the CredentialValidator to the
+// proposals that a received commit carries by value (RFC 9420 §12.4). Proposals sent by reference
+// were reviewed when they were received. The sender is the committer's leaf when the commit comes
+// from a member; an external commit has no such leaf, so the sender stays empty. Nothing is stored
+// here, so a rejected commit does not advance the epoch or change the stored state.
+//
+// Without a ProposalPolicy or a WithCredentialValidator option, no review runs and the commit is
+// processed as before.
+func (c *Client) reviewInlineCommitProposals(ctx context.Context, g *group.Group, ac *framing.AuthenticatedContent, senderLeafIdx treesync.LeafIndex) error {
+	// NewClient installs defaultCredentialValidator when the caller supplies none.
+	_, usesDefaultValidator := c.validator.(defaultCredentialValidator)
+	if c.proposalPolicies == nil && usesDefaultValidator {
+		return nil
+	}
+	body, ok := ac.Content.Body.(framing.CommitBody)
+	if !ok {
+		return nil // ProcessReceivedCommit reports ErrNotACommit.
+	}
+	commit, err := group.UnmarshalCommit(body.Data)
+	if err != nil {
+		return fmt.Errorf("unmarshaling commit: %w", err)
+	}
+	var senderIdentity []byte
+	if ac.Content.Sender.Type == framing.SenderTypeMember {
+		senderIdentity = senderIdentityForLeaf(g, group.LeafNodeIndex(senderLeafIdx))
+	}
+	for _, por := range commit.Proposals {
+		proposal := por.Proposal
+		if proposal == nil {
+			continue
+		}
+		if proposal.Type == group.ProposalTypeAdd && proposal.Add != nil && proposal.Add.KeyPackage != nil &&
+			proposal.Add.KeyPackage.LeafNode != nil {
+			if err := c.validateCredential(ctx, proposal.Add.KeyPackage.LeafNode.Credential); err != nil {
+				return fmt.Errorf("inline add proposal: %w", err)
+			}
+		}
+		if err := c.reviewProposal(ctx, g, reviewableProposalFromProposal(g, proposal, senderIdentity)); err != nil {
+			return fmt.Errorf("proposal policy rejected inline proposal: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (c *Client) checkOpen() error {
 	if c == nil || c.closed {
 		return ErrClientClosed
 	}
-
 	return nil
 }

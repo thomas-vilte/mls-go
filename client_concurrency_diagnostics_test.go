@@ -156,7 +156,7 @@ func TestClientLeaveGroupDoesNotRestoreStateDuringSend(t *testing.T) {
 	}
 	sendErr := <-sendErrCh
 
-	_, loadErr := bobStore.Store.LoadGroupState(ctx, group.NewGroupID(gid))
+	_, loadErr := bobStore.LoadGroupState(ctx, group.NewGroupID(gid))
 	_, epochErr := bob.Epoch(ctx, gid)
 
 	t.Logf("SendMessage (in flight) err = %v; epoch err = %v; load err = %v", sendErr, epochErr, loadErr)
@@ -344,8 +344,8 @@ func TestClientBranchConcurrentSendWithCache(t *testing.T) {
 
 func TestClientConcurrentGroupReadsAndWrites(t *testing.T) {
 	ctx := t.Context()
-	for _, strat := range []CacheStrategy{CacheNone, CacheAlways} {
-		c, err := NewClient([]byte(fmt.Sprintf("alice-%d", strat)), ciphersuite.MLS128DHKEMP256, WithCacheStrategy(strat))
+	for _, strategy := range []CacheStrategy{CacheNone, CacheAlways} {
+		c, err := NewClient([]byte(fmt.Sprintf("alice-%d", strategy)), ciphersuite.MLS128DHKEMP256, WithCacheStrategy(strategy))
 		if err != nil {
 			t.Fatalf("NewClient: %v", err)
 		}
@@ -380,7 +380,7 @@ func TestClientConcurrentGroupReadsAndWrites(t *testing.T) {
 		wg.Wait()
 		close(errs)
 		for err := range errs {
-			t.Errorf("strategy %d: %v", strat, err)
+			t.Errorf("strategy %d: %v", strategy, err)
 		}
 		_ = c.Close()
 	}
