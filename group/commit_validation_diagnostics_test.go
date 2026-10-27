@@ -3,6 +3,7 @@
 package group
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -158,4 +159,25 @@ func TestReceiveApplicationMessagePreservesGenerationAfterInvalidSignature(t *te
 			t.Errorf("bob's honest generation 0 refused after a forged message with the same generation: %v", err)
 		}
 	})
+}
+
+// TestExternalCommitBasicIdentityDoesNotBindSigningKey documents that Basic identity equality permits resynchronization with a new key. Applications authenticate identities separately.
+func TestExternalCommitBasicIdentityDoesNotBindSigningKey(t *testing.T) {
+	aliceGroup, bobGroup, alice, bob := makeTwoMemberGroups(t)
+	impostor := newTestUser(t, "bob")
+	if !bytes.Equal(impostor.kp.LeafNode.Credential.Identity, bob.kp.LeafNode.Credential.Identity) {
+		t.Fatalf("setup: impostor identity %q differs from bob's %q",
+			impostor.kp.LeafNode.Credential.Identity, bob.kp.LeafNode.Credential.Identity)
+	}
+	bobLeaf := bobGroup.ownLeafIndex
+	epochBefore := aliceGroup.epoch.AsUint64()
+	staged := newExternalCommitTestCommit(t, aliceGroup, alice, impostor, &bobLeaf)
+	err := aliceGroup.ProcessReceivedCommit(staged.authenticatedContent, treesync.LeafIndex(0), aliceGroup.myLeafEncryptionKey)
+	if err != nil {
+		t.Fatalf("resync with the same Basic identity and a new key: %v", err)
+	}
+	if got := aliceGroup.epoch.AsUint64(); got != epochBefore+1 {
+		t.Fatalf("epoch after Basic identity resync = %d, want %d", got, epochBefore+1)
+	}
+	t.Logf("Basic identity %q permits resync with a new signing key; identity authentication is application policy", bob.kp.LeafNode.Credential.Identity)
 }
