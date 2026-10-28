@@ -85,12 +85,13 @@ func TestRequiredCapabilitiesExtension_AddCredential(t *testing.T) {
 	}
 }
 
-// TestRequiredCapabilitiesExtension_MarshalUnmarshal tests serialization round-trip.
+// TestRequiredCapabilitiesExtension_MarshalUnmarshal tests serialization round-trip. Only the
+// extension, proposal and credential vectors are encoded (RFC 9420 §11.1).
 func TestRequiredCapabilitiesExtension_MarshalUnmarshal(t *testing.T) {
 	req := extensions.NewRequiredCapabilities()
-	req.AddProtocolVersion(0x01)
-	req.AddCipherSuite(0x0002)
 	req.AddExtension(extensions.ExtensionTypeApplicationID)
+	req.AddProposal(0x0002)
+	req.AddCredential(credentials.BasicCredential)
 
 	data := req.Marshal()
 	req2, err := extensions.UnmarshalRequiredCapabilities(data)
@@ -105,17 +106,24 @@ func TestRequiredCapabilitiesExtension_MarshalUnmarshal(t *testing.T) {
 
 // TestRequiredCapabilitiesExtension_Validate tests validation.
 func TestRequiredCapabilitiesExtension_Validate(t *testing.T) {
-	// Empty should fail
+	// RFC 9420 §11.1 requires no vector, so an empty extension is valid.
 	req1 := extensions.NewRequiredCapabilities()
-	if err := req1.Validate(); err == nil {
-		t.Error("Validate() should fail for empty extension")
+	if err := req1.Validate(); err != nil {
+		t.Errorf("Validate() on empty extension = %v, want nil", err)
 	}
 
-	// With protocol version and cipher suite should pass
+	// The value 0 is reserved and is not a valid extension type.
 	req2 := extensions.NewRequiredCapabilities()
-	req2.AddProtocolVersion(0x01)
-	req2.AddCipherSuite(0x0002)
-	if err := req2.Validate(); err != nil {
+	req2.AddExtension(0)
+	if err := req2.Validate(); err == nil {
+		t.Error("Validate() should reject the reserved extension type 0")
+	}
+
+	// Protocol version and cipher suite are not encoded, so they do not affect Validate.
+	req3 := extensions.NewRequiredCapabilities()
+	req3.AddProtocolVersion(0x01)
+	req3.AddCipherSuite(0x0002)
+	if err := req3.Validate(); err != nil {
 		t.Errorf("Validate() error = %v, want nil", err)
 	}
 }

@@ -202,12 +202,14 @@ func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error
 				}
 			}
 
+			// unmerged_leaves<V> is a list of uint32 leaf indices. A trailing partial entry is an error,
+			// not a shorter list.
 			unmergedR := tls.NewReader(unmergedData)
 			var unmergedLeaves []LeafIndex
 			for unmergedR.Remaining() > 0 {
 				li, err := unmergedR.ReadUint32()
 				if err != nil {
-					break
+					return nil, fmt.Errorf("reading unmerged_leaves at index %d: %w", i, err)
 				}
 				unmergedLeaves = append(unmergedLeaves, LeafIndex(li))
 			}

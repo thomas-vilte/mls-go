@@ -460,6 +460,27 @@ func (kp *KeyPackage) Hash() []byte {
 	return hash[:]
 }
 
+// unmarshalExtensionList parses an Extensions<V> vector (RFC 9420 §7.2 and §13.4): a sequence of
+// (extension_type, extension_data<V>) entries. Every entry must decode completely. A malformed or
+// truncated entry is an error, and the list is never returned shorter than the encoding.
+func unmarshalExtensionList(data []byte) ([]Extension, error) {
+	var exts []Extension
+	r := tls.NewReader(data)
+	for r.Remaining() > 0 {
+		extType, err := r.ReadUint16()
+		if err != nil {
+			return nil, fmt.Errorf("reading extension_type: %w", err)
+		}
+		extData, err := r.ReadVLBytes()
+		if err != nil {
+			return nil, fmt.Errorf("reading extension_data: %w", err)
+		}
+		exts = append(exts, Extension{Type: mlsext.ExtensionType(extType), Data: extData})
+	}
+
+	return exts, nil
+}
+
 // UnmarshalKeyPackage parses a KeyPackage from TLS format.
 func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 	buf := tls.NewReader(data)
@@ -493,25 +514,19 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
-	var exts []Extension
-	if len(extBytes) > 0 {
-		extReader := tls.NewReader(extBytes)
-		for extReader.Remaining() > 0 {
-			extType, err := extReader.ReadUint16()
-			if err != nil {
-				break
-			}
-			extData, err := extReader.ReadVLBytes()
-			if err != nil {
-				break
-			}
-			exts = append(exts, Extension{Type: mlsext.ExtensionType(extType), Data: extData})
-		}
+	exts, err := unmarshalExtensionList(extBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing extensions: %w", err)
 	}
 
 	signature, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading signature: %w", err)
+	}
+
+	// Bytes after signature are not part of KeyPackage (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after KeyPackage: %d", buf.Remaining())
 	}
 
 	return &KeyPackage{
@@ -528,7 +543,17 @@ func UnmarshalKeyPackage(data []byte) (*KeyPackage, error) {
 // UnmarshalLeafNode parses a LeafNode from TLS format.
 func UnmarshalLeafNode(data []byte) (*LeafNode, error) {
 	buf := tls.NewReader(data)
-	return unmarshalLeafNodeFromReader(buf)
+	leafNode, err := unmarshalLeafNodeFromReader(buf)
+	if err != nil {
+		return nil, err
+	}
+
+	// Bytes after the LeafNode are not part of it (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after LeafNode: %d", buf.Remaining())
+	}
+
+	return leafNode, nil
 }
 
 // UnmarshalLeafNodeFromReader parses a LeafNode inline from r, advancing r's position.
@@ -564,20 +589,9 @@ func UnmarshalKeyPackageFromReader(r *tls.Reader) (*KeyPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
-	var exts []Extension
-	if len(extBytes) > 0 {
-		extReader := tls.NewReader(extBytes)
-		for extReader.Remaining() > 0 {
-			extType, err := extReader.ReadUint16()
-			if err != nil {
-				break
-			}
-			extData, err := extReader.ReadVLBytes()
-			if err != nil {
-				break
-			}
-			exts = append(exts, Extension{Type: mlsext.ExtensionType(extType), Data: extData})
-		}
+	exts, err := unmarshalExtensionList(extBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing extensions: %w", err)
 	}
 	signature, err := r.ReadVLBytes()
 	if err != nil {
@@ -680,22 +694,9 @@ func unmarshalLeafNodeFromReader(buf *tls.Reader) (*LeafNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
-	if len(extBytes) > 0 {
-		extReader := tls.NewReader(extBytes)
-		for extReader.Remaining() > 0 {
-			extType, err := extReader.ReadUint16()
-			if err != nil {
-				break
-			}
-			extData, err := extReader.ReadVLBytes()
-			if err != nil {
-				break
-			}
-			leafNode.Extensions = append(leafNode.Extensions, Extension{
-				Type: mlsext.ExtensionType(extType),
-				Data: extData,
-			})
-		}
+	leafNode.Extensions, err = unmarshalExtensionList(extBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing extensions: %w", err)
 	}
 
 	signature, err := buf.ReadVLBytes()
@@ -720,7 +721,7 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	for verReader.Remaining() > 0 {
 		v, verErr := verReader.ReadUint16()
 		if verErr != nil {
-			break
+			return nil, fmt.Errorf("reading protocol_version: %w", verErr)
 		}
 		caps.ProtocolVersions = append(caps.ProtocolVersions, ProtocolVersion(v))
 	}
@@ -734,7 +735,7 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	for csReader.Remaining() > 0 {
 		cs, csErr := csReader.ReadUint16()
 		if csErr != nil {
-			break
+			return nil, fmt.Errorf("reading cipher_suite: %w", csErr)
 		}
 		caps.CipherSuites = append(caps.CipherSuites, CipherSuite(cs))
 	}
@@ -748,7 +749,7 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	for extReader.Remaining() > 0 {
 		e, extLoopErr := extReader.ReadUint16()
 		if extLoopErr != nil {
-			break
+			return nil, fmt.Errorf("reading extension_type: %w", extLoopErr)
 		}
 		caps.Extensions = append(caps.Extensions, e)
 	}
@@ -762,7 +763,7 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	for propReader.Remaining() > 0 {
 		p, propErr := propReader.ReadUint16()
 		if propErr != nil {
-			break
+			return nil, fmt.Errorf("reading proposal_type: %w", propErr)
 		}
 		caps.Proposals = append(caps.Proposals, p)
 	}
@@ -776,7 +777,7 @@ func UnmarshalCapabilities(buf *tls.Reader) (*Capabilities, error) {
 	for credReader.Remaining() > 0 {
 		c, readErr := credReader.ReadUint16()
 		if readErr != nil {
-			break
+			return nil, fmt.Errorf("reading credential_type: %w", readErr)
 		}
 		caps.Credentials = append(caps.Credentials, c)
 	}

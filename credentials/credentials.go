@@ -292,7 +292,19 @@ func (c *Credential) Marshal() []byte {
 //	fmt.Printf("Type: %s\n", parsed.Type())
 func UnmarshalCredential(data []byte) (*Credential, error) {
 	buf := tls.NewReader(data)
+	cred, err := unmarshalCredentialFromBuffer(buf)
+	if err != nil {
+		return nil, err
+	}
+	// Bytes after the credential are not part of it (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after credential: %d", buf.Remaining())
+	}
+	return cred, nil
+}
 
+// unmarshalCredentialFromBuffer reads one credential from buf and advances buf past it.
+func unmarshalCredentialFromBuffer(buf *tls.Reader) (*Credential, error) {
 	credType, err := buf.ReadUint16()
 	if err != nil {
 		return nil, fmt.Errorf("reading credential_type: %w", err)
