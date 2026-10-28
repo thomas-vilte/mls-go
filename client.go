@@ -1687,6 +1687,10 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// errStateGroupMismatch reports that the store returned the state of another group for the requested
+// group ID. It is not ErrGroupNotFound: the entry holds a state, just not this group's.
+var errStateGroupMismatch = errors.New("stored group state belongs to another group")
+
 // loadGroupEntry loads group state from storage (or the in-memory cache).
 // Must be called with entry.mu held.
 func (c *Client) loadGroupEntry(ctx context.Context, groupIDBytes []byte, entry *groupEntry) (*group.Group, error) {
@@ -1708,6 +1712,12 @@ func (c *Client) loadGroupEntry(ctx context.Context, groupIDBytes []byte, entry 
 	g, err := group.UnmarshalGroupState(state)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshaling group state: %w", err)
+	}
+	// A store can hand back the state of another group under this group's key. The state
+	// carries its own group ID, so a mismatch is refused before any operation runs on the wrong group.
+	if !bytes.Equal(g.ID().AsSlice(), groupIDBytes) {
+		return nil, fmt.Errorf("%w: stored state is for group %x, requested group %x",
+			errStateGroupMismatch, g.ID().AsSlice(), groupIDBytes)
 	}
 	g.SetPaddingSize(c.paddingSize)
 	if c.cacheStrategy == CacheAlways {
