@@ -4,6 +4,7 @@ package extensions
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/internal/tls"
@@ -16,29 +17,24 @@ import (
 //
 // # Structure (RFC 9420 §11.1)
 //
-// ```text
-//
 //	struct {
-//	    ProtocolVersion protocol_versions<V>;
-//	    CipherSuite cipher_suites<V>;
-//	    ExtensionType extensions<V>;
-//	    ProposalType proposals<V>;
-//	    CredentialType credentials<V>;
+//	    ExtensionType extension_types<V>;
+//	    ProposalType proposal_types<V>;
+//	    CredentialType credential_types<V>;
 //	} RequiredCapabilities;
 //
-// ```
+// The protocol version and the cipher suite of the group need no entry: RFC 9420 §11.1 requires every
+// member to support them anyway.
 //
 // # Location
 //
-// - **KeyPackage**: No ❌
-// - **GroupInfo**: No ❌
-// - **GroupContext**: Yes ✅
+// - **KeyPackage**: No
+// - **GroupInfo**: No
+// - **GroupContext**: Yes
 //
 // # Purpose
 //
 // RequiredCapabilities ensures all group members support:
-//   - Specific protocol versions
-//   - Required cipher suites
 //   - Mandatory extensions
 //   - Supported proposal types
 //   - Accepted credential types
@@ -47,8 +43,6 @@ import (
 //
 // // Create extension
 // req := NewRequiredCapabilities()
-// req.AddProtocolVersion(0x01)      // MLS 1.0
-// req.AddCipherSuite(0x0002)         // MLS_128_DHKEMP256...
 // req.AddExtension(ExtensionTypeExternalSenders)
 //
 // // Validate
@@ -63,11 +57,14 @@ import (
 // // Deserialize
 // req2, err := UnmarshalRequiredCapabilities(data)
 type RequiredCapabilitiesExtension struct {
-	ProtocolVersions []uint16                     // Protocol versions required
-	CipherSuites     []uint16                     // Cipher suites required
-	Extensions       []ExtensionType              // Extensions that must be supported
-	Proposals        []uint16                     // Proposal types that must be supported
-	Credentials      []credentials.CredentialType // Credential types required
+	// ProtocolVersions and CipherSuites are not part of the RFC 9420 §11.1 encoding. Marshal does not
+	// write them, UnmarshalRequiredCapabilities leaves them empty, and the protocol enforces them for
+	// every member. They are kept in memory for compatibility only.
+	ProtocolVersions []uint16                     // Protocol versions (not encoded)
+	CipherSuites     []uint16                     // Cipher suites (not encoded)
+	Extensions       []ExtensionType              // extension_types: extensions that must be supported
+	Proposals        []uint16                     // proposal_types: proposal types that must be supported
+	Credentials      []credentials.CredentialType // credential_types: credential types that must be supported
 }
 
 // NewRequiredCapabilities creates a new RequiredCapabilities extension.
@@ -114,45 +111,31 @@ func (r *RequiredCapabilitiesExtension) AddCredential(cred credentials.Credentia
 // ┌─────────────────────────────────────────────────────────────┐
 // │         RequiredCapabilities Encoding                       │
 // ├─────────────────────────────────────────────────────────────┤
-// │  protocol_versions<V>    : opaque<V>                        │
-// │  cipher_suites<V>        : opaque<V>                        │
-// │  extensions<V>           : opaque<V>                        │
-// │  proposals<V>            : opaque<V>                        │
-// │  credentials<V>          : opaque<V>                        │
+// │  extension_types<V>      : opaque<V>  (uint16 entries)      │
+// │  proposal_types<V>       : opaque<V>  (uint16 entries)      │
+// │  credential_types<V>     : opaque<V>  (uint16 entries)      │
 // └─────────────────────────────────────────────────────────────┘
 // ```
+//
+// ProtocolVersions and CipherSuites have no vector in this encoding and are not written.
 func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 	buf := tls.NewWriter()
 
-	// protocol_versions<V>
-	verBuf := tls.NewWriter()
-	for _, v := range r.ProtocolVersions {
-		verBuf.WriteUint16(v)
-	}
-	buf.WriteVLBytes(verBuf.Bytes())
-
-	// cipher_suites<V>
-	csBuf := tls.NewWriter()
-	for _, cs := range r.CipherSuites {
-		csBuf.WriteUint16(cs)
-	}
-	buf.WriteVLBytes(csBuf.Bytes())
-
-	// extensions<V>
+	// extensions_types<V>
 	extBuf := tls.NewWriter()
 	for _, ext := range r.Extensions {
 		extBuf.WriteUint16(uint16(ext))
 	}
 	buf.WriteVLBytes(extBuf.Bytes())
 
-	// proposals<V>
+	// proposals_types<V>
 	propBuf := tls.NewWriter()
 	for _, p := range r.Proposals {
 		propBuf.WriteUint16(p)
 	}
 	buf.WriteVLBytes(propBuf.Bytes())
 
-	// credentials<V>
+	// credentials_types<V>
 	credBuf := tls.NewWriter()
 	for _, c := range r.Credentials {
 		credBuf.WriteUint16(uint16(c))
@@ -162,11 +145,14 @@ func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 	return buf.Bytes()
 }
 
-// UnmarshalRequiredCapabilities parses a RequiredCapabilities extension from TLS format.
+// UnmarshalRequiredCapabilities parses a RequiredCapabilities extension from TLS format (RFC 9420 §11.1).
 //
 // # Decoding
 //
-// Reads five vectors: protocol_versions, cipher_suites, extensions, proposals, credentials.
+// Reads the three vectors extension_types, proposal_types and credential_types. The data must hold
+// exactly these vectors: a truncated vector or bytes after the last one are errors. Every
+// member's protocol version and cipher suite are required by the protocol itself, so the decoded
+// ProtocolVersions and CipherSuites are always empty.
 //
 // # Example
 //
@@ -177,163 +163,96 @@ func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 //	    return err
 //	}
 //
-// // req.ProtocolVersions contains parsed versions
+// // req.Extensions contains the required extension types
 func UnmarshalRequiredCapabilities(data []byte) (*RequiredCapabilitiesExtension, error) {
 	buf := tls.NewReader(data)
 
-	// protocol_versions<V>
-	verBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, fmt.Errorf("reading protocol_versions: %w", err)
-	}
-
-	verBuf := tls.NewReader(verBytes)
-	var protocolVersions []uint16
-	for verBuf.Remaining() > 0 {
-		v, err := verBuf.ReadUint16()
-		if err != nil {
-			return nil, fmt.Errorf("reading protocol_version: %w", err)
-		}
-		protocolVersions = append(protocolVersions, v)
-	}
-
-	// cipher_suites<V>
-	csBytes, err := buf.ReadVLBytes()
-	if err != nil {
-		return nil, fmt.Errorf("reading cipher_suites: %w", err)
-	}
-
-	csBuf := tls.NewReader(csBytes)
-	var cipherSuites []uint16
-	for csBuf.Remaining() > 0 {
-		cs, err := csBuf.ReadUint16()
-		if err != nil {
-			return nil, fmt.Errorf("reading cipher_suite: %w", err)
-		}
-		cipherSuites = append(cipherSuites, cs)
-	}
-
-	// extensions<V>
+	// extensions_types<V>
 	extBytes, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading extensions: %w", err)
 	}
 
-	extBuf := tls.NewReader(extBytes)
+	extValues, err := readUint16Vector(extBytes, "extension_type")
+	if err != nil {
+		return nil, err
+	}
 	var extensions []ExtensionType
-	for extBuf.Remaining() > 0 {
-		ext, err := extBuf.ReadUint16()
-		if err != nil {
-			return nil, fmt.Errorf("reading extension_type: %w", err)
-		}
+	for _, ext := range extValues {
 		extensions = append(extensions, ExtensionType(ext))
 	}
 
-	// proposals<V> — optional trailing field; older implementations may omit it.
-	var proposals []uint16
-	if buf.Remaining() > 0 {
-		propBytes, err := buf.ReadVLBytes()
-		if err != nil {
-			return nil, fmt.Errorf("reading proposals: %w", err)
-		}
-		propBuf := tls.NewReader(propBytes)
-		for propBuf.Remaining() > 0 {
-			p, err := propBuf.ReadUint16()
-			if err != nil {
-				return nil, fmt.Errorf("reading proposal_type: %w", err)
-			}
-			proposals = append(proposals, p)
-		}
+	// proposal_types<V>
+	propBytes, err := buf.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading proposal_types: %w", err)
+	}
+	proposals, err := readUint16Vector(propBytes, "proposal_type")
+	if err != nil {
+		return nil, err
 	}
 
-	// credentials<V> — optional trailing field; older implementations may omit it.
+	// credential_types<V>
+	credBytes, err := buf.ReadVLBytes()
+	if err != nil {
+		return nil, fmt.Errorf("reading credential_types: %w", err)
+	}
+	credValues, err := readUint16Vector(credBytes, "credential_type")
+	if err != nil {
+		return nil, err
+	}
 	var creds []credentials.CredentialType
-	if buf.Remaining() > 0 {
-		credBytes, err := buf.ReadVLBytes()
-		if err != nil {
-			return nil, fmt.Errorf("reading credentials: %w", err)
-		}
-		credBuf := tls.NewReader(credBytes)
-		for credBuf.Remaining() > 0 {
-			c, err := credBuf.ReadUint16()
-			if err != nil {
-				return nil, fmt.Errorf("reading credential_type: %w", err)
-			}
-			creds = append(creds, credentials.CredentialType(c))
-		}
+	for _, c := range credValues {
+		creds = append(creds, credentials.CredentialType(c))
+	}
+
+	// Bytes after credential_types<V> are not part of RequiredCapabilities (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after RequiredCapabilities: %d", buf.Remaining())
 	}
 
 	return &RequiredCapabilitiesExtension{
-		ProtocolVersions: protocolVersions,
-		CipherSuites:     cipherSuites,
-		Extensions:       extensions,
-		Proposals:        proposals,
-		Credentials:      creds,
+		Extensions:  extensions,
+		Proposals:   proposals,
+		Credentials: creds,
 	}, nil
 }
 
-// Validate validates the RequiredCapabilities extension.
+// Validate validates the vectors that Marshal encodes.
 //
-// # Validation Rules
+// # Validation Rules:
 //
-// - protocol_versions must not be empty
-// - cipher_suites must not be empty
-// - Protocol version 0 is invalid
-// - Cipher suite 0 is invalid
+//   - Every vector may be empty: RFC 9420 §11.1 requires no vector to be present.
+//   - The value 0x0000 is reserved for extension types (§17.3), proposal types (§17.4) and
+//     credential types (§17.5), so it is invalid in those vectors.
+//
+// ProtocolVersions and CipherSuites are not encoded, so they are not validated here.
 func (r *RequiredCapabilitiesExtension) Validate() error {
-	if len(r.ProtocolVersions) == 0 {
-		return errors.New("protocol_versions cannot be empty")
+	if slices.Contains(r.Extensions, 0) {
+		return errors.New("invalid extension type 0 (reserved, RFC 9420 §17.3)")
 	}
-
-	if len(r.CipherSuites) == 0 {
-		return errors.New("cipher_suites cannot be empty")
+	if slices.Contains(r.Proposals, 0) {
+		return errors.New("invalid proposal type 0 (reserved, RFC 9420 §17.4)")
 	}
-
-	// Validate protocol versions
-	for _, v := range r.ProtocolVersions {
-		if v == 0 {
-			return errors.New("invalid protocol version 0")
-		}
+	if slices.Contains(r.Credentials, 0) {
+		return errors.New("invalid credential type 0 (reserved, RFC 9420 §17.5)")
 	}
-
-	// Validate cipher suites
-	for _, cs := range r.CipherSuites {
-		if cs == 0 {
-			return errors.New("invalid cipher suite 0")
-		}
-	}
-
 	return nil
 }
 
 // HasProtocolVersion checks if a protocol version is required.
 func (r *RequiredCapabilitiesExtension) HasProtocolVersion(version uint16) bool {
-	for _, v := range r.ProtocolVersions {
-		if v == version {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.ProtocolVersions, version)
 }
 
 // HasCipherSuite checks if a cipher suite is required.
 func (r *RequiredCapabilitiesExtension) HasCipherSuite(cs uint16) bool {
-	for _, c := range r.CipherSuites {
-		if c == cs {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.CipherSuites, cs)
 }
 
 // HasExtension checks if an extension type is required.
 func (r *RequiredCapabilitiesExtension) HasExtension(ext ExtensionType) bool {
-	for _, e := range r.Extensions {
-		if e == ext {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.Extensions, ext)
 }
 
 // Equal compares two RequiredCapabilities extensions for equality.
@@ -404,13 +323,7 @@ func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesE
 
 	// Check proposals
 	for _, p := range other.Proposals {
-		found := false
-		for _, rp := range r.Proposals {
-			if rp == p {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(r.Proposals, p)
 		if !found {
 			return false
 		}
@@ -418,13 +331,7 @@ func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesE
 
 	// Check credentials
 	for _, c := range other.Credentials {
-		found := false
-		for _, rc := range r.Credentials {
-			if rc == c {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(r.Credentials, c)
 		if !found {
 			return false
 		}
@@ -435,12 +342,7 @@ func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesE
 
 // HasCredential checks if a credential type is required.
 func (r *RequiredCapabilitiesExtension) HasCredential(cred credentials.CredentialType) bool {
-	for _, c := range r.Credentials {
-		if c == cred {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.Credentials, cred)
 }
 
 // Helper functions for slice comparison
@@ -479,4 +381,18 @@ func credentialTypeSliceEqual(a, b []credentials.CredentialType) bool {
 		}
 	}
 	return true
+}
+
+// readUint16Vector decodes the body of a vector of uint16 entries. A trailing partial entry is an error.
+func readUint16Vector(data []byte, what string) ([]uint16, error) {
+	r := tls.NewReader(data)
+	var values []uint16
+	for r.Remaining() > 0 {
+		v, err := r.ReadUint16()
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", what, err)
+		}
+		values = append(values, v)
+	}
+	return values, nil
 }

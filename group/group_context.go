@@ -111,10 +111,24 @@ func (gc *GroupContext) Marshal() []byte {
 	return w.Bytes()
 }
 
-// UnmarshalGroupContext deserializes a GroupContext from TLS format per RFC 9420 §8.1.
+// UnmarshalGroupContext deserializes a GroupContext from TLS format per RFC 9420 §8.1. The data must
+// hold exactly one GroupContext: bytes after it are an error.
 func UnmarshalGroupContext(data []byte) (*GroupContext, error) {
 	r := tls.NewReader(data)
+	gc, err := UnmarshalGroupContextFromReader(r)
+	if err != nil {
+		return nil, err
+	}
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after GroupContext: %d", r.Remaining())
+	}
 
+	return gc, nil
+}
+
+// UnmarshalGroupContextFromReader reads one GroupContext from r per RFC 9420 §8.1 and advances r past
+// it. Bytes after the GroupContext are left to the caller, as they are inside a GroupInfo.
+func UnmarshalGroupContextFromReader(r *tls.Reader) (*GroupContext, error) {
 	version, err := r.ReadUint16()
 	if err != nil {
 		return nil, fmt.Errorf("reading version: %w", err)

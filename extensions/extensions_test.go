@@ -152,7 +152,10 @@ func TestRequiredCapabilitiesExtension(t *testing.T) {
 		t.Fatalf("UnmarshalRequiredCapabilities failed: %v", err)
 	}
 
-	if !rc.Equal(parsed) {
+	// Only the RFC 9420 §11.1 vectors are encoded, so the round trip is compared on those.
+	encoded := *rc
+	encoded.ProtocolVersions, encoded.CipherSuites = nil, nil
+	if !encoded.Equal(parsed) {
 		t.Error("Parsed extension not equal to original")
 	}
 

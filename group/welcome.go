@@ -101,12 +101,17 @@ func UnmarshalGroupSecrets(data []byte) (*Secrets, error) {
 		return nil, err
 	}
 
+	// optional<T> has a presence octet of 0 or 1 only (RFC 9420 §2.1.1). Any other value is malformed.
 	var pathSecret []byte
-	if pathSecretPresent == 1 {
+	switch pathSecretPresent {
+	case 0:
+	case 1:
 		pathSecret, err = r.ReadVLBytes()
 		if err != nil {
 			return nil, err
 		}
+	default:
+		return nil, fmt.Errorf("invalid optional<PathSecret> presence octet %d", pathSecretPresent)
 	}
 
 	pskData, err := r.ReadVLBytes()
@@ -122,7 +127,8 @@ func UnmarshalGroupSecrets(data []byte) (*Secrets, error) {
 			return nil, readErr
 		}
 		pskID := PskID{PskType: pskType}
-		if pskType == 2 { // resumption
+		switch pskType {
+		case 2: // resumption
 			usage, readErr := pskReader.ReadUint8()
 			if readErr != nil {
 				return nil, readErr
@@ -138,12 +144,15 @@ func UnmarshalGroupSecrets(data []byte) (*Secrets, error) {
 			pskID.Usage = usage
 			pskID.PskGroupID = pskGroupID
 			pskID.PskEpoch = pskEpoch
-		} else { // external (1) or branch (3)
+		case 1: // external
 			id, readErr := pskReader.ReadVLBytes()
 			if readErr != nil {
 				return nil, readErr
 			}
 			pskID.ID = id
+		default:
+			// RFC 9420 §8.4: PSKType is reserved(0), external(1) or resumption(2) only.
+			return nil, fmt.Errorf("unsupported PSK type %d in GroupSecrets", pskType)
 		}
 		pskNonce, readErr := pskReader.ReadVLBytes()
 		if readErr != nil {
@@ -151,6 +160,11 @@ func UnmarshalGroupSecrets(data []byte) (*Secrets, error) {
 		}
 		pskID.Nonce = pskNonce
 		psks = append(psks, pskID)
+	}
+
+	// Bytes after psks are not part of GroupSecrets (RFC 9420 §2.1).
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after GroupSecrets: %d", r.Remaining())
 	}
 
 	return &Secrets{
@@ -297,6 +311,11 @@ func UnmarshalGroupInfo(data []byte) (*Info, error) {
 		return nil, err
 	}
 
+	// Bytes after signature are not part of GroupInfo (RFC 9420 §2.1).
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after GroupInfo: %d", r.Remaining())
+	}
+
 	return &Info{
 		GroupContext:    groupContext,
 		Extensions:      extensions,
@@ -349,7 +368,7 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	for secretsReader.Remaining() > 0 {
 		newMember, err := secretsReader.ReadVLBytes()
 		if err != nil {
-			break
+			return nil, err
 		}
 
 		kemOutput, err := secretsReader.ReadVLBytes()
@@ -373,6 +392,11 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 	encryptedGroupInfo, err := r.ReadVLBytes()
 	if err != nil {
 		return nil, err
+	}
+
+	// Bytes after encrypted_group_info are not part of Welcome (RFC 9420 §2.1).
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after Welcome: %d", r.Remaining())
 	}
 
 	return &Welcome{

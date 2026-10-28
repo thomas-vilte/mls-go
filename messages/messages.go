@@ -119,6 +119,11 @@ func UnmarshalWelcome(data []byte) (*Welcome, error) {
 		return nil, fmt.Errorf("reading encrypted_group_info: %w", err)
 	}
 
+	// Bytes after encrypted_group_info are not part of Welcome (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after Welcome: %d", buf.Remaining())
+	}
+
 	return &Welcome{
 		CipherSuite:        cipherSuite,
 		Secrets:            secrets,
@@ -253,7 +258,8 @@ func (gi *GroupInfo) marshalTBS() []byte {
 func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	buf := tls.NewReader(data)
 
-	groupContext, err := UnmarshalGroupContext(buf.BytesAfterPosition())
+	// The GroupContext is read in place, so the reader is left after it, where the GroupInfo continues.
+	groupContext, err := group.UnmarshalGroupContextFromReader(buf)
 	if err != nil {
 		return nil, fmt.Errorf("parsing GroupContext: %w", err)
 	}
@@ -262,7 +268,6 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	if !groupContext.CipherSuite.IsSupported() {
 		return nil, fmt.Errorf("parsing GroupContext: %w: 0x%04x", ciphersuite.ErrUnsupportedSuite, uint16(groupContext.CipherSuite))
 	}
-	buf.Skip(len(groupContext.Marshal()))
 
 	extBytes, err := buf.ReadVLBytes()
 	if err != nil {
@@ -286,6 +291,11 @@ func UnmarshalGroupInfo(data []byte) (*GroupInfo, error) {
 	signature, err := buf.ReadVLBytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading signature: %w", err)
+	}
+
+	// Bytes after signature are not part of GroupInfo (RFC 9420 §2.1).
+	if buf.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after GroupInfo: %d", buf.Remaining())
 	}
 
 	return &GroupInfo{

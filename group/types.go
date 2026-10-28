@@ -212,7 +212,8 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 			return nil, fmt.Errorf("reading PSK type: %w", err)
 		}
 		pskID := PskID{PskType: pskType}
-		if pskType == 2 { // resumption
+		switch pskType {
+		case 2: // resumption
 			usage, err := r.ReadUint8()
 			if err != nil {
 				return nil, fmt.Errorf("reading PSK usage: %w", err)
@@ -228,12 +229,15 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 			pskID.Usage = usage
 			pskID.PskGroupID = pskGroupID
 			pskID.PskEpoch = pskEpoch
-		} else { // external (1) or branch (3)
+		case 1: // external
 			id, err := r.ReadVLBytes()
 			if err != nil {
 				return nil, fmt.Errorf("reading PSK ID: %w", err)
 			}
 			pskID.ID = id
+		default:
+			// RFC 9420 §8.4: PSKType is reserved(0), external(1) or resumption(2) only.
+			return nil, fmt.Errorf("unsupported PSK type %d", pskType)
 		}
 		pskNonce, err := r.ReadVLBytes()
 		if err != nil {
@@ -284,6 +288,11 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		}
 		exts, _ := parseExtensions(extData)
 		proposal.GroupContextExtensions = &ContextExtensionsProposal{Extensions: exts}
+	}
+
+	// Bytes after the proposal are not part of it (RFC 9420 §2.1).
+	if r.Remaining() != 0 {
+		return nil, fmt.Errorf("trailing bytes after proposal: %d", r.Remaining())
 	}
 
 	return proposal, nil
