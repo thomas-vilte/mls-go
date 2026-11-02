@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -37,8 +38,9 @@ type Store struct {
 }
 
 var (
-	_ group.GroupStorage = (*Store)(nil)
-	_ group.KeyStore     = (*Store)(nil)
+	_ group.GroupStorage   = (*Store)(nil)
+	_ group.KeyStore       = (*Store)(nil)
+	_ group.LeafKeyDeleter = (*Store)(nil)
 )
 
 // NewStore returns an empty, ready-to-use in-memory Store.
@@ -165,6 +167,28 @@ func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.ID, le
 		return nil, ErrLeafKeyNotFound
 	}
 	return append([]byte(nil), key...), nil
+}
+
+// DeleteLeafEncryptionKeys removes every leaf encryption key and the signature key stored for the
+// given group. Keys of other groups are not touched.
+func (s *Store) DeleteLeafEncryptionKeys(ctx context.Context, groupID *group.ID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := groupKey(groupID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sigKeys, key)
+	prefix := key + ":"
+	for leafKeyValue := range s.leafKeys {
+		if strings.HasPrefix(leafKeyValue, prefix) {
+			delete(s.leafKeys, leafKeyValue)
+		}
+	}
+	return nil
 }
 
 func groupKey(groupID *group.ID) (string, error) {

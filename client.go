@@ -52,6 +52,16 @@ func (s combinedStore) Close() error {
 	return firstErr
 }
 
+// DeleteLeafEncryptionKeys forwards to the KeyStore when it implements group.LeafKeyDeleter.
+// The embedded interfaces hide the optional method of the KeyStore, so the combined store has to
+// expose it itself.
+func (s combinedStore) DeleteLeafEncryptionKeys(ctx context.Context, groupID *group.ID) error {
+	if d, ok := s.KeyStore.(group.LeafKeyDeleter); ok {
+		return d.DeleteLeafEncryptionKeys(ctx, groupID)
+	}
+	return nil
+}
+
 type clientConfig struct {
 	storage             clientStore
 	credentialValidator group.CredentialValidator
@@ -298,6 +308,12 @@ var ErrUnknownProposalRef = group.ErrUnknownProposalRef
 // ErrOwnLeafNotFound is re-exported for programmatic error checking.
 var ErrOwnLeafNotFound = group.ErrOwnLeafNotFound
 
+// ErrRemovedFromGroup is re-exported for programmatic error checking. ProcessCommit and
+// ProcessPublicMessage return it when a commit removes the local member. The local group state
+// and leaf keys are deleted first. If the store fails to delete them, its error is wrapped with
+// ErrRemovedFromGroup.
+var ErrRemovedFromGroup = group.ErrRemovedFromGroup
+
 // ErrWelcomeInvalidGroupSecrets is re-exported for programmatic error checking.
 var ErrWelcomeInvalidGroupSecrets = group.ErrWelcomeInvalidGroupSecrets
 
@@ -395,6 +411,9 @@ type MemberInfo struct {
 type groupEntry struct {
 	mu    sync.Mutex
 	group *group.Group // non-nil only when cacheStrategy == CacheAlways
+	// forgotten is set when the local member has left the group or been removed from it and its
+	// state was deleted. Nothing may write that state back afterwards. Guarded by mu.
+	forgotten bool
 }
 
 // Client is a high-level, thread-safe facade over the low-level MLS group API.
@@ -904,6 +923,9 @@ func (c *Client) CommitPendingProposals(ctx context.Context, groupID []byte, opt
 }
 
 // ProcessCommit applies a commit from another existing group member.
+//
+// If the commit removes the local member, the local group state and keys are deleted, and the
+// call returns ErrRemovedFromGroup.
 func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte) error {
 	if len(commitBytes) == 0 {
 		return ErrEmptyCommit
@@ -975,6 +997,9 @@ func (c *Client) ProcessCommit(ctx context.Context, groupID, commitBytes []byte)
 		return err
 	}
 	if err := g.ProcessReceivedCommit(ac, senderLeafIdx, g.MyLeafEncryptionKey()); err != nil {
+		if errors.Is(err, group.ErrRemovedFromGroup) {
+			return c.removedFromGroup(ctx, groupID, entry, g, oldEpoch)
+		}
 		c.log(slog.LevelWarn, "processing commit failed: group processing error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("processing received commit: %w", err)
 	}
@@ -1026,6 +1051,9 @@ func (c *Client) ProcessPublicMessage(ctx context.Context, groupID, messageBytes
 		}
 	}
 	if err := g.ProcessPublicMessage(pubMsg); err != nil {
+		if errors.Is(err, group.ErrRemovedFromGroup) {
+			return c.removedFromGroup(ctx, groupID, entry, g, oldEpoch)
+		}
 		c.log(slog.LevelWarn, "processing public message failed: group processing error", "group", groupHex(groupID), "error", err)
 		return fmt.Errorf("processing public message: %w", err)
 	}
@@ -1336,7 +1364,12 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 // departing member can no longer decrypt future messages. The returned commit
 // must be delivered to all remaining group members via the Delivery Service.
 //
-// After a successful leave, the local group state is deleted.
+// After a successful leave, the local group state is deleted. The leaf HPKE keys and the signature
+// key of the group are deleted too when the KeyStore implements group.LeafKeyDeleter.
+//
+// If the local state cannot be deleted, LeaveGroup returns the commit together with an error that
+// wraps the store error. The commit must still be delivered, and the group is no longer usable
+// through this Client in either case.
 func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) ([]byte, error) {
 	entry, g, err := c.lockGroup(ctx, groupID)
 	if err != nil {
@@ -1351,18 +1384,20 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	// Delete local state now that the commit has been created.
-	gID := group.NewGroupID(cloneBytes(groupID))
-	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
-		return nil, fmt.Errorf("deleting group state: %w", err)
+
+	// Delete local state now that the commit has been created. The commit is returned even when the
+	// deletion fails: the remaining members still need it, and it cannot be created again.
+	forgetErr := c.forgetGroup(ctx, groupID, entry)
+	if forgetErr != nil {
+		c.log(slog.LevelWarn, "left group: deleting local state failed", "group", groupHex(groupID), "error", forgetErr)
+	} else {
+		c.log(slog.LevelInfo, "left group", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64())
 	}
-	// groupEntries is guarded by c.mu, not by the entry.mu held above.
-	c.mu.Lock()
-	delete(c.groupEntries, groupCacheKeyBytes(groupID))
-	c.mu.Unlock()
-	c.log(slog.LevelInfo, "left group", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64())
 	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
 	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
+	if forgetErr != nil {
+		return commit, fmt.Errorf("leaving group: %w", forgetErr)
+	}
 	return commit, nil
 }
 
@@ -1797,6 +1832,11 @@ func (c *Client) lockGroup(ctx context.Context, groupID []byte) (*groupEntry, *g
 // If Close ran during the load, it releases the entry and returns ErrClientClosed.
 // The result is never a success on a closed Client.
 func (c *Client) loadLockedGroup(ctx context.Context, groupID []byte, entry *groupEntry) (*groupEntry, *group.Group, error) {
+	// An entry whose group was left or removed is gone, even if a stale pointer still reaches it.
+	if entry.forgotten {
+		entry.mu.Unlock()
+		return nil, nil, ErrGroupNotFound
+	}
 	g, err := c.loadGroupEntry(ctx, groupID, entry)
 	if err != nil {
 		entry.mu.Unlock()
@@ -1806,6 +1846,7 @@ func (c *Client) loadLockedGroup(ctx context.Context, groupID []byte, entry *gro
 		entry.mu.Unlock()
 		return nil, nil, ErrClientClosed
 	}
+
 	return entry, g, nil
 }
 
@@ -2018,7 +2059,9 @@ func commitPendingOptionsForCommit(opts CommitPendingProposalsOptions) []group.I
 //
 // The handle is in-memory only and is not persisted across process restarts.
 // The application MUST call either ConfirmPendingCommit or DiscardPendingCommit
-// exactly once to release the group from StatePendingCommit.
+// exactly once to release the group from StatePendingCommit. If the local member
+// has left the group or been removed from it in the meantime, both return
+// ErrGroupNotFound and release the handle.
 type PendingCommitHandle struct {
 	c                *Client
 	g                *group.Group
@@ -2029,6 +2072,17 @@ type PendingCommitHandle struct {
 	opts             CommitPendingProposalsOptions
 	joinIdentities   [][]byte
 	removeIdentities [][]byte
+	// released records that the handle was counted out of pendingHandles. Guarded by entry.mu.
+	released bool
+}
+
+// release counts the handle out of pendingHandles so that Close can proceed. It runs at most once
+// per handle. The caller holds entry.mu.
+func (h *PendingCommitHandle) release() {
+	if h.c != nil && !h.released {
+		h.released = true
+		h.c.pendingHandles.Done()
+	}
 }
 
 // CommitBytes returns the serialized MLS Commit message to send to the Delivery Service.
@@ -2129,6 +2183,13 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 	handle.entry.mu.Lock()
 	defer handle.entry.mu.Unlock()
 
+	// The local member left or was removed after the commit was staged. Persisting the group now
+	// would write back the state that forgetGroup deleted.
+	if handle.entry.forgotten {
+		handle.release()
+		return nil, ErrGroupNotFound
+	}
+
 	g := handle.g
 
 	if err := g.MergeCommit(handle.staged); err != nil {
@@ -2171,10 +2232,7 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 		handle.entry.group = nil
 	}
 
-	// Signal that this handle has been resolved so Close() can proceed.
-	if handle.c != nil {
-		handle.c.pendingHandles.Done()
-	}
+	handle.release()
 
 	return welcomeBytes, nil
 }
@@ -2192,6 +2250,12 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 	handle.entry.mu.Lock()
 	defer handle.entry.mu.Unlock()
 
+	// As in ConfirmPendingCommit, a forgotten group must not be persisted again.
+	if handle.entry.forgotten {
+		handle.release()
+		return ErrGroupNotFound
+	}
+
 	g := handle.g
 
 	if err := g.DiscardPendingCommit(); err != nil {
@@ -2208,10 +2272,7 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 		handle.entry.group = nil
 	}
 
-	// Signal that this handle has been resolved so Close() can proceed.
-	if handle.c != nil {
-		handle.c.pendingHandles.Done()
-	}
+	handle.release()
 
 	return nil
 }
@@ -2390,6 +2451,58 @@ func (c *Client) validateGroupMembers(ctx context.Context, g *group.Group) error
 		}
 	}
 	return nil
+}
+
+// forgetGroup deletes the local state of a group that this client has left or been removed from
+// (RFC 9420 §9.2). The group is forgotten in memory before the store is asked to delete
+// anything: the entry is marked as forgotten, so no operation holding it can use or write the state
+// again, and even when a store deletion fails. The persisted group state and the leaf HPKE keys
+// (when the store implements group.LeafKeyDeleter) are both deleted, each attempt reporting its own
+// error. The entry leaves c.groupEntries only when every deletion succeeds. Otherwise it stays as a
+// tombstone, so lockGroup keeps reporting ErrGroupNotFound through this Client.
+// The caller holds entry.mu.
+func (c *Client) forgetGroup(ctx context.Context, groupID []byte, entry *groupEntry) error {
+	gID := group.NewGroupID(cloneBytes(groupID))
+	// Drop the cached group too, so that an operation waiting on entry.mu reloads from storage
+	// and finds nothing, instead of reusing the removed state. Mark the entry as forgotten
+	// so that no operation holding it can write the state back.
+	entry.group = nil
+	entry.forgotten = true
+
+	var errs []error
+	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
+		errs = append(errs, fmt.Errorf("deleting group state: %w", err))
+	}
+	if d, ok := c.store.(group.LeafKeyDeleter); ok {
+		if err := d.DeleteLeafEncryptionKeys(ctx, gID); err != nil {
+			errs = append(errs, fmt.Errorf("deleting leaf encryption keys: %w", err))
+		}
+	}
+	if len(errs) > 0 {
+		// The tombstone stays in c.groupEntries, so the group cannot be loaded again from the store.
+		return errors.Join(errs...)
+	}
+	// groupEntries is guarded by c.mu, not by the entry.mu held by the caller.
+	c.mu.Lock()
+	delete(c.groupEntries, groupCacheKeyBytes(groupID))
+	c.mu.Unlock()
+	return nil
+}
+
+// removedFromGroup handles a commit that removes the local member. It forgets the local
+// group state and keys, emits EventMemberRemoved and returns ErrRemovedFromGroup, so the member
+// cannot keep using the group. epoch is the epoch the member was still in. The caller holds
+// entry.mu.
+func (c *Client) removedFromGroup(ctx context.Context, groupID []byte, entry *groupEntry, g *group.Group, epoch uint64) error {
+	c.log(slog.LevelInfo, "removed from group", "group", groupHex(groupID), "epoch", epoch)
+	err := c.forgetGroup(ctx, groupID, entry)
+	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: epoch, MemberIdentity: cloneBytes(c.identity)})
+	if err != nil {
+		c.log(slog.LevelWarn, "removed from group: deleting local state failed", "group", groupHex(groupID), "error", err)
+		return fmt.Errorf("%w: %w", ErrRemovedFromGroup, err)
+	}
+
+	return ErrRemovedFromGroup
 }
 
 type clientGroupSnapshot struct {

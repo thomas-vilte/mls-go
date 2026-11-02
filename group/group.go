@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -1760,6 +1761,9 @@ func (g *Group) ProcessReceivedCommit(
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
 		if err != nil {
+			if errors.Is(err, ErrOwnLeafNotFound) && commitRemovesLeaf(proposals, g.ownLeafIndex) {
+				return ErrRemovedFromGroup
+			}
 			return fmt.Errorf("decrypting path secret (external): %w", err)
 		}
 	} else if commit.Path != nil {
@@ -1792,6 +1796,11 @@ func (g *Group) ProcessReceivedCommit(
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
 		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
 		if err != nil {
+			// The commit was fully validated up to here. If its path cannot be decrypted because our
+			// leaf is gone and the commit removes it, the member was removed.
+			if errors.Is(err, ErrOwnLeafNotFound) && commitRemovesLeaf(proposals, g.ownLeafIndex) {
+				return ErrRemovedFromGroup
+			}
 			return fmt.Errorf("decrypting path secret: %w", err)
 		}
 	}
@@ -1804,6 +1813,17 @@ func (g *Group) ProcessReceivedCommit(
 		rootPathSecret:       rootPathSecret,
 	}
 	return g.MergeCommit(staged)
+}
+
+// commitRemovesLeaf reports whether one of the validated proposals of a commit is a Remove for leaf
+// (RFC 9420 §12.1.3). Proposals sent by reference are already resolved in proposals.
+func commitRemovesLeaf(proposals []*Proposal, leaf LeafNodeIndex) bool {
+	for _, p := range proposals {
+		if p.Type == ProposalTypeRemove && p.Remove != nil && p.Remove.Removed == leaf {
+			return true
+		}
+	}
+	return false
 }
 
 // decryptPathSecret decrypts the path secret from an UpdatePath for this receiver.
