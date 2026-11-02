@@ -56,10 +56,10 @@ func readRawBody(r *tls.Reader, decoder rawBodyDecoder, ct ContentType, hasMembe
 		return bodyData, nil
 	}
 
-	// Try deterministic decoder on the full remaining bytes first.
-	// The byte-by-byte scanner below passes truncated slices to the decoder,
-	// which can fail for complex bodies (e.g., commits with UpdatePath) that
-	// need to see the full data to parse correctly.
+	// With a deterministic decoder, the body ends where the decoder stops on the
+	// full remaining bytes. Truncated prefixes can fail for complex bodies (e.g.,
+	// commits with UpdatePath), and re-decoding them costs O(n^2) on
+	// unauthenticated input, so no prefix is decoded here.
 	if decoder != nil {
 		consumed, err := decoder(remaining)
 		if err == nil && consumed > 0 && consumed <= len(remaining) {
@@ -70,23 +70,19 @@ func readRawBody(r *tls.Reader, decoder rawBodyDecoder, ct ContentType, hasMembe
 				return bodyData, nil
 			}
 		}
+		return nil, fmt.Errorf("unable to locate raw handshake body")
 	}
 
-	// Fall back to byte-by-byte scanner for cases without a deterministic decoder.
+	// Without a deterministic decoder, the body ends at the first position whose
+	// remaining bytes form a valid auth tail. validAuthTail does not copy its
+	// input, so this scan is linear.
 	for i := 1; i <= len(remaining); i++ {
-		candidate := remaining[:i]
-		if decoder != nil {
-			consumed, err := decoder(candidate)
-			if err != nil || consumed != len(candidate) {
-				continue
-			}
-		}
 		if !validAuthTail(remaining[i:], ct, hasMembershipTag) {
 			continue
 		}
 
 		bodyData := make([]byte, i)
-		copy(bodyData, candidate)
+		copy(bodyData, remaining[:i])
 		r.Skip(i)
 		return bodyData, nil
 	}
@@ -96,13 +92,13 @@ func readRawBody(r *tls.Reader, decoder rawBodyDecoder, ct ContentType, hasMembe
 
 func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
 	base := tls.NewReader(tail)
-	if _, err := base.ReadVLBytes(); err != nil {
+	if err := skipVLBytes(base); err != nil {
 		return false
 	}
 
 	if ct != ContentTypeCommit {
 		if hasMembershipTag {
-			if _, err := base.ReadVLBytes(); err != nil {
+			if err := skipVLBytes(base); err != nil {
 				return false
 			}
 		}
@@ -116,14 +112,14 @@ func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
 	// Try both layouts.
 	tryWithConfirmation := func() bool {
 		r := tls.NewReader(tail)
-		if _, err := r.ReadVLBytes(); err != nil {
+		if err := skipVLBytes(r); err != nil {
 			return false
 		}
-		if _, err := r.ReadVLBytes(); err != nil {
+		if err := skipVLBytes(r); err != nil {
 			return false
 		}
 		if hasMembershipTag {
-			if _, err := r.ReadVLBytes(); err != nil {
+			if err := skipVLBytes(r); err != nil {
 				return false
 			}
 		}
@@ -132,11 +128,11 @@ func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
 
 	tryWithoutConfirmation := func() bool {
 		r := tls.NewReader(tail)
-		if _, err := r.ReadVLBytes(); err != nil {
+		if err := skipVLBytes(r); err != nil {
 			return false
 		}
 		if hasMembershipTag {
-			if _, err := r.ReadVLBytes(); err != nil {
+			if err := skipVLBytes(r); err != nil {
 				return false
 			}
 		}
@@ -144,4 +140,19 @@ func validAuthTail(tail []byte, ct ContentType, hasMembershipTag bool) bool {
 	}
 
 	return tryWithConfirmation() || tryWithoutConfirmation()
+}
+
+// skipVLBytes advances r past one variable-length vector without copying it.
+// It fails under the same conditions as tls.Reader.ReadVLBytes.
+func skipVLBytes(r *tls.Reader) error {
+	length, err := r.ReadMLSVarint()
+	if err != nil {
+		return err
+	}
+	if int(length) > r.Remaining() {
+		return tls.ErrBufferUnderrun
+	}
+	r.Skip(int(length))
+
+	return nil
 }
