@@ -96,9 +96,14 @@ func (ls *LeafSecret) BeginDecryption(gen uint32) (*PendingDecryption, error) {
 }
 
 // Key returns the AEAD key of the generation, taken from the handshake ratchet when handshake is
-// set and from the application ratchet otherwise. It matches HandshakeKey and ApplicationKey.
+// set and from the application ratchet otherwise. It matches HandshakeKey and ApplicationKey, and it
+// fails when the secret of that ratchet was already consumed.
 func (p *PendingDecryption) Key(handshake bool) ([]byte, error) {
-	key, err := p.secret(handshake).KdfExpandLabel("key", uint32ToBytes(p.gen), p.ls.cs.AEADKeyLength())
+	secret := p.secret(handshake)
+	if secret == nil {
+		return nil, fmt.Errorf("no secret for generation %d: consumed or leaf deleted", p.gen)
+	}
+	key, err := secret.KdfExpandLabel("key", uint32ToBytes(p.gen), p.ls.cs.AEADKeyLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving content key: %w", err)
 	}
@@ -106,9 +111,13 @@ func (p *PendingDecryption) Key(handshake bool) ([]byte, error) {
 }
 
 // Nonce returns the AEAD nonce of the generation, before the reuse guard is applied. It matches
-// HandshakeNonce and ApplicationNonce.
+// HandshakeNonce and ApplicationNonce, and it fails when the secret of that ratchet was already consumed.
 func (p *PendingDecryption) Nonce(handshake bool) ([]byte, error) {
-	nonce, err := p.secret(handshake).KdfExpandLabel("nonce", uint32ToBytes(p.gen), p.ls.cs.AEADNonceLength())
+	secret := p.secret(handshake)
+	if secret == nil {
+		return nil, fmt.Errorf("no secret for generation %d: consumed or leaf deleted", p.gen)
+	}
+	nonce, err := secret.KdfExpandLabel("nonce", uint32ToBytes(p.gen), p.ls.cs.AEADNonceLength())
 	if err != nil {
 		return nil, fmt.Errorf("deriving content nonce: %w", err)
 	}
@@ -122,8 +131,9 @@ func (p *PendingDecryption) secret(handshake bool) *ciphersuite.Secret {
 	return p.application
 }
 
-// Commit moves the LeafSecret to the generation: the skipped generations go into the cache and
-// the ratchet is set to gen. It is a no-op for a cached or current generation, and after Discard.
+// Commit moves the LeafSecret to the generation: the skipped generations go into the cache, except the
+// secrets already consumed on a ratchet, and the ratchet is set to gen. It is a no-op for a cached or
+// current generation, and after Discard.
 func (p *PendingDecryption) Commit() {
 	if p.done {
 		return
@@ -134,7 +144,7 @@ func (p *PendingDecryption) Commit() {
 	}
 	ls := p.ls
 	for _, s := range p.steps {
-		ls.storeCachedSecret(s.gen, s.application, s.handshake)
+		ls.cacheSkippedGeneration(s.gen, s.application, s.handshake)
 	}
 	p.steps = nil
 

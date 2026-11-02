@@ -51,6 +51,55 @@ func newValidClientPair(t *testing.T, strategy CacheStrategy) (alice, bob *Clien
 	return alice, bob, gid
 }
 
+// TestInOrderDeliveryWithCacheNone checks that legitimate messages delivered in order with CacheNone are each
+// accepted once.
+func TestInOrderDeliveryWithCacheNone(t *testing.T) {
+	ctx := context.Background()
+	alice, bob, gid := newValidClientPair(t, CacheNone)
+	for i := 0; i < 20; i++ {
+		ct, err := alice.SendMessage(ctx, gid, []byte{byte(i)})
+		if err != nil {
+			t.Fatalf("SendMessage(%d): %v", i, err)
+		}
+		msg, err := bob.ReceiveMessage(ctx, gid, ct)
+		if err != nil {
+			t.Fatalf("ReceiveMessage(%d): %v", i, err)
+		}
+		if len(msg.Plaintext) != 1 || msg.Plaintext[0] != byte(i) {
+			t.Fatalf("ReceiveMessage(%d) plaintext = %v", i, msg.Plaintext)
+		}
+	}
+}
+
+// TestOutOfOrderDeliveryWithCacheAlways checks that legitimate messages delivered out of order with
+// CacheAlways, the last one first, are each accepted once.
+func TestOutOfOrderDeliveryWithCacheAlways(t *testing.T) {
+	ctx := context.Background()
+	alice, bob, gid := newValidClientPair(t, CacheAlways)
+	const n = 20
+	cts := make([][]byte, n)
+	for i := range cts {
+		ct, err := alice.SendMessage(ctx, gid, []byte{byte(i)})
+		if err != nil {
+			t.Fatalf("SendMessage(%d): %v", i, err)
+		}
+		cts[i] = ct
+	}
+	order := append([]int{n - 1}, make([]int, 0, n-1)...)
+	for i := 0; i < n-1; i++ {
+		order = append(order, i)
+	}
+	for _, i := range order {
+		msg, err := bob.ReceiveMessage(ctx, gid, cts[i])
+		if err != nil {
+			t.Fatalf("out-of-order ReceiveMessage(%d): %v", i, err)
+		}
+		if len(msg.Plaintext) != 1 || msg.Plaintext[0] != byte(i) {
+			t.Fatalf("out-of-order ReceiveMessage(%d) plaintext = %v", i, msg.Plaintext)
+		}
+	}
+}
+
 // TestOtherMembersProcessLeaveCommit checks that alice processes the leave commit of bob.
 func TestOtherMembersProcessLeaveCommit(t *testing.T) {
 	ctx := context.Background()
