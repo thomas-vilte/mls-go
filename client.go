@@ -414,6 +414,12 @@ type groupEntry struct {
 	// forgotten is set when the local member has left the group or been removed from it and its
 	// state was deleted. Nothing may write that state back afterwards. Guarded by mu.
 	forgotten bool
+	// storedLeafIndex and storedLeafKey are the leaf index and leaf HPKE key that persistGroup last
+	// wrote to the store for this group, and sigKeyStored records that the signature key was written.
+	// A new or reloaded entry has no record, so its first persist writes both keys. Guarded by mu.
+	storedLeafIndex group.LeafNodeIndex
+	storedLeafKey   []byte
+	sigKeyStored    bool
 }
 
 // Client is a high-level, thread-safe facade over the low-level MLS group API.
@@ -1861,6 +1867,10 @@ func (c *Client) isClosed() bool {
 // For per-group operations this is called with entry.mu held.
 // For global-lock operations (CreateGroup, JoinGroup, ExternalJoin) it is called
 // with c.mu held exclusively, which also provides the necessary exclusion.
+//
+// The group state is saved on every call. The signature key is written once per entry, and the
+// leaf key only when it differs from the one the entry last wrote, so an operation that does not
+// change the keys does not rewrite them.
 func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupEntry) error {
 	state, err := g.MarshalState()
 	if err != nil {
@@ -1870,14 +1880,20 @@ func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupE
 	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
 		return fmt.Errorf("saving group state: %w", err)
 	}
-	if err := c.store.StoreSignatureKey(ctx, groupID, c.sigKey); err != nil {
-		return fmt.Errorf("saving signature key: %w", err)
+	if !entry.sigKeyStored {
+		if err := c.store.StoreSignatureKey(ctx, groupID, c.sigKey); err != nil {
+			return fmt.Errorf("saving signature key: %w", err)
+		}
+		entry.sigKeyStored = true
 	}
 	leafKey := g.MyLeafEncryptionKey()
-	if len(leafKey) > 0 {
-		if err := c.store.StoreLeafEncryptionKey(ctx, groupID, g.OwnLeafIndex(), leafKey); err != nil {
+	leafIndex := g.OwnLeafIndex()
+	if len(leafKey) > 0 && (entry.storedLeafIndex != leafIndex || !bytes.Equal(entry.storedLeafKey, leafKey)) {
+		if err := c.store.StoreLeafEncryptionKey(ctx, groupID, leafIndex, leafKey); err != nil {
 			return fmt.Errorf("saving leaf encryption key: %w", err)
 		}
+		entry.storedLeafIndex = leafIndex
+		entry.storedLeafKey = cloneBytes(leafKey)
 	}
 	if c.cacheStrategy == CacheAlways {
 		entry.group = g
@@ -2468,6 +2484,9 @@ func (c *Client) forgetGroup(ctx context.Context, groupID []byte, entry *groupEn
 	// so that no operation holding it can write the state back.
 	entry.group = nil
 	entry.forgotten = true
+	// A forgotten entry never writes again, so its record of the stored keys is dropped too.
+	entry.storedLeafKey = nil
+	entry.sigKeyStored = false
 
 	var errs []error
 	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
