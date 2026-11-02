@@ -105,6 +105,23 @@ func TestLeaveGroupReturnsCommitWhenLeafKeyDeletionFails(t *testing.T) {
 	}
 }
 
+// TestClientRefusesReplayWithCacheNone checks that the replay protection survives the reload that CacheNone
+// does before each operation, so the last application message is not delivered a second time.
+func TestClientRefusesReplayWithCacheNone(t *testing.T) {
+	ctx := context.Background()
+	alice, bob, gid := newTwoMemberClientGroup(t, memorystore.NewStore(), CacheNone)
+	ct, err := alice.SendMessage(ctx, gid, []byte("pay 10"))
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if _, err := bob.ReceiveMessage(ctx, gid, ct); err != nil {
+		t.Fatalf("ReceiveMessage(first): %v", err)
+	}
+	if msg, err := bob.ReceiveMessage(ctx, gid, ct); err == nil {
+		t.Errorf("replay of the last application message accepted with CacheNone: plaintext %q delivered again", msg.Plaintext)
+	}
+}
+
 // TestClientRefusesStateOfAnotherGroup checks that the Client refuses the state of gid2 handed back by a store
 // under the key of gid1, and that it keeps serving gid2.
 func TestClientRefusesStateOfAnotherGroup(t *testing.T) {

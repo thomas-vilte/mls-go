@@ -312,3 +312,32 @@ func TestConcurrentSendsWriteKeysOnce(t *testing.T) {
 		t.Errorf("after concurrent sends: sig writes=%d leaf writes=%d, want 1 and 1", sig, leaf)
 	}
 }
+
+// TestClientRefusesReplayOfLatestMessageAfterReload checks that the last application message delivered twice is
+// refused with CacheAlways, where the mark stays in memory, and with CacheNone, where the group is reloaded from
+// the store before each operation.
+func TestClientRefusesReplayOfLatestMessageAfterReload(t *testing.T) {
+	strategies := []struct {
+		name string
+		s    CacheStrategy
+	}{
+		{"CacheAlways", CacheAlways},
+		{"CacheNone", CacheNone},
+	}
+	for _, tc := range strategies {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			alice, bob, gid := newTwoMemberClientGroup(t, memorystore.NewStore(), tc.s)
+			ct, err := alice.SendMessage(ctx, gid, []byte("pay 10"))
+			if err != nil {
+				t.Fatalf("SendMessage: %v", err)
+			}
+			if _, err := bob.ReceiveMessage(ctx, gid, ct); err != nil {
+				t.Fatalf("ReceiveMessage(first): %v", err)
+			}
+			if msg, err := bob.ReceiveMessage(ctx, gid, ct); err == nil {
+				t.Errorf("replay of the last application message accepted with %s: plaintext %q delivered again", tc.name, msg.Plaintext)
+			}
+		})
+	}
+}

@@ -17,6 +17,7 @@ package secrettree
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/internal/tls"
@@ -74,7 +75,8 @@ type Tree struct {
 // The ratchet advances forward-only (generation increases monotonically).
 // To move to generation G, call ratchetTo(G) or use Advance() for sequential steps.
 // cachedGenSecret holds the ratchet secrets for a past generation to support
-// out-of-order message decryption (RFC 9420 §9.2).
+// out-of-order message decryption (RFC 9420 §9.2). A nil field is a secret that was
+// consumed on that ratchet, and the entry is deleted once both fields are nil.
 type cachedGenSecret struct {
 	application *ciphersuite.Secret
 	handshake   *ciphersuite.Secret
@@ -87,6 +89,11 @@ type LeafState struct {
 	LeafSecret        []byte `json:"leaf_secret"`
 	ApplicationSecret []byte `json:"application_secret"`
 	HandshakeSecret   []byte `json:"handshake_secret"`
+	// UsedApplicationGenerations and UsedHandshakeGenerations list the generations marked as consumed
+	// on each ratchet at or ahead of the ratchet position (see LeafSecret.MarkGenerationUsed). Without
+	// them a restored tree would accept again a message it already decrypted.
+	UsedApplicationGenerations []uint32 `json:"used_application_generations,omitempty"`
+	UsedHandshakeGenerations   []uint32 `json:"used_handshake_generations,omitempty"`
 }
 
 // TreeState holds the full serializable state of a Tree, including per-leaf ratchet
@@ -132,17 +139,22 @@ type LeafSecret struct {
 	sequenceNumber           uint64 // message counter (separate from ratchet generation)
 	maxForwardDistance       uint32 // largest forward jump one message may cause (see DefaultMaxForwardDistance)
 	// secretCache retains ratchet secrets for past generations to support
-	// out-of-order decryption. At most maxCachedGenerations are kept: when the cache is
-	// full, the oldest generation is evicted to make room (see storeCachedSecret).
+	// out-of-order decryption. A secret is deleted once a successful decryption consumes
+	// it (RFC 9420 §9.2, see consumeCachedSecret). At most maxCachedGenerations entries
+	// are kept: when the cache is full, the oldest generation is evicted to make room
+	// (see storeCachedSecret).
 	secretCache map[uint32]*cachedGenSecret
 	// secretCacheOrder lists the generations in secretCache, oldest first. Generations are
 	// stored in increasing order, so the front entry is the one evicted next.
 	secretCacheOrder []uint32
-	// usedApplicationGenerations / usedHandshakeGenerations track which generations
-	// have already been decrypted per ratchet type. RFC 9420 §9.2 requires replay
-	// protection, and the two ratchets are independent (each starts at generation 0),
-	// so they must be tracked separately to avoid false replay errors when e.g. a
-	// handshake message and an application message both use generation 0.
+	// usedApplicationGenerations / usedHandshakeGenerations mark the generations that were
+	// consumed on each ratchet while the ratchet still sits on them: the current generation,
+	// or one that a pending decryption is about to commit to. A generation behind the ratchet
+	// is never marked. Its consumed secret is gone from secretCache, so CheckGenerationUnused
+	// refuses it, and the mark is pruned when the ratchet moves past it (see
+	// cacheSkippedGeneration). The two ratchets are independent (each starts at generation 0),
+	// so they are tracked separately to avoid false replay errors when e.g. a handshake
+	// message and an application message both use generation 0.
 	usedApplicationGenerations map[uint32]struct{}
 	usedHandshakeGenerations   map[uint32]struct{}
 }
@@ -274,7 +286,8 @@ func (t *Tree) LeafForIndex(leafIndex uint32) (*LeafSecret, error) {
 
 // MarshalFull exports the full persisted state of the secret tree, including
 // initialized per-leaf ratchet state. Past-generation caches are intentionally
-// excluded to preserve forward secrecy.
+// excluded to preserve forward secrecy. The used-generation marks of each ratchet
+// are included, so a restored tree still refuses a generation it already consumed.
 func (t *Tree) MarshalFull() *TreeState {
 	if t == nil {
 		return nil
@@ -292,11 +305,13 @@ func (t *Tree) MarshalFull() *TreeState {
 			continue
 		}
 		state.LeafStates[leafIndex] = LeafState{
-			Generation:        leaf.generation,
-			SequenceNumber:    leaf.sequenceNumber,
-			LeafSecret:        cloneSecretBytes(leaf.leafSecret),
-			ApplicationSecret: cloneSecretBytes(leaf.applicationRatchetSecret),
-			HandshakeSecret:   cloneSecretBytes(leaf.handshakeRatchetSecret),
+			Generation:                 leaf.generation,
+			SequenceNumber:             leaf.sequenceNumber,
+			LeafSecret:                 cloneSecretBytes(leaf.leafSecret),
+			ApplicationSecret:          cloneSecretBytes(leaf.applicationRatchetSecret),
+			HandshakeSecret:            cloneSecretBytes(leaf.handshakeRatchetSecret),
+			UsedApplicationGenerations: sortedGenerations(leaf.usedApplicationGenerations),
+			UsedHandshakeGenerations:   sortedGenerations(leaf.usedHandshakeGenerations),
 		}
 	}
 
@@ -404,9 +419,9 @@ func (ls *LeafSecret) ratchetTo(gen uint32) error {
 			return fmt.Errorf("advance handshake ratchet (gen %d): %w", g, err)
 		}
 
-		// Cache secrets at generation g before advancing, for out-of-order delivery.
-		// Clone secrets before zeroing so cache holds the gen-g value.
-		ls.storeCachedSecret(g, ls.applicationRatchetSecret.Clone(), ls.handshakeRatchetSecret.Clone())
+		// Keep the secrets of generation g for out-of-order delivery, unless they were consumed.
+		// Clone secrets before zeroing so the kept copy holds the gen-g value.
+		ls.cacheSkippedGeneration(g, ls.applicationRatchetSecret.Clone(), ls.handshakeRatchetSecret.Clone())
 
 		ls.applicationRatchetSecret.SecureZero() // RFC §9.2: delete consumed secret
 		ls.applicationRatchetSecret = next
@@ -448,6 +463,55 @@ func (ls *LeafSecret) evictOldestCachedSecret() {
 			cached.handshake.SecureZero()
 			delete(ls.secretCache, oldest)
 			return
+		}
+	}
+}
+
+// cacheSkippedGeneration is called when the ratchet moves past generation gen. The secret of each ratchet
+// is kept for out-of-order decryption only if gen was not consumed on that ratchet: a consumed secret is
+// wiped instead (RFC 9420 §9.2). The mark of gen is pruned here, because gen is behind the ratchet from now
+// on. A replay of gen is refused by CheckGenerationUnused, since its secret is no longer cached for a
+// consumed ratchet. The cache takes ownership of both secrets.
+func (ls *LeafSecret) cacheSkippedGeneration(gen uint32, application, handshake *ciphersuite.Secret) {
+	if _, used := ls.usedApplicationGenerations[gen]; used {
+		delete(ls.usedApplicationGenerations, gen)
+		application.SecureZero()
+		application = nil
+	}
+	if _, used := ls.usedHandshakeGenerations[gen]; used {
+		delete(ls.usedHandshakeGenerations, gen)
+		handshake.SecureZero()
+		handshake = nil
+	}
+	if application == nil && handshake == nil {
+		return
+	}
+	ls.storeCachedSecret(gen, application, handshake)
+}
+
+// consumeCachedSecret deletes the secret of one ratchet for generation gen, which a successful decryption
+// has just consumed (RFC 9420 §9.2). The entry leaves the cache, and the eviction order, once neither
+// ratchet has a secret left for gen. Consumed secrets are never replayable from the cache.
+func (ls *LeafSecret) consumeCachedSecret(gen uint32, handshake bool) {
+	cached, ok := ls.secretCache[gen]
+	if !ok {
+		return
+	}
+	if handshake {
+		cached.handshake.SecureZero()
+		cached.handshake = nil
+	} else {
+		cached.application.SecureZero()
+		cached.application = nil
+	}
+	if cached.application != nil || cached.handshake != nil {
+		return
+	}
+	delete(ls.secretCache, gen)
+	for i, g := range ls.secretCacheOrder {
+		if g == gen {
+			ls.secretCacheOrder = append(ls.secretCacheOrder[:i], ls.secretCacheOrder[i+1:]...)
+			break
 		}
 	}
 }
@@ -517,7 +581,7 @@ func (ls *LeafSecret) ApplicationKey(generation uint32) ([]byte, error) {
 	}
 	secret := ls.applicationRatchetSecret
 	if uint64(generation) < ls.generation {
-		if cached, ok := ls.secretCache[generation]; ok {
+		if cached, ok := ls.secretCache[generation]; ok && cached.application != nil {
 			secret = cached.application
 		} else {
 			return nil, fmt.Errorf("application key for generation %d not in cache", generation)
@@ -556,7 +620,7 @@ func (ls *LeafSecret) ApplicationNonce(generation uint32) ([]byte, error) {
 	}
 	secret := ls.applicationRatchetSecret
 	if uint64(generation) < ls.generation {
-		if cached, ok := ls.secretCache[generation]; ok {
+		if cached, ok := ls.secretCache[generation]; ok && cached.application != nil {
 			secret = cached.application
 		} else {
 			return nil, fmt.Errorf("application nonce for generation %d not in cache", generation)
@@ -599,7 +663,7 @@ func (ls *LeafSecret) HandshakeKey(generation uint32) ([]byte, error) {
 	}
 	secret := ls.handshakeRatchetSecret
 	if uint64(generation) < ls.generation {
-		if cached, ok := ls.secretCache[generation]; ok {
+		if cached, ok := ls.secretCache[generation]; ok && cached.handshake != nil {
 			secret = cached.handshake
 		} else {
 			return nil, fmt.Errorf("handshake key for generation %d not in cache", generation)
@@ -638,7 +702,7 @@ func (ls *LeafSecret) HandshakeNonce(generation uint32) ([]byte, error) {
 	}
 	secret := ls.handshakeRatchetSecret
 	if uint64(generation) < ls.generation {
-		if cached, ok := ls.secretCache[generation]; ok {
+		if cached, ok := ls.secretCache[generation]; ok && cached.handshake != nil {
 			secret = cached.handshake
 		} else {
 			return nil, fmt.Errorf("handshake nonce for generation %d not in cache", generation)
@@ -705,10 +769,22 @@ func (ls *LeafSecret) NextSequenceNumber() uint64 {
 // on the given ratchet (handshake=true or application=false).
 // Returns an error if the generation was already used on that ratchet (replay detected).
 // RFC 9420 §9.2: receivers MUST NOT accept a message with a generation that was
-// already processed. The two ratchets are independent, so their replay windows
-// are tracked separately.
+// already processed, and the secret of a consumed generation must be deleted. The two
+// ratchets are independent, so their generations are consumed separately.
+//
+// A generation behind the ratchet is consumed by deleting its cached secret for this
+// ratchet, so no mark is kept for it. The current generation, or one that a pending
+// decryption is about to commit to, is marked instead, and the mark is pruned when the
+// ratchet moves past it (see cacheSkippedGeneration). This keeps the marks bounded.
 func (ls *LeafSecret) MarkGenerationUsed(gen uint32, handshake bool) error {
 	if err := ls.CheckGenerationUnused(gen, handshake); err != nil {
+		return err
+	}
+	if uint64(gen) < ls.generation {
+		ls.consumeCachedSecret(gen, handshake)
+		return nil
+	}
+	if err := ls.checkForwardDistance(gen); err != nil {
 		return err
 	}
 	if handshake {
@@ -725,10 +801,21 @@ func (ls *LeafSecret) MarkGenerationUsed(gen uint32, handshake bool) error {
 	return nil
 }
 
-// CheckGenerationUnused returns the replay error if generation gen was already processed on the
+// CheckGenerationUnused returns the replay error if generation gen was already consumed on the
 // given ratchet. It records nothing, so a decryption can check for a replay before it verifies
-// the message and marks the generation with MarkGenerationUsed only once the message is accepted.
+// the message and consumes the generation with MarkGenerationUsed only once the message is accepted.
+//
+// A generation behind the ratchet can be used only while its secret is still cached. A consumed or
+// evicted secret is gone, so such a generation is refused here, however long ago it was pruned. A
+// generation at or after the current position is refused only when it is marked as used.
 func (ls *LeafSecret) CheckGenerationUnused(gen uint32, handshake bool) error {
+	if uint64(gen) < ls.generation {
+		cached, ok := ls.secretCache[gen]
+		if ok && ((handshake && cached.handshake != nil) || (!handshake && cached.application != nil)) {
+			return nil
+		}
+		return fmt.Errorf("replay detected: generation %d already consumed or no longer cached for leaf %d", gen, ls.leafIndex)
+	}
 	if handshake {
 		if _, already := ls.usedHandshakeGenerations[gen]; already {
 			return fmt.Errorf("replay detected: generation %d already processed for leaf %d (handshake)", gen, ls.leafIndex)
@@ -778,6 +865,8 @@ func (ls *LeafSecret) DeleteLeaf() {
 	}
 	ls.secretCache = nil
 	ls.secretCacheOrder = nil
+	ls.usedApplicationGenerations = nil
+	ls.usedHandshakeGenerations = nil
 	ls.sequenceNumber = 0
 }
 
@@ -806,21 +895,45 @@ func (ls *LeafSecret) Encrypt(plaintext []byte, aad []byte, seqNum uint64) ([]by
 // Returns the decrypted plaintext, or an error if decryption fails (e.g., wrong key,
 // tampered ciphertext, or mismatched AAD).
 //
+// The generation is consumed only after the message is authenticated (RFC 9420 §9.2). A
+// generation that was already consumed is refused before any key is derived, and a message
+// that fails authentication leaves the ratchet and the cache as they were.
+//
 // RFC 9420 §9.1:
 //
 //	plaintext = AEAD-Open(application_key[seqNum], application_nonce[seqNum], ciphertext, aad)
 //
 //nolint:gocritic // Keep separate []byte parameters for clarity
 func (ls *LeafSecret) Decrypt(ciphertext []byte, aad []byte, seqNum uint64) ([]byte, error) {
-	key, err := ls.ApplicationKey(uint32(seqNum))
+	gen := uint32(seqNum)
+	if err := ls.CheckGenerationUnused(gen, false); err != nil {
+		return nil, err
+	}
+	pending, err := ls.BeginDecryption(gen)
 	if err != nil {
 		return nil, fmt.Errorf("getting encryption key: %w", err)
 	}
-	nonce, err := ls.ApplicationNonce(uint32(seqNum))
+	// Unless the message is authenticated and Commit runs below, the derived secrets are wiped here.
+	defer pending.Discard()
+
+	key, err := pending.Key(false)
+	if err != nil {
+		return nil, fmt.Errorf("getting encryption key: %w", err)
+	}
+	nonce, err := pending.Nonce(false)
 	if err != nil {
 		return nil, fmt.Errorf("getting nonce: %w", err)
 	}
-	return ciphersuite.DecryptWithCipherSuite(key, nonce, ciphertext, aad, ls.cs)
+	plaintext, err := ciphersuite.DecryptWithCipherSuite(key, nonce, ciphertext, aad, ls.cs)
+	if err != nil {
+		return nil, err
+	}
+	if err := ls.MarkGenerationUsed(gen, false); err != nil {
+		return nil, err
+	}
+	pending.Commit()
+
+	return plaintext, nil
 }
 
 // Helper functions
@@ -911,19 +1024,51 @@ func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) 
 			return nil, fmt.Errorf("leaf state index %d out of range [0, %d)", leafIndex, state.LeafCount)
 		}
 		leaf := &LeafSecret{
-			cs:                       cs,
-			leafIndex:                leafIndex,
-			generation:               leafState.Generation,
-			leafSecret:               ciphersuite.NewSecret(leafState.LeafSecret),
-			handshakeRatchetSecret:   ciphersuite.NewSecret(leafState.HandshakeSecret),
-			applicationRatchetSecret: ciphersuite.NewSecret(leafState.ApplicationSecret),
-			sequenceNumber:           leafState.SequenceNumber,
-			maxForwardDistance:       tree.maxForwardDistance,
-			secretCache:              make(map[uint32]*cachedGenSecret),
+			cs:                         cs,
+			leafIndex:                  leafIndex,
+			generation:                 leafState.Generation,
+			leafSecret:                 ciphersuite.NewSecret(leafState.LeafSecret),
+			handshakeRatchetSecret:     ciphersuite.NewSecret(leafState.HandshakeSecret),
+			applicationRatchetSecret:   ciphersuite.NewSecret(leafState.ApplicationSecret),
+			sequenceNumber:             leafState.SequenceNumber,
+			maxForwardDistance:         tree.maxForwardDistance,
+			secretCache:                make(map[uint32]*cachedGenSecret),
+			usedApplicationGenerations: restoreGenerationMarks(leafState.UsedApplicationGenerations, leafState.Generation),
+			usedHandshakeGenerations:   restoreGenerationMarks(leafState.UsedHandshakeGenerations, leafState.Generation),
 		}
 		tree.leafCache[leafIndex] = leaf
 	}
 	return tree, nil
+}
+
+// sortedGenerations returns the generations marked in marks in ascending order, or nil when there are none.
+func sortedGenerations(marks map[uint32]struct{}) []uint32 {
+	if len(marks) == 0 {
+		return nil
+	}
+	gens := make([]uint32, 0, len(marks))
+	for gen := range marks {
+		gens = append(gens, gen)
+	}
+	slices.Sort(gens)
+	return gens
+}
+
+// restoreGenerationMarks rebuilds a set of used-generation marks from its persisted list. A mark behind
+// the ratchet position is dropped, as cacheSkippedGeneration drops it once the ratchet moves past it.
+func restoreGenerationMarks(gens []uint32, position uint64) map[uint32]struct{} {
+	if len(gens) == 0 {
+		return nil
+	}
+
+	marks := make(map[uint32]struct{}, len(gens))
+	for _, gen := range gens {
+		if uint64(gen) >= position {
+			marks[gen] = struct{}{}
+		}
+	}
+
+	return marks
 }
 
 func cloneSecretBytes(secret *ciphersuite.Secret) []byte {
