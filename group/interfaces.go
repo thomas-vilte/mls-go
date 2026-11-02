@@ -35,3 +35,11 @@ type KeyStore interface {
 	StoreLeafEncryptionKey(ctx context.Context, groupID *ID, leafIndex LeafNodeIndex, key []byte) error
 	LoadLeafEncryptionKey(ctx context.Context, groupID *ID, leafIndex LeafNodeIndex) ([]byte, error)
 }
+
+// LeafKeyDeleter is an optional extension of KeyStore. A store that implements it can erase the
+// key material it holds for a group once the local member has left the group or been removed
+// from it: the leaf HPKE encryption keys and the signature key (RFC 9420 §9.2). A KeyStore that
+// does not implement it keeps those values until the application deletes them.
+type LeafKeyDeleter interface {
+	DeleteLeafEncryptionKeys(ctx context.Context, groupID *ID) error
+}

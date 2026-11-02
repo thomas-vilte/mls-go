@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -40,8 +41,9 @@ type Store struct {
 }
 
 var (
-	_ group.GroupStorage = (*Store)(nil)
-	_ group.KeyStore     = (*Store)(nil)
+	_ group.GroupStorage   = (*Store)(nil)
+	_ group.KeyStore       = (*Store)(nil)
+	_ group.LeafKeyDeleter = (*Store)(nil)
 )
 
 // NewStore returns a file-backed Store rooted at dir.
@@ -179,6 +181,36 @@ func (s *Store) LoadLeafEncryptionKey(ctx context.Context, groupID *group.ID, le
 		return nil, fmt.Errorf("reading leaf key: %w", err)
 	}
 	return append([]byte(nil), data...), nil
+}
+
+// DeleteLeafEncryptionKeys removes every leaf key file of the given group, including temporary
+// files left by an interrupted write, and drops the signature key kept in memory for it.
+// Files of other groups are not touched.
+func (s *Store) DeleteLeafEncryptionKeys(ctx context.Context, groupID *group.ID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := groupKey(groupID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sigKeys, key)
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("listing store directory: %w", err)
+	}
+	prefix := key + ".leaf."
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("deleting leaf key: %w", err)
+		}
+	}
+	return syncDir(s.dir)
 }
 
 func (s *Store) groupStatePath(groupID *group.ID) (string, error) {

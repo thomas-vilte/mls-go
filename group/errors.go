@@ -143,6 +143,9 @@ var (
 	ErrUnknownProposalRef = errors.New("group: unknown proposal reference in commit")
 	// ErrOwnLeafNotFound is returned when the own leaf is not found in the ratchet tree.
 	ErrOwnLeafNotFound = errors.New("group: own leaf not found in ratchet tree")
+	// ErrRemovedFromGroup is returned when a commit removes the local member from the group.
+	// The member cannot decrypt the commit's path, so the group state is no longer usable.
+	ErrRemovedFromGroup = errors.New("group: removed from group by commit")
 
 	// ErrWelcomeNoEncryptedSecrets is returned when no encrypted secrets are found for a key package.
 	ErrWelcomeNoEncryptedSecrets = errors.New("group: no encrypted secrets found for key package")

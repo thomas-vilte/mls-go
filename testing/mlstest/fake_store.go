@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -24,38 +25,42 @@ var (
 type FakeStore struct {
 	mu sync.RWMutex
 
-	FailSave      bool
-	FailLoad      bool
-	FailDelete    bool
-	FailStoreSig  bool
-	FailLoadSig   bool
-	FailStoreLeaf bool
-	FailLoadLeaf  bool
+	FailSave       bool
+	FailLoad       bool
+	FailDelete     bool
+	FailStoreSig   bool
+	FailLoadSig    bool
+	FailStoreLeaf  bool
+	FailLoadLeaf   bool
+	FailDeleteLeaf bool
 
-	SaveErr      error
-	LoadErr      error
-	DeleteErr    error
-	StoreSigErr  error
-	LoadSigErr   error
-	StoreLeafErr error
-	LoadLeafErr  error
+	SaveErr       error
+	LoadErr       error
+	DeleteErr     error
+	StoreSigErr   error
+	LoadSigErr    error
+	StoreLeafErr  error
+	LoadLeafErr   error
+	DeleteLeafErr error
 
 	groups   map[string][]byte
 	sigKeys  map[string]*ciphersuite.SignaturePrivateKey
 	leafKeys map[string][]byte
 
-	SaveCalls      int
-	LoadCalls      int
-	DeleteCalls    int
-	StoreSigCalls  int
-	LoadSigCalls   int
-	StoreLeafCalls int
-	LoadLeafCalls  int
+	SaveCalls       int
+	LoadCalls       int
+	DeleteCalls     int
+	StoreSigCalls   int
+	LoadSigCalls    int
+	StoreLeafCalls  int
+	LoadLeafCalls   int
+	DeleteLeafCalls int
 }
 
 var (
-	_ group.GroupStorage = (*FakeStore)(nil)
-	_ group.KeyStore     = (*FakeStore)(nil)
+	_ group.GroupStorage   = (*FakeStore)(nil)
+	_ group.KeyStore       = (*FakeStore)(nil)
+	_ group.LeafKeyDeleter = (*FakeStore)(nil)
 )
 
 // NewFakeStore returns an initialized FakeStore ready for use in tests.
@@ -228,6 +233,34 @@ func (s *FakeStore) LoadLeafEncryptionKey(ctx context.Context, groupID *group.ID
 		return nil, ErrLeafKeyNotFound
 	}
 	return append([]byte(nil), key...), nil
+}
+
+// DeleteLeafEncryptionKeys removes the leaf encryption keys and the signature key stored for the
+// group, honoring FailDeleteLeaf/DeleteLeafErr.
+func (s *FakeStore) DeleteLeafEncryptionKeys(ctx context.Context, groupID *group.ID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.FailDeleteLeaf {
+		if s.DeleteLeafErr != nil {
+			return s.DeleteLeafErr
+		}
+		return errors.New("mlstest: delete leaf keys failed")
+	}
+	key, err := fakeGroupKey(groupID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.DeleteLeafCalls++
+	delete(s.sigKeys, key)
+	for leafKeyValue := range s.leafKeys {
+		if strings.HasPrefix(leafKeyValue, key+":") {
+			delete(s.leafKeys, leafKeyValue)
+		}
+	}
+	return nil
 }
 
 func fakeGroupKey(groupID *group.ID) (string, error) {
