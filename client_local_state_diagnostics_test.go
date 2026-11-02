@@ -3,8 +3,10 @@
 package mls
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -13,6 +15,41 @@ import (
 )
 
 // Additional diagnostics for the local group state of the Client.
+
+// keyWriteCountingStore counts the signature key and leaf key writes of the wrapped memory store. With failLeaf
+// set, the next StoreLeafEncryptionKey fails once.
+type keyWriteCountingStore struct {
+	*memorystore.Store
+	mu         sync.Mutex
+	sigWrites  int
+	leafWrites int
+	failLeaf   bool
+}
+
+func (s *keyWriteCountingStore) StoreSignatureKey(ctx context.Context, groupID *group.ID, key *ciphersuite.SignaturePrivateKey) error {
+	s.mu.Lock()
+	s.sigWrites++
+	s.mu.Unlock()
+	return s.Store.StoreSignatureKey(ctx, groupID, key)
+}
+
+func (s *keyWriteCountingStore) StoreLeafEncryptionKey(ctx context.Context, groupID *group.ID, leafIndex group.LeafNodeIndex, key []byte) error {
+	s.mu.Lock()
+	s.leafWrites++
+	fail := s.failLeaf
+	s.failLeaf = false
+	s.mu.Unlock()
+	if fail {
+		return errors.New("test: injected leaf key write failure")
+	}
+	return s.Store.StoreLeafEncryptionKey(ctx, groupID, leafIndex, key)
+}
+
+func (s *keyWriteCountingStore) counts() (sig, leaf int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sigWrites, s.leafWrites
+}
 
 // stateDeleteFailingStore fails DeleteGroupState and leaves the rest of the store unchanged.
 type stateDeleteFailingStore struct {
@@ -189,5 +226,89 @@ func TestClientPlainStoreDoesNotLoadStateOfAnotherGroup(t *testing.T) {
 		if string(m.Identity) == "alice2" {
 			t.Errorf("ListMembers(gid1) returned alice2, a member of gid2: the state of gid2 was loaded under gid1 without error")
 		}
+	}
+}
+
+// TestSendingMemberWritesKeysOncePerEntry checks that a member that only sends does not rewrite the signature
+// key or the leaf key.
+func TestSendingMemberWritesKeysOncePerEntry(t *testing.T) {
+	ctx := context.Background()
+	st := &keyWriteCountingStore{Store: memorystore.NewStore()}
+	_, bob, gid := newTwoMemberClientGroup(t, st, CacheNone)
+	if sig, leaf := st.counts(); sig != 1 || leaf != 1 {
+		t.Fatalf("after join: sig writes=%d leaf writes=%d, want 1 and 1", sig, leaf)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := bob.SendMessage(ctx, gid, []byte("m")); err != nil {
+			t.Fatalf("SendMessage %d: %v", i, err)
+		}
+	}
+	if sig, leaf := st.counts(); sig != 1 || leaf != 1 {
+		t.Errorf("after 5 sends: sig writes=%d leaf writes=%d, want 1 and 1", sig, leaf)
+	}
+}
+
+// TestLeafKeyRewrittenAfterFailedWrite checks that a failed leaf key write does not advance the record of what
+// was persisted, so the next operation writes the new leaf key again.
+func TestLeafKeyRewrittenAfterFailedWrite(t *testing.T) {
+	ctx := context.Background()
+	st := &keyWriteCountingStore{Store: memorystore.NewStore()}
+	alice, bob, gid := newTwoMemberClientGroup(t, st, CacheNone)
+	_ = alice
+
+	st.mu.Lock()
+	st.failLeaf = true
+	st.mu.Unlock()
+	if _, err := bob.SelfUpdate(ctx, gid); err == nil {
+		t.Fatalf("SelfUpdate did not hit the injected leaf key write failure; test is not exercising the failed write")
+	}
+	if _, err := bob.SendMessage(ctx, gid, []byte("after failure")); err != nil {
+		t.Fatalf("SendMessage after failed write: %v", err)
+	}
+
+	gidObj := group.NewGroupID(gid)
+	stateBytes, err := st.LoadGroupState(ctx, gidObj)
+	if err != nil {
+		t.Fatalf("LoadGroupState: %v", err)
+	}
+	g, err := group.UnmarshalGroupState(stateBytes)
+	if err != nil {
+		t.Fatalf("UnmarshalGroupState: %v", err)
+	}
+	stored, err := st.LoadLeafEncryptionKey(ctx, gidObj, g.OwnLeafIndex())
+	if err != nil {
+		t.Fatalf("LoadLeafEncryptionKey: %v", err)
+	}
+	if !bytes.Equal(stored, g.MyLeafEncryptionKey()) {
+		t.Errorf("stored leaf key is stale after a failed write: the persisted record was advanced without a successful write")
+	}
+}
+
+// TestConcurrentSendsWriteKeysOnce checks that concurrent sends of one Client still write the keys once per
+// entry and return no errors. Run it with -race too.
+func TestConcurrentSendsWriteKeysOnce(t *testing.T) {
+	ctx := context.Background()
+	st := &keyWriteCountingStore{Store: memorystore.NewStore()}
+	_, bob, gid := newTwoMemberClientGroup(t, st, CacheNone)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := bob.SendMessage(ctx, gid, []byte("m")); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent SendMessage: %v", err)
+	}
+	if sig, leaf := st.counts(); sig != 1 || leaf != 1 {
+		t.Errorf("after concurrent sends: sig writes=%d leaf writes=%d, want 1 and 1", sig, leaf)
 	}
 }
