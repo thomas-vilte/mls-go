@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -93,9 +94,7 @@ func (s *Server) updatePskCache(g *group.Group) {
 	}
 	s.pskCacheMu.Lock()
 	defer s.pskCacheMu.Unlock()
-	for k, v := range psks {
-		s.pskCache[k] = v
-	}
+	maps.Copy(s.pskCache, psks)
 }
 
 // storeGroup stores g under id and updates the server-wide PSK cache.
@@ -274,7 +273,7 @@ func (s *Server) JoinGroup(_ context.Context, req *proto.JoinGroupRequest) (*pro
 	if psksRaw, ok := s.txPsks.LoadAndDelete(req.TransactionId); ok {
 		psksMap := psksRaw.(*sync.Map)
 		externalPsks = make(map[string][]byte)
-		psksMap.Range(func(k, v interface{}) bool {
+		psksMap.Range(func(k, v any) bool {
 			externalPsks[k.(string)] = v.([]byte)
 			return true
 		})
@@ -1945,25 +1944,35 @@ func extractByReferenceProposal(propBytes []byte, g *group.Group) (rawProposal [
 			g.GroupContext() != nil &&
 			g.EpochSecrets() != nil && g.EpochSecrets().SenderDataSecret != nil &&
 			g.SecretTree() != nil {
+			// The sender's signature is checked before the generation is consumed (RFC 9420 §6.1, §9.2).
 			ac, err := framing.Decrypt(msg.PrivateMessage, framing.DecryptParams{
 				CipherSuite:      g.CipherSuite(),
 				SenderDataSecret: g.EpochSecrets().SenderDataSecret,
 				SecretTree:       g.SecretTree(),
+				VerifySignature:  g.VerifySenderSignature,
 				GroupContext:     g.GroupContext().Marshal(),
 			})
-			if err == nil {
-				if body, ok := ac.Content.Body.(framing.ProposalBody); ok {
-					if p, err := group.UnmarshalProposal(body.Data); err == nil {
-						acForRef := &framing.AuthenticatedContent{
-							WireFormat: ac.WireFormat,
-							Content:    ac.Content,
-							Auth:       ac.Auth,
-						}
-						ref := group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite())
-						return body.Data, p, ref, nil
-					}
-				}
+			// The bytes are an MLSMessage framed as a PrivateMessage, so the raw proposal fallback below cannot
+			// apply to them. Its parse error would hide the reason, for example an invalid signature, so
+			// the reason of the rejection is returned.
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("decrypting byReference proposal: %w", err)
 			}
+			body, ok := ac.Content.Body.(framing.ProposalBody)
+			if !ok {
+				return nil, nil, nil, fmt.Errorf("byReference PrivateMessage does not carry a proposal")
+			}
+			p, err := group.UnmarshalProposal(body.Data)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("parsing byReference proposal from PrivateMessage: %w", err)
+			}
+			acForRef := &framing.AuthenticatedContent{
+				WireFormat: ac.WireFormat,
+				Content:    ac.Content,
+				Auth:       ac.Auth,
+			}
+			ref := group.ComputeProposalRef(acForRef.Marshal(), g.CipherSuite())
+			return body.Data, p, ref, nil
 		}
 	}
 	// Fall back: raw proposal bytes (group.ProposalMarshal output). No ref available.
