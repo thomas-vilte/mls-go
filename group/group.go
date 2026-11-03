@@ -523,36 +523,23 @@ func NewGroup(
 		TreeHash:    ratchetTree.TreeHash(),
 	}
 
-	// Initialize key schedule with zeros for first epoch
-	initSecret := ciphersuite.ZeroSecretCS(cipherSuite)
-	keySchedule := schedule.NewKeySchedule(cipherSuite, initSecret)
-
-	// Compute epoch secrets
-	commitSecret := ciphersuite.ZeroSecretCS(cipherSuite)
-	keySchedule.SetCommitSecret(commitSecret)
-
-	groupContextBytes := groupContext.Marshal()
-
-	_, err := keySchedule.ComputeJoinerSecret(groupContextBytes)
+	// RFC 9420 §11: the creator's epoch_secret is a fresh random value of size
+	// KDF.Nh. Deriving epoch 0 from public inputs (init_secret and commit_secret
+	// set to zero, no PSK) would let anyone who knows the GroupContext rebuild
+	// every epoch 0 secret, including the init_secret that seeds epoch 1.
+	epochSecret, err := ciphersuite.NewSecretRandomCS(cipherSuite)
 	if err != nil {
-		return nil, fmt.Errorf("computing joiner secret: %w", err)
+		return nil, fmt.Errorf("generating epoch_secret: %w", err)
 	}
 
-	_, err = keySchedule.ComputePskSecret([]schedule.Psk{})
-	if err != nil {
-		return nil, fmt.Errorf("computing psk secret: %w", err)
-	}
-	_, err = keySchedule.ComputeEpochSecret(groupContextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("computing epoch secret: %w", err)
-	}
-
-	epochSecrets, err := keySchedule.DeriveEpochSecrets()
+	// Derive the epoch 0 secrets from epoch_secret per RFC 9420 §8.
+	epochSecrets, err := schedule.NewKeyScheduleFromEpochSecret(cipherSuite, epochSecret).DeriveEpochSecrets()
 	if err != nil {
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
-	// Create group
+	// Create group. The key schedule keeps init_secret for epoch 1, as MergeCommit
+	// does, so the epoch_secret of epoch 0 is not retained by the group.
 	group := &Group{
 		groupID:       groupID,
 		epoch:         NewGroupEpoch(0),
@@ -563,7 +550,7 @@ func NewGroup(
 		epochSecrets:  epochSecrets,
 		proposals:     NewProposalStore(),
 		proposalByRef: make(map[string]*Proposal),
-		keySchedule:   keySchedule,
+		keySchedule:   schedule.NewKeySchedule(cipherSuite, epochSecrets.InitSecret),
 		// RFC 9420 §6.2: for the initial epoch, interim_transcript_hash =
 		// Hash(confirmed_transcript_hash || VL(confirmation_tag)) where both
 		// inputs are empty → Hash([0x00]). Must match what external parties
@@ -3024,8 +3011,20 @@ func NewGroupFromReInit(
 		Extensions:              groupExtensions,
 	}
 
-	initSecret := ciphersuite.ZeroSecretCS(cs)
-	keySchedule := schedule.NewKeySchedule(cs, initSecret)
+	// RFC 9420 §11: the creator's epoch_secret is "a fresh random value of size
+	// KDF.Nh". A zero init_secret would make epoch 0 a function of the reinit PSK
+	// and public values only, which NewGroup avoids. Seed the key schedule with
+	// the init_secret of a fresh epoch_secret; the reinit PSK is still mixed in below.
+	epochSecret, err := ciphersuite.NewSecretRandomCS(cs)
+	if err != nil {
+		return nil, fmt.Errorf("generating reinit epoch_secret: %w", err)
+	}
+	seedSecrets, err := schedule.NewKeyScheduleFromEpochSecret(cs, epochSecret).DeriveEpochSecrets()
+	if err != nil {
+		return nil, fmt.Errorf("deriving reinit init_secret: %w", err)
+	}
+	keySchedule := schedule.NewKeySchedule(cs, seedSecrets.InitSecret)
+	// RFC 9420 §12.4.2: commit_secret is the all-zero vector when the Commit has no path.
 	commitSecret := ciphersuite.ZeroSecretCS(cs)
 	keySchedule.SetCommitSecret(commitSecret)
 
