@@ -1308,6 +1308,9 @@ func (c *Client) ReceiveMessage(ctx context.Context, groupID, ciphertextBytes []
 // The removed member can no longer decrypt messages after this epoch — this is
 // the mechanism for post-compromise security when a device is lost or a member
 // is revoked. The commit advances the epoch and ratchets the key material.
+//
+// The caller cannot remove itself with a commit: a Commit that removes its own committer is invalid
+// (RFC 9420 §12.2). Use LeaveGroup to leave the group.
 func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byte) ([]byte, error) {
 	entry, g, err := c.lockGroup(ctx, groupID)
 	if err != nil {
@@ -1317,6 +1320,11 @@ func (c *Client) RemoveMember(ctx context.Context, groupID, memberIdentity []byt
 	leafIndex, err := findMemberLeafIndexByIdentity(g, memberIdentity)
 	if err != nil {
 		return nil, err
+	}
+	// The check runs before the proposal is stored, so no Remove of the caller stays pending and blocks
+	// the next commit of this member.
+	if leafIndex == g.OwnLeafIndex() {
+		return nil, fmt.Errorf("removing the caller with a commit: %w (use LeaveGroup)", group.ErrInvalidProposal)
 	}
 	if err := c.reviewProposal(ctx, g, ReviewableProposal{
 		Type:   group.ProposalTypeRemove,
@@ -1363,48 +1371,51 @@ func (c *Client) SelfUpdate(ctx context.Context, groupID []byte) ([]byte, error)
 	return commit, nil
 }
 
-// LeaveGroup removes the caller from the group and returns the commit bytes to
-// broadcast (RFC 9420 §12.1.3).
+// LeaveGroup leaves the group and returns a signed PublicMessage that carries a Remove proposal for the
+// caller's own leaf (RFC 9420 §12.1.3). The proposal must be delivered to the remaining group members via
+// the Delivery Service. Another member removes the caller by committing it (for example with
+// CommitPendingProposals). That Commit advances the epoch, so the caller stays a member until then. A
+// member cannot commit its own removal: a Commit that removes its committer is invalid (RFC 9420 §12.2).
 //
-// The commit advances the epoch and ratchets the key material, ensuring the
-// departing member can no longer decrypt future messages. The returned commit
-// must be delivered to all remaining group members via the Delivery Service.
+// Breaking change: earlier versions returned a Commit that removed the caller and advanced the
+// epoch. LeaveGroup now returns a Remove proposal, so callers must deliver it and wait for another member
+// to commit it.
 //
-// After a successful leave, the local group state is deleted. The leaf HPKE keys and the signature
+// After the proposal is created, the local group state is deleted. The leaf HPKE keys and the signature
 // key of the group are deleted too when the KeyStore implements group.LeafKeyDeleter.
 //
-// If the local state cannot be deleted, LeaveGroup returns the commit together with an error that
-// wraps the store error. The commit must still be delivered, and the group is no longer usable
-// through this Client in either case.
+// If the local state cannot be deleted, LeaveGroup returns the proposal together with an error that wraps
+// the store error. The proposal must still be delivered, and the group is no longer usable through this
+// Client in either case.
 func (c *Client) LeaveGroup(ctx context.Context, groupID []byte) ([]byte, error) {
 	entry, g, err := c.lockGroup(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
 	defer entry.mu.Unlock()
-	ownLeaf := g.OwnLeafIndex()
-	if _, err := g.RemoveMember(ownLeaf); err != nil {
+	// The leaver does not commit its own removal (RFC 9420 §12.2). It signs a Remove proposal for its own
+	// leaf, which another member commits. The epoch does not change here, so no epoch event is emitted.
+	proposal, err := g.RemoveMember(g.OwnLeafIndex())
+	if err != nil {
 		return nil, fmt.Errorf("creating self-remove proposal: %w", err)
 	}
-	commit, err := c.commitCurrentState(ctx, g, entry, "creating leave commit")
+	msg, err := g.SignProposalAsPublicMessage(proposal, c.sigKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("signing self-remove proposal: %w", err)
 	}
 
-	// Delete local state now that the commit has been created. The commit is returned even when the
+	// Delete local state now that the proposal has been signed. The proposal is returned even when the
 	// deletion fails: the remaining members still need it, and it cannot be created again.
 	forgetErr := c.forgetGroup(ctx, groupID, entry)
 	if forgetErr != nil {
 		c.log(slog.LevelWarn, "left group: deleting local state failed", "group", groupHex(groupID), "error", forgetErr)
 	} else {
-		c.log(slog.LevelInfo, "left group", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64())
+		c.log(slog.LevelInfo, "left group: remove proposal created", "group", groupHex(groupID), "epoch", g.Epoch().AsUint64())
 	}
-	c.emitEvent(GroupEvent{Type: EventMemberRemoved, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64(), MemberIdentity: cloneBytes(c.identity)})
-	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	if forgetErr != nil {
-		return commit, fmt.Errorf("leaving group: %w", forgetErr)
+		return msg, fmt.Errorf("leaving group: %w", forgetErr)
 	}
-	return commit, nil
+	return msg, nil
 }
 
 // Epoch returns the current epoch number of the group.

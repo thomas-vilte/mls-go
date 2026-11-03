@@ -53,18 +53,18 @@ func TestRemovedMemberCannotOperateWhenStateDeletionFails(t *testing.T) {
 	}
 }
 
-// TestLeaveGroupReturnsCommitWhenStateDeletionFails checks that the leave commit is returned together with the
+// TestLeaveGroupReturnsProposalWhenStateDeletionFails checks that the leave proposal is returned together with the
 // deletion error, so the remaining members can still receive it, and that the Client forgets the group.
-func TestLeaveGroupReturnsCommitWhenStateDeletionFails(t *testing.T) {
+func TestLeaveGroupReturnsProposalWhenStateDeletionFails(t *testing.T) {
 	ctx := context.Background()
 	store := &failingGroupStateDeleteStore{Store: memorystore.NewStore()}
 	_, bob, gid := newTwoMemberClientGroup(t, store, CacheNone)
-	commit, err := bob.LeaveGroup(ctx, gid)
+	proposal, err := bob.LeaveGroup(ctx, gid)
 	if !errors.Is(err, errGroupStateDelete) {
 		t.Fatalf("LeaveGroup error = %v, want the group state deletion error", err)
 	}
-	if len(commit) == 0 {
-		t.Fatal("LeaveGroup returned no commit although the commit was created")
+	if len(proposal) == 0 {
+		t.Fatal("LeaveGroup returned no proposal although the proposal was created")
 	}
 	if _, err := bob.Epoch(ctx, gid); !errors.Is(err, ErrGroupNotFound) {
 		t.Errorf("Epoch after LeaveGroup = %v, want ErrGroupNotFound", err)
@@ -86,19 +86,19 @@ func TestLeaveGroupDeletesLeafKeysWhenStateDeletionFails(t *testing.T) {
 	}
 }
 
-// TestLeaveGroupReturnsCommitWhenLeafKeyDeletionFails checks that the leave commit is still returned together
+// TestLeaveGroupReturnsProposalWhenLeafKeyDeletionFails checks that the leave proposal is still returned together
 // with the error when the leaf keys cannot be deleted, and that the group state is gone.
-func TestLeaveGroupReturnsCommitWhenLeafKeyDeletionFails(t *testing.T) {
+func TestLeaveGroupReturnsProposalWhenLeafKeyDeletionFails(t *testing.T) {
 	ctx := context.Background()
 	errDelete := errors.New("test: leaf keys cannot be deleted")
 	store := failingLeafKeyDeleteStore{Store: memorystore.NewStore(), err: errDelete}
 	_, bob, gid := newTwoMemberClientGroup(t, store, CacheNone)
-	commit, err := bob.LeaveGroup(ctx, gid)
+	proposal, err := bob.LeaveGroup(ctx, gid)
 	if !errors.Is(err, errDelete) {
 		t.Fatalf("LeaveGroup error = %v, want the leaf key deletion error", err)
 	}
-	if len(commit) == 0 {
-		t.Fatal("LeaveGroup returned no commit although the commit was created")
+	if len(proposal) == 0 {
+		t.Fatal("LeaveGroup returned no proposal although the proposal was created")
 	}
 	if _, err := bob.Epoch(ctx, gid); !errors.Is(err, ErrGroupNotFound) {
 		t.Errorf("Epoch after LeaveGroup = %v, want ErrGroupNotFound", err)

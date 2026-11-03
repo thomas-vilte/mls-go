@@ -100,29 +100,36 @@ func TestOutOfOrderDeliveryWithCacheAlways(t *testing.T) {
 	}
 }
 
-// TestOtherMembersProcessLeaveCommit checks that alice processes the leave commit of bob.
-func TestOtherMembersProcessLeaveCommit(t *testing.T) {
+// TestOtherMembersProcessLeaveProposal checks that alice processes the leave proposal of bob and commits it.
+func TestOtherMembersProcessLeaveProposal(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, gid := newValidClientPair(t, CacheNone)
-	commit, err := bob.LeaveGroup(ctx, gid)
+	proposal, err := bob.LeaveGroup(ctx, gid)
 	if err != nil {
 		t.Fatalf("LeaveGroup: %v", err)
 	}
-	if err := alice.ProcessCommit(ctx, gid, commit); err != nil {
-		t.Fatalf("alice.ProcessCommit(bob leave): %v", err)
+	if err := alice.ProcessPublicMessage(ctx, gid, proposal); err != nil {
+		t.Fatalf("alice.ProcessPublicMessage(bob leave proposal): %v", err)
+	}
+	if _, _, err := alice.CommitPendingProposals(ctx, gid); err != nil {
+		t.Fatalf("alice.CommitPendingProposals(bob leave): %v", err)
 	}
 }
 
-// TestRejoinAfterLeave checks that bob can join again with a new Welcome after leaving the group.
+// TestRejoinAfterLeave checks that bob can join again with a new Welcome after leaving the group and alice
+// committing his leave proposal.
 func TestRejoinAfterLeave(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, gid := newValidClientPair(t, CacheNone)
-	commit, err := bob.LeaveGroup(ctx, gid)
+	proposal, err := bob.LeaveGroup(ctx, gid)
 	if err != nil {
 		t.Fatalf("LeaveGroup: %v", err)
 	}
-	if err := alice.ProcessCommit(ctx, gid, commit); err != nil {
-		t.Fatalf("alice.ProcessCommit(bob leave): %v", err)
+	if err := alice.ProcessPublicMessage(ctx, gid, proposal); err != nil {
+		t.Fatalf("alice.ProcessPublicMessage(bob leave proposal): %v", err)
+	}
+	if _, _, err := alice.CommitPendingProposals(ctx, gid); err != nil {
+		t.Fatalf("alice.CommitPendingProposals(bob leave): %v", err)
 	}
 	kp, err := bob.FreshKeyPackageBytes(ctx)
 	if err != nil {

@@ -158,17 +158,17 @@ func TestRemovedMemberCannotSendWhenStateDeletionFails(t *testing.T) {
 	}
 }
 
-// TestLeaveCommitIsKeptWhenLeafKeyDeletionFails checks that the leave commit is not lost when the leaf keys
+// TestLeaveProposalIsKeptWhenLeafKeyDeletionFails checks that the leave proposal is not lost when the leaf keys
 // cannot be deleted after the group state is gone.
-func TestLeaveCommitIsKeptWhenLeafKeyDeletionFails(t *testing.T) {
+func TestLeaveProposalIsKeptWhenLeafKeyDeletionFails(t *testing.T) {
 	ctx := context.Background()
 	bobStore := failingLeafKeyDeleteStore{Store: memorystore.NewStore(), err: errors.New("test: injected leaf delete failure")}
 	_, bob, gid := newTwoMemberClientGroup(t, bobStore, CacheNone)
-	commit, err := bob.LeaveGroup(ctx, gid)
-	t.Logf("LeaveGroup: err=%v commitLen=%d", err, len(commit))
-	if len(commit) == 0 {
+	proposal, err := bob.LeaveGroup(ctx, gid)
+	t.Logf("LeaveGroup: err=%v proposalLen=%d", err, len(proposal))
+	if len(proposal) == 0 {
 		_, e := bob.Epoch(ctx, gid)
-		t.Errorf("LeaveGroup returned no commit (err=%v); local group state is already gone (Epoch err=%v), so the leave commit is lost and cannot be retried", err, e)
+		t.Errorf("LeaveGroup returned no proposal (err=%v); local group state is already gone (Epoch err=%v), so the leave proposal is lost and cannot be retried", err, e)
 	}
 }
 

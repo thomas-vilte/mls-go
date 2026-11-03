@@ -104,12 +104,14 @@ func TestProposalFilter_ValidateSingleProposal(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "committer can remove self",
+			// RFC 9420 §12.2: a Remove that removes the committer makes the list invalid, whoever
+			// sent it. A member leaves with a Remove proposal that another member commits.
+			name: "committer cannot be removed by a Remove proposal",
 			proposal: FilteredProposal{
 				Proposal: NewRemoveProposal(group.ownLeafIndex),
 				Sender:   1,
 			},
-			wantError: false,
+			wantError: true,
 		},
 		{
 			name: "valid update from other member",

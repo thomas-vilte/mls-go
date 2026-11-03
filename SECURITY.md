@@ -28,7 +28,7 @@ These are known gaps, not vulnerabilities. They are documented here because the 
 - `NewGroupFromReInit` still needs a tighter review of its `joiner_secret` derivation path
 - `new_member_proposal` PublicMessages do not yet verify the outer message signature independently
 - Application message padding defaults to zero unless `Group.PaddingSize` is configured explicitly
-- `LeaveGroup` in the high-level `Client` performs a local state cleanup only; it does not broadcast a self-remove commit to other members. Use `RemoveMember` with the caller's own identity if a broadcast removal is required.
+- `LeaveGroup` in the high-level `Client` returns a signed Remove proposal for the caller's own leaf and deletes the local state. The leave takes effect only when another member commits that proposal; until then the leaver's leaf stays in the ratchet tree. `RemoveMember` refuses the caller's own identity, because a Commit cannot remove its own committer (RFC 9420 §12.2).
 
 Recent fixes:
 
