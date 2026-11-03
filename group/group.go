@@ -915,22 +915,19 @@ func (g *Group) CommitWithContext(
 	// proposal other than add, psk or reinit. A multi-member group always includes one. A sole-member
 	// group omits it when no proposal requires it; new members receive the commit_secret via the
 	// Welcome message instead.
-	// Also omit the path when the committer's own leaf was removed (self-removal):
-	// the truncated tree no longer contains the committer's leaf index, so no
-	// UpdatePath can be derived. Remaining members advance the epoch using the
-	// Remove proposal alone. Such a Commit cannot be built if another proposal needs a path.
 	var updatePath *UpdatePath
 	var commitSecret *ciphersuite.Secret
 	var allPathSecrets []*ciphersuite.Secret
 	var committerDP, committerCopath []treesync.NodeIndex
 	var committerLevels []int
 
-	selfRemoved := uint32(g.ownLeafIndex) >= treeDiff.NumLeaves
-	pathRequired := commitRequiresPath(proposals, g.ownLeafIndex)
-	if pathRequired && selfRemoved {
-		return nil, fmt.Errorf("commit requires UpdatePath but removes the committer's own leaf: %w", ErrInvalidProposal)
+	// A Commit that removes its own committer is refused by the filter (RFC 9420 §12.2), so the committer's
+	// leaf is still present after the proposals and the UpdatePath starts from it. A member leaves with a
+	// Remove proposal that another member commits. This check only guards the invariant.
+	if ownLeaf := treeDiff.GetLeaf(treesync.LeafIndex(g.ownLeafIndex)); ownLeaf == nil || ownLeaf.State != treesync.NodeStatePresent {
+		return nil, fmt.Errorf("commit removes the committer's own leaf: %w", ErrInvalidProposal)
 	}
-	if (g.ratchetTree.LeafCount() > 1 || pathRequired) && !selfRemoved {
+	if g.ratchetTree.LeafCount() > 1 || commitRequiresPath(proposals) {
 		updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
 		if err != nil {
 			return nil, fmt.Errorf("creating update path: %w", err)
@@ -1093,11 +1090,9 @@ func (g *Group) CommitWithContext(
 // (RFC 9420 §12.4). The path may be omitted only when the Commit covers at least one proposal and
 // every proposal is add, psk or reinit. Every other type requires a path: update, remove,
 // external_init, group_context_extensions, and any type this implementation does not recognise.
-//
-// A Remove of the committer itself does not count, because a Commit that removes its own sender
-// cannot carry a path. This function does not reject it; it only stops requiring a path when no
-// other proposal does.
-func commitRequiresPath(proposals []*Proposal, committer LeafNodeIndex) bool {
+// A Remove always requires a path: a Commit that removes its own committer is invalid (RFC 9420 §12.2),
+// so the filter has already refused it when this is called.
+func commitRequiresPath(proposals []*Proposal) bool {
 	if len(proposals) == 0 {
 		return true
 	}
@@ -1105,10 +1100,6 @@ func commitRequiresPath(proposals []*Proposal, committer LeafNodeIndex) bool {
 		switch p.Type {
 		case ProposalTypeAdd, ProposalTypePreSharedKey, ProposalTypeReInit:
 			// RFC §12.4: these types never require a path.
-		case ProposalTypeRemove:
-			if p.Remove == nil || p.Remove.Removed != committer {
-				return true
-			}
 		default:
 			return true
 		}
@@ -1665,7 +1656,7 @@ func (g *Group) ProcessReceivedCommit(
 
 	// RFC §12.4: a Commit MUST include a path unless it covers at least one proposal and every
 	// proposal is add, psk or reinit. An external Commit always carries a path (checked above).
-	if commit.Path == nil && commitRequiresPath(proposals, LeafNodeIndex(senderLeafIdx)) {
+	if commit.Path == nil && commitRequiresPath(proposals) {
 		return fmt.Errorf("commit requires UpdatePath (no proposals, or a proposal other than add, psk or reinit) but path is absent: %w", ErrInvalidProposal)
 	}
 

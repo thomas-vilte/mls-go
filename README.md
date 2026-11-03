@@ -161,8 +161,8 @@ client.CreateGroup(ctx)
 client.InviteMember(ctx, groupID, memberKPBytes)        // → commit, welcome
 client.JoinGroup(ctx, welcomeBytes)                     // → groupID
 client.ExternalJoin(ctx, groupInfoBytes)                // → groupID, commit
-client.RemoveMember(ctx, groupID, memberIdentity)       // → commit
-client.LeaveGroup(ctx, groupID)                         // local-only - see note below
+client.RemoveMember(ctx, groupID, memberIdentity)       // → commit (not the caller's own identity)
+client.LeaveGroup(ctx, groupID)                         // → signed Remove proposal; local state deleted - see note below
 
 // Proposals (batch flow)
 client.ProposeAddMember(ctx, groupID, memberKPBytes)    // → signed PublicMessage
@@ -192,12 +192,14 @@ client.GroupInfo(ctx, groupID)                          // signed GroupInfo byte
 client.ProcessCommit(ctx, groupID, commitBytes)
 ```
 
-> **Note - `LeaveGroup` is local-only.** It deletes this client's persisted
-> state but sends no commit to other members. Other members will keep this
-> client's leaf in the ratchet tree until an admin calls `RemoveMember` and
-> broadcasts the resulting commit. Until then the group cannot advance epochs
-> that require a path secret to be decrypted by this leaf. Use `RemoveMember`
-> (called by an admin) as the correct leave mechanism.
+> **Note - `LeaveGroup` returns a Remove proposal, not a commit.** It signs a Remove proposal for
+> this client's own leaf, deletes this client's persisted state and returns the proposal. Deliver the proposal
+> to the other members. One of them removes this client by committing it (for example `ProcessPublicMessage`
+> followed by `CommitPendingProposals`), and the epoch advances with that commit. A member cannot remove itself
+> with a commit (RFC 9420 §12.2), so `RemoveMember` refuses the caller's own identity.
+>
+> **Breaking change:** earlier versions returned a commit from `LeaveGroup`. Code that broadcast that commit
+> must now broadcast the returned proposal instead.
 
 ### Options
 

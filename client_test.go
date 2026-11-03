@@ -705,13 +705,14 @@ func TestClientLeaveGroup(t *testing.T) {
 		t.Fatalf("bob joining group: %v", err)
 	}
 
-	// Bob leaves the group — this produces a commit that alice must process.
-	leaveCommit, err := bob.LeaveGroup(ctx, bobGroupID)
+	// Bob leaves the group. LeaveGroup returns a signed Remove proposal for bob's own leaf: a member cannot
+	// commit its own removal (RFC 9420 §12.2), so alice commits the proposal, and that Commit removes bob.
+	leaveProposal, err := bob.LeaveGroup(ctx, bobGroupID)
 	if err != nil {
 		t.Fatalf("bob leaving group: %v", err)
 	}
-	if len(leaveCommit) == 0 {
-		t.Fatal("LeaveGroup returned empty commit")
+	if len(leaveProposal) == 0 {
+		t.Fatal("LeaveGroup returned empty proposal")
 	}
 
 	// Bob can no longer operate on the group.
@@ -719,9 +720,12 @@ func TestClientLeaveGroup(t *testing.T) {
 		t.Fatalf("expected ErrGroupNotFound after leave, got %v", err)
 	}
 
-	// Alice processes Bob's leave commit.
-	if err := alice.ProcessCommit(ctx, groupID, leaveCommit); err != nil {
-		t.Fatalf("alice processing leave commit: %v", err)
+	// Alice processes Bob's leave proposal and commits it.
+	if err := alice.ProcessPublicMessage(ctx, groupID, leaveProposal); err != nil {
+		t.Fatalf("alice processing leave proposal: %v", err)
+	}
+	if _, _, err := alice.CommitPendingProposals(ctx, groupID); err != nil {
+		t.Fatalf("alice committing leave proposal: %v", err)
 	}
 
 	// Alice should see only herself as a member.

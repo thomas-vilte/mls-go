@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -226,6 +227,14 @@ func (pf *ProposalFilter) validateSingleProposal(
 
 	case ProposalTypeRemove:
 		if proposal.Remove != nil {
+			// RFC 9420 §12.2: the list is invalid if it contains a Remove proposal that removes the
+			// committer, whoever sent it. A member leaves with a Remove proposal that another member
+			// commits. External commits do not reach this case: validateExternalCommitProposals
+			// checks their Remove, which names an older leaf of the joiner.
+			if proposal.Remove.Removed == pf.committer {
+				return fmt.Errorf("remove proposal removes the committer (leaf %d): %w",
+					proposal.Remove.Removed, ErrInvalidProposal)
+			}
 			if _, exists := pf.members[proposal.Remove.Removed]; !exists {
 				return fmt.Errorf("removing non-existent member at index %d: %w",
 					proposal.Remove.Removed, ErrInvalidProposal)
@@ -617,11 +626,19 @@ func hashKeyPackage(kp *keypackages.KeyPackage) string {
 //
 // This is a helper that extracts proposals from the ProposalStore and prepares
 // them for the commit operation.
+//
+// RFC 9420 §12.4: the committer SHOULD include the valid proposals it has received, as long as the
+// resulting list is valid. A Remove of the committer that another member sent makes the list invalid
+// (§12.2), so it is left out and the other stored proposals are committed. A Remove of the committer's
+// own leaf is kept, so the filter refuses it.
 func (g *Group) FilterProposalsForCommit(
 	capabilities *keypackages.Capabilities,
 ) ([]FilteredProposal, error) {
 	filtered := make([]FilteredProposal, 0, len(g.proposals.Proposals))
 	for _, sp := range g.proposals.Proposals {
+		if isRemoveOfCommitterByOther(sp, g.ownLeafIndex) {
+			continue
+		}
 		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender, Ref: sp.Ref})
 	}
 
@@ -634,6 +651,16 @@ func (g *Group) FilterProposalsForCommit(
 	)
 
 	return pf.FilterAndValidateProposals(filtered, capabilities)
+}
+
+// isRemoveOfCommitterByOther reports whether sp is a Remove of the committer's leaf that another member
+// sent. The committer's own Remove is not included here, because the filter refuses it.
+func isRemoveOfCommitterByOther(sp StoredProposal, committer LeafNodeIndex) bool {
+	return sp.Proposal != nil &&
+		sp.Proposal.Type == ProposalTypeRemove &&
+		sp.Proposal.Remove != nil &&
+		sp.Proposal.Remove.Removed == committer &&
+		sp.Sender != committer
 }
 
 // validateCapabilitiesCompatible checks if leaf capabilities are compatible with the group.
@@ -651,13 +678,7 @@ func validateCapabilitiesCompatible(
 		return fmt.Errorf("missing leaf capabilities: %w", ErrInvalidProposal)
 	}
 
-	supportsVersion := false
-	for _, v := range leafCaps.ProtocolVersions {
-		if v == 0x0001 {
-			supportsVersion = true
-			break
-		}
-	}
+	supportsVersion := slices.Contains(leafCaps.ProtocolVersions, 0x0001)
 	if !supportsVersion {
 		return fmt.Errorf("leaf does not support MLS 1.0: %w", ErrInvalidProposal)
 	}
@@ -679,13 +700,7 @@ func validateCapabilitiesCompatible(
 
 	// RFC §11.1: leaf MUST support all required extension types
 	for _, reqExt := range required.Extensions {
-		found := false
-		for _, leafExt := range leafCaps.Extensions {
-			if uint16(reqExt) == leafExt {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(leafCaps.Extensions, uint16(reqExt))
 		if !found {
 			return fmt.Errorf("leaf does not support required extension type %d: %w", reqExt, ErrInvalidProposal)
 		}
@@ -693,13 +708,7 @@ func validateCapabilitiesCompatible(
 
 	// RFC §11.1: leaf MUST support all required proposal types
 	for _, reqProp := range required.Proposals {
-		found := false
-		for _, leafProp := range leafCaps.Proposals {
-			if reqProp == leafProp {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(leafCaps.Proposals, reqProp)
 		if !found {
 			return fmt.Errorf("leaf does not support required proposal type %d: %w", reqProp, ErrInvalidProposal)
 		}
@@ -707,13 +716,7 @@ func validateCapabilitiesCompatible(
 
 	// RFC §11.1: leaf MUST support all required credential types
 	for _, reqCred := range required.Credentials {
-		found := false
-		for _, leafCred := range leafCaps.Credentials {
-			if uint16(reqCred) == leafCred {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(leafCaps.Credentials, uint16(reqCred))
 		if !found {
 			return fmt.Errorf("leaf does not support required credential type %d: %w", reqCred, ErrInvalidProposal)
 		}
