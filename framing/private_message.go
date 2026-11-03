@@ -295,7 +295,9 @@ type DecryptParams struct {
 // Decrypt decrypts a PrivateMessage and returns the AuthenticatedContent.
 // When SigPubKey or VerifySignature is set, the sender's signature is verified before
 // the generation is consumed. Failed authentication does not consume the generation
-// or advance the ratchet.
+// or advance the ratchet. The sender must be authenticated through SigPubKey or
+// VerifySignature: a check made by the caller after Decrypt returns runs after the
+// generation is consumed.
 func Decrypt(pm *PrivateMessage, p DecryptParams) (*AuthenticatedContent, error) {
 	// Extract ciphertext_sample = ciphertext[0..Nh-1] (RFC §6.3.2)
 	// Needed to derive sender_data key/nonce BEFORE decrypting sender_data
