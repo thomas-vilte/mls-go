@@ -9,7 +9,6 @@ import (
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/credentials"
 	"github.com/thomas-vilte/mls-go/keypackages"
-	"github.com/thomas-vilte/mls-go/schedule"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
@@ -85,17 +84,9 @@ func setupTwoMemberGroup(t *testing.T) (aliceGroup, bobGroup *Group, alicePriv, 
 		t.Fatalf("JoinFromWelcome: %v", err)
 	}
 
-	// Synchronize Bob's epoch secrets with Alice
-	bobGroup.epochSecrets = &schedule.EpochSecrets{
-		InitSecret:       aliceGroup.epochSecrets.InitSecret.Clone(),
-		SenderDataSecret: aliceGroup.epochSecrets.SenderDataSecret.Clone(),
-		EncryptionSecret: aliceGroup.epochSecrets.EncryptionSecret.Clone(),
-		ExporterSecret:   aliceGroup.epochSecrets.ExporterSecret.Clone(),
-		ExternalSecret:   aliceGroup.epochSecrets.ExternalSecret.Clone(),
-		ConfirmationKey:  aliceGroup.epochSecrets.ConfirmationKey.Clone(),
-		MembershipKey:    aliceGroup.epochSecrets.MembershipKey.Clone(),
-		ResumptionSecret: aliceGroup.epochSecrets.ResumptionSecret.Clone(),
-	}
+	// Bob derived his epoch secrets from the Welcome. They are checked against Alice's, not copied over
+	// them, so a joiner that derives a different secret fails here instead of being silently repaired.
+	assertSameEpochSecrets(t, aliceGroup, bobGroup)
 
 	return aliceGroup, bobGroup, alicePriv, bobPriv
 }

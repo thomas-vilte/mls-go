@@ -122,17 +122,16 @@ type KeySchedule struct {
 //   - cs: Cipher suite for HKDF operations
 //   - initSecret: The init_secret from the previous epoch
 //
-// For the first epoch (epoch 0), initSecret MUST be all zeros:
-//
-//	initSecret = 0^Nh  (where Nh is the hash output length)
-//
 // For subsequent epochs, initSecret comes from the previous epoch's secrets:
 //
 //	initSecret[n] = DeriveSecret(epoch_secret[n-1], "init")
 //
+// The first epoch of a group created with NewGroup does not start from an
+// init_secret: RFC 9420 §11 requires a random epoch_secret there, see
+// NewKeyScheduleFromEpochSecret.
+//
 // RFC 9420 §8:
 //
-//	init_secret_[0] = 0^Nh
 //	init_secret_[n] = DeriveSecret(epoch_secret_[n-1], "init") for n > 0
 func NewKeySchedule(cs ciphersuite.CipherSuite, initSecret *ciphersuite.Secret) *KeySchedule {
 	// Wrap initSecret with the CS hash so HKDF propagates SHA-512 for CS5.
@@ -140,6 +139,26 @@ func NewKeySchedule(cs ciphersuite.CipherSuite, initSecret *ciphersuite.Secret) 
 	return &KeySchedule{
 		ciphersuite: cs,
 		initSecret:  is,
+	}
+}
+
+// NewKeyScheduleFromEpochSecret creates the key schedule for the first epoch of
+// a new group. The epoch_secret is supplied directly instead of being computed
+// from init_secret, commit_secret and the PSKs.
+//
+// RFC 9420 §11: the creator's epoch_secret is "a fresh random value of size
+// KDF.Nh". Deriving it from public inputs would make every epoch 0 secret, and
+// the init_secret that seeds epoch 1, computable by anyone who knows the
+// GroupContext.
+//
+// Call DeriveEpochSecrets on the result. The init_secret, commit_secret and PSK
+// steps do not apply to this epoch.
+func NewKeyScheduleFromEpochSecret(cs ciphersuite.CipherSuite, epochSecret *ciphersuite.Secret) *KeySchedule {
+	// Wrap epochSecret with the CS hash so HKDF propagates SHA-512 for CS5.
+	es := ciphersuite.NewSecretForCS(cs, epochSecret.Value)
+	return &KeySchedule{
+		ciphersuite: cs,
+		epochSecret: es,
 	}
 }
 
