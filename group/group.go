@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime"
 	"sort"
 	"sync"
@@ -157,6 +158,13 @@ func (g *Group) deletePathNodePrivKey(nodeIdx treesync.NodeIndex) {
 	delete(g.pathNodePrivKeys, nodeIdx)
 }
 
+// zeroPathKeys erases every private key in keys. It leaves the entries in place, so the caller drops the map.
+func zeroPathKeys(keys map[treesync.NodeIndex][]byte) {
+	for _, key := range keys {
+		secureZeroBytes(key)
+	}
+}
+
 // ID returns the unique identifier of the group.
 func (g *Group) ID() *ID {
 	if g == nil || g.groupID == nil {
@@ -249,6 +257,13 @@ func (g *Group) PendingCommit() *StagedCommit {
 func (g *Group) DiscardPendingCommit() error {
 	if g.state != StatePendingCommit {
 		return fmt.Errorf("%w (state=%d)", ErrNoPendingCommit, g.state)
+	}
+	// The path keys of the discarded commit were never installed. They are erased here, and the keys of the
+	// current epoch, which are still in the tree, stay in place.
+	if g.pendingCommit != nil {
+		zeroPathKeys(g.pendingCommit.pathPrivKeys)
+		g.pendingCommit.pathPrivKeys = nil
+		g.pendingCommit.discarded = true
 	}
 	g.pendingCommit = nil
 	secureZeroBytes(g.pendingLeafKey)
@@ -844,6 +859,20 @@ func (g *Group) CommitWithContext(
 		return nil, ErrGroupNotOperational
 	}
 
+	// The private keys derived by this attempt belong to the StagedCommit only once it exists. If the
+	// attempt fails, the path keys and the staged leaf key are erased, so that no later merge can install
+	// keys of a Commit that never took effect. The defer is registered after the state check, so
+	// it runs only for an attempt that started in StateOperational, which holds no staged keys.
+	pathPrivKeys := make(map[treesync.NodeIndex][]byte)
+	committed := false
+	defer func() {
+		if !committed {
+			zeroPathKeys(pathPrivKeys)
+			secureZeroBytes(g.pendingLeafKey)
+			g.pendingLeafKey = nil
+		}
+	}()
+
 	// Empty commits (no proposals) are valid per RFC 9420 §12.4.
 
 	// Filter and validate proposals (RFC §12.2)
@@ -928,7 +957,7 @@ func (g *Group) CommitWithContext(
 		return nil, fmt.Errorf("commit removes the committer's own leaf: %w", ErrInvalidProposal)
 	}
 	if g.ratchetTree.LeafCount() > 1 || commitRequiresPath(proposals) {
-		updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions)
+		updatePath, commitSecret, allPathSecrets, committerDP, committerCopath, committerLevels, err = g.createUpdatePath(treeDiff, sigPrivKey, sigPubKey, excluded, newExtensions, pathPrivKeys)
 		if err != nil {
 			return nil, fmt.Errorf("creating update path: %w", err)
 		}
@@ -1078,8 +1107,11 @@ func (g *Group) CommitWithContext(
 		committerCopath:         committerCopath,
 		treeAfterProposals:      treeDiff,
 		membershipTag:           membershipTag,
+		pathPrivKeys:            pathPrivKeys,
 	}
 
+	// The staged commit owns the path keys from here on. The deferred cleanup must not erase them.
+	committed = true
 	g.pendingCommit = stagedCommit
 	g.state = StatePendingCommit
 
@@ -1140,6 +1172,7 @@ func (g *Group) createUpdatePath(
 	sigPubKey *ciphersuite.SignaturePublicKey,
 	excluded map[treesync.LeafIndex]bool, // newly added leaves excluded from UpdatePath encryption (RFC §12.4.1)
 	newExtensions []Extension, // GCE-updated extensions for provisional GroupContext (nil = current)
+	pathPrivKeys map[treesync.NodeIndex][]byte, // receives the private keys of the new path (owned by the caller)
 ) (*UpdatePath, *ciphersuite.Secret, []*ciphersuite.Secret, []treesync.NodeIndex, []treesync.NodeIndex, []int, error) {
 	leafSecret, err := ciphersuite.NewSecretRandomCS(g.cipherSuite)
 	if err != nil {
@@ -1199,8 +1232,9 @@ func (g *Group) createUpdatePath(
 		tree.Nodes[nodeIdx].State = treesync.NodeStatePresent
 		tree.Nodes[nodeIdx].UnmergedLeaves = nil
 
-		// Store private key: needed if a future copath resolution includes this node.
-		g.setPathNodePrivKey(nodeIdx, privKey.Bytes())
+		// Store private key: needed if a future copath resolution includes this node. The key is
+		// returned to the caller, which installs it only when this Commit is merged (see CommitWithContext).
+		pathPrivKeys[nodeIdx] = privKey.Bytes()
 	}
 
 	// Compute parent hashes top-down (RFC §7.9).
@@ -1513,7 +1547,21 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 // ProcessReceivedCommit processes a commit from another existing group member.
 // Decrypts the path secret using the receiver's private HPKE key,
 // then advances the group state. RFC 9420 §12.4.2
+//
+// A rejected commit leaves the group unchanged.
 func (g *Group) ProcessReceivedCommit(
+	ac *framing.AuthenticatedContent,
+	senderLeafIdx treesync.LeafIndex,
+	myHpkePrivKeyBytes []byte,
+) error {
+	return g.atomicCommit(func() error {
+		return g.processReceivedCommit(ac, senderLeafIdx, myHpkePrivKeyBytes)
+	})
+}
+
+// processReceivedCommit is ProcessReceivedCommit without the rollback. It changes g in place and
+// must only be called through atomicCommit.
+func (g *Group) processReceivedCommit(
 	ac *framing.AuthenticatedContent,
 	senderLeafIdx treesync.LeafIndex,
 	myHpkePrivKeyBytes []byte,
@@ -1723,7 +1771,15 @@ func (g *Group) ProcessReceivedCommit(
 		}
 	}
 
-	// Decrypt path secret with our HPKE private key.
+	// Decrypt path secret with our HPKE private key. The path keys derived here belong to this commit:
+	// they are installed only by mergeCommit, and erased if the commit is rejected.
+	pathPrivKeys := make(map[treesync.NodeIndex][]byte)
+	merged := false
+	defer func() {
+		if !merged {
+			zeroPathKeys(pathPrivKeys)
+		}
+	}()
 	var rootPathSecret *ciphersuite.Secret
 	if ac.Content.Sender.Type == framing.SenderTypeNewMemberCommit {
 		if commit.Path == nil || commit.Path.LeafNode == nil {
@@ -1750,7 +1806,7 @@ func (g *Group) ProcessReceivedCommit(
 		excluded[extLeafIdx] = true
 		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, g.cipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
-		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
+		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded, pathPrivKeys)
 		if err != nil {
 			if errors.Is(err, ErrOwnLeafNotFound) && commitRemovesLeaf(proposals, g.ownLeafIndex) {
 				return ErrRemovedFromGroup
@@ -1785,7 +1841,7 @@ func (g *Group) ProcessReceivedCommit(
 		treeAfterProposals = treeAfterProposals.ExpandToPowerOf2()
 		provTree := buildProvisionalTree(treeAfterProposals, senderLeafIdx, commit.Path, g.cipherSuite)
 		provGCBytes := g.provisionalGroupContextBytesFromTree(provTree, newExtensions)
-		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded)
+		rootPathSecret, err = g.decryptPathSecret(provTree, senderLeafIdx, commit.Path, decryptKey, provGCBytes, excluded, pathPrivKeys)
 		if err != nil {
 			// The commit was fully validated up to here. If its path cannot be decrypted because our
 			// leaf is gone and the commit removes it, the member was removed.
@@ -1802,8 +1858,14 @@ func (g *Group) ProcessReceivedCommit(
 		proposalSenders:      proposalSenders,
 		authenticatedContent: ac,
 		rootPathSecret:       rootPathSecret,
+		pathPrivKeys:         pathPrivKeys,
 	}
-	return g.MergeCommit(staged)
+	if err := g.mergeCommit(staged); err != nil {
+		return err
+	}
+	// mergeCommit installed the keys in the group and released them from the staged commit.
+	merged = true
+	return nil
 }
 
 // commitRemovesLeaf reports whether one of the validated proposals of a commit is a Remove for leaf
@@ -1829,6 +1891,7 @@ func (g *Group) decryptPathSecret(
 	myPrivKeyBytes []byte,
 	gcBytes []byte, // provisional GroupContext bytes (RFC §12.4.1: context for HPKE)
 	excluded map[treesync.LeafIndex]bool, // newly added leaves to exclude from resolution
+	pathPrivKeys map[treesync.NodeIndex][]byte, // receives the private keys of the sender's path (owned by the caller)
 ) (*ciphersuite.Secret, error) {
 	directPath, copath, levels := filteredDirectPathLevels(tree, senderLeafIdx)
 	F := len(levels)
@@ -1924,9 +1987,6 @@ func (g *Group) decryptPathSecret(
 			// UpdatePathNode.EncryptionKey (Gap 13).
 			pathSecret := ciphersuite.NewSecretForCS(g.cipherSuite, psBytes)
 			secureZeroBytes(psBytes)
-			if g.pathNodePrivKeys == nil {
-				g.pathNodePrivKeys = make(map[treesync.NodeIndex][]byte)
-			}
 			for k := m; k < F; k++ {
 				// Store private key for the direct path node at filtered level k.
 				// directPath[levels[k]+1] is the node whose key corresponds to pathSecret.
@@ -1942,7 +2002,8 @@ func (g *Group) decryptPathSecret(
 							return nil, fmt.Errorf("derived public key at path level %d does not match UpdatePath.Nodes[%d].EncryptionKey: %w",
 								k, k, ErrInvalidProposal)
 						}
-						g.setPathNodePrivKey(nodeIdx, privKey.Bytes())
+						// The key is staged in pathPrivKeys: it joins the group's keys only if the commit is merged.
+						pathPrivKeys[nodeIdx] = privKey.Bytes()
 					}
 					secureZeroSecret(nodeSecret)
 				}
@@ -1960,10 +2021,200 @@ func (g *Group) decryptPathSecret(
 	return nil, ErrOwnLeafNotFound
 }
 
+// commitSnapshot is a copy of the group state that processing a commit can change before the commit
+// is confirmed. Restoring it undoes a rejected commit completely.
+//
+// The confirmation_tag is checked late (RFC 9420 §12.4.2). Until then the commit changes the tree, the
+// members, the group context and the epoch in place, and the path private keys in the live map. The
+// containers and the path private keys are copied here. The leaf keys are shared, not copied: a rejected
+// commit never replaces them (mergeCommit replaces them only once the commit is confirmed). Fields that the
+// commit only reassigns keep their old value, because the commit never writes into them.
+type commitSnapshot struct {
+	epoch                  Epoch
+	groupContext           *GroupContext
+	ratchetTree            *treesync.RatchetTree
+	members                map[LeafNodeIndex]*Member
+	epochSecrets           *schedule.EpochSecrets
+	epochHistory           map[uint64]*epochState
+	keySchedule            *schedule.KeySchedule
+	secretTree             *secrettree.Tree
+	confirmationTag        []byte
+	interimTranscriptHash  []byte
+	cachedPsks             map[string][]byte
+	myLeafEncryptionKey    []byte
+	pendingLeafKey         []byte
+	pendingUpdatePrivKey   []byte
+	pathNodePrivKeys       map[treesync.NodeIndex][]byte
+	lastCommittedProposals []*Proposal
+	proposals              *ProposalStore
+	proposalByRef          map[string]*Proposal
+	pendingCommit          *StagedCommit
+	state                  GroupState
+}
+
+// atomicCommit runs apply, which processes a commit on g, and keeps the result only if apply succeeds.
+// If apply fails, g is restored to the state it had before the call.
+func (g *Group) atomicCommit(apply func() error) error {
+	snap := g.snapshotForCommit()
+	if err := apply(); err != nil {
+		snap.restore(g)
+		return err
+	}
+	snap.discard()
+	return nil
+}
+
+// snapshotForCommit copies the state that a commit can change. The copies are used only if the commit
+// is rejected.
+func (g *Group) snapshotForCommit() *commitSnapshot {
+	g.pskMu.RLock()
+	cachedPsks := maps.Clone(g.cachedPsks)
+	g.pskMu.RUnlock()
+	snap := &commitSnapshot{
+		epoch:                 g.epoch,
+		ratchetTree:           cloneTreeForCommit(g.ratchetTree),
+		members:               cloneMembersForCommit(g.members),
+		epochSecrets:          g.epochSecrets,
+		epochHistory:          maps.Clone(g.epochHistory),
+		keySchedule:           g.keySchedule,
+		secretTree:            g.secretTree,
+		confirmationTag:       g.confirmationTag,
+		interimTranscriptHash: g.interimTranscriptHash,
+		cachedPsks:            cachedPsks,
+		// The three leaf keys are not copied. A rejected commit never replaces them: their replacement waits
+		// for the confirmed commit (mergeCommit), so the slices are still the group's keys when restored.
+		myLeafEncryptionKey:    g.myLeafEncryptionKey,
+		pendingLeafKey:         g.pendingLeafKey,
+		pendingUpdatePrivKey:   g.pendingUpdatePrivKey,
+		pathNodePrivKeys:       cloneKeysForCommit(g.pathNodePrivKeys),
+		lastCommittedProposals: g.lastCommittedProposals,
+		proposals:              g.proposals,
+		proposalByRef:          g.proposalByRef,
+		pendingCommit:          g.pendingCommit,
+		state:                  g.state,
+	}
+	if g.groupContext != nil {
+		// The commit changes the context field by field and never writes into its slices, so a value
+		// copy is enough. It also avoids GroupContext.Clone, which needs a non-nil GroupID.
+		gc := *g.groupContext
+		snap.groupContext = &gc
+	}
+	return snap
+}
+
+// restore puts the snapshot back into g. It is used when the commit is rejected. The path keys left in the live
+// map are erased first, because the restored copies replace them. A rejected attempt may have deleted entries
+// from the map (mergeCommit drops the keys of blank nodes), and it never installs keys before the commit is
+// confirmed.
+func (s *commitSnapshot) restore(g *Group) {
+	zeroPathKeys(g.pathNodePrivKeys)
+	g.epoch = s.epoch
+	g.groupContext = s.groupContext
+	g.ratchetTree = s.ratchetTree
+	g.members = s.members
+	g.epochSecrets = s.epochSecrets
+	g.epochHistory = s.epochHistory
+	g.keySchedule = s.keySchedule
+	g.secretTree = s.secretTree
+	g.confirmationTag = s.confirmationTag
+	g.interimTranscriptHash = s.interimTranscriptHash
+	g.pskMu.Lock()
+	g.cachedPsks = s.cachedPsks
+	g.pskMu.Unlock()
+	g.myLeafEncryptionKey = s.myLeafEncryptionKey
+	g.pendingLeafKey = s.pendingLeafKey
+	g.pendingUpdatePrivKey = s.pendingUpdatePrivKey
+	g.pathNodePrivKeys = s.pathNodePrivKeys
+	g.lastCommittedProposals = s.lastCommittedProposals
+	g.proposals = s.proposals
+	g.proposalByRef = s.proposalByRef
+	g.pendingCommit = s.pendingCommit
+	g.state = s.state
+}
+
+// discard erases the copied path keys once the commit is accepted. The group now holds the new keys, so
+// the copies are only kept for a possible rollback. The leaf keys are shared with the group, not copied, and
+// setMyLeafEncryptionKey has already erased the ones that the commit replaced, so they are not erased here.
+func (s *commitSnapshot) discard() {
+	zeroPathKeys(s.pathNodePrivKeys)
+}
+
+// cloneBytesForCommit copies b and keeps nil as nil, so the serialized state is unchanged.
+func cloneBytesForCommit(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	return append([]byte{}, b...)
+}
+
+// cloneKeysForCommit copies a map of private keys, including the key bytes, because setPathNodePrivKey
+// and deletePathNodePrivKey erase the old bytes in place.
+func cloneKeysForCommit(keys map[treesync.NodeIndex][]byte) map[treesync.NodeIndex][]byte {
+	if keys == nil {
+		return nil
+	}
+	out := make(map[treesync.NodeIndex][]byte, len(keys))
+	for idx, key := range keys {
+		out[idx] = cloneBytesForCommit(key)
+	}
+	return out
+}
+
+// cloneMembersForCommit copies the member map and the Member values, because a Remove proposal changes
+// Member.Active in place.
+func cloneMembersForCommit(members map[LeafNodeIndex]*Member) map[LeafNodeIndex]*Member {
+	if members == nil {
+		return nil
+	}
+	out := make(map[LeafNodeIndex]*Member, len(members))
+	for idx, m := range members {
+		if m == nil {
+			out[idx] = nil
+			continue
+		}
+		member := *m
+		out[idx] = &member
+	}
+	return out
+}
+
+// cloneTreeForCommit copies the ratchet tree. The Node structs are copied, and so are the slices that the
+// tree operations can append to or write into. LeafData and EncryptionKey are shared, because the tree
+// replaces them and never writes into them.
+func cloneTreeForCommit(t *treesync.RatchetTree) *treesync.RatchetTree {
+	if t == nil {
+		return nil
+	}
+	c := t.Clone()
+	for i := range c.Nodes {
+		c.Nodes[i].ParentHash = cloneBytesForCommit(c.Nodes[i].ParentHash)
+		if leaves := c.Nodes[i].UnmergedLeaves; leaves != nil {
+			c.Nodes[i].UnmergedLeaves = append([]treesync.LeafIndex{}, leaves...)
+		}
+	}
+	return c
+}
+
 // MergeCommit applies a received or locally-generated commit to the group state.
 //
 // RFC 9420 §12.4.2
+//
+// A rejected commit, for example one with an invalid confirmation_tag, leaves the group unchanged.
+//
+// A commit that DiscardPendingCommit discarded cannot be merged. Its path keys are erased, so merging it would
+// install a tree without the private keys that match it.
 func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
+	if stagedCommit != nil && stagedCommit.discarded {
+		return fmt.Errorf("staged commit was discarded: %w", ErrNoPendingCommit)
+	}
+	return g.atomicCommit(func() error {
+		return g.mergeCommit(stagedCommit)
+	})
+}
+
+// mergeCommit is MergeCommit without the rollback. It changes g in place and must only be called
+// through atomicCommit.
+func (g *Group) mergeCommit(stagedCommit *StagedCommit) error {
 	if g.state != StatePendingCommit && g.state != StateOperational {
 		return fmt.Errorf("group not in valid state for commit: %w", ErrInvalidGroupState)
 	}
@@ -2030,6 +2281,9 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// when decrypting the UpdatePath (same exclusion the committer applied).
 	excluded := make(map[treesync.LeafIndex]bool)
 	hasGroupContextExtensions := false
+	// Set when this commit carries our own pending Update. The leaf key is replaced only once the commit is
+	// confirmed (below), so a rejected commit leaves the current leaf key in place for the caller.
+	ownUpdateCommitted := false
 	for i, proposal := range stagedCommit.proposals {
 		// Use per-proposal sender if available (from ProcessReceivedCommit),
 		// otherwise fall back to committer index (self-commit path).
@@ -2053,14 +2307,13 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 			hasGroupContextExtensions = true
 		}
 		// RFC §12.4.3.3: if our own Update proposal was committed, the new leaf key
-		// (PendingUpdatePrivKey from SelfUpdate) replaces the current MyLeafEncryptionKey.
+		// (PendingUpdatePrivKey from SelfUpdate) replaces the current MyLeafEncryptionKey after the commit is
+		// confirmed (see below).
 		if proposal.Type == ProposalTypeUpdate && g.pendingUpdatePrivKey != nil && proposal.Update != nil && proposal.Update.LeafNode != nil {
 			ownLeaf := g.ratchetTree.GetLeaf(treesync.LeafIndex(g.ownLeafIndex))
 			// This compares public signature keys to detect whether our own update committed.
 			if ownLeaf != nil && ownLeaf.LeafData != nil && bytes.Equal(proposal.Update.LeafNode.SignatureKeyBytes, ownLeaf.LeafData.SigKeyBytes()) {
-				// RFC §9.2: zero the old HPKE private key before replacing with the new one
-				g.setMyLeafEncryptionKey(g.pendingUpdatePrivKey)
-				g.pendingUpdatePrivKey = nil
+				ownUpdateCommitted = true
 			}
 		}
 	}
@@ -2360,13 +2613,40 @@ func (g *Group) MergeCommit(stagedCommit *StagedCommit) error {
 	// Save committed proposals before clearing (used by HandlePendingReInitCommit).
 	g.lastCommittedProposals = stagedCommit.proposals
 
-	// Apply the new leaf HPKE private key generated during Commit() now that the
-	// commit is confirmed. pendingLeafKey is nil for receiver-side MergeCommits.
-	// setMyLeafEncryptionKey takes ownership of the slice (no copy), so we must
-	// NOT zero it here — that would also zero myLeafEncryptionKey via the shared
-	// backing array, breaking decryption of future path secrets addressed to us.
+	// The commit is confirmed, so its own pending Update replaces the leaf key (RFC §12.4.3.3).
+	// setMyLeafEncryptionKey zeroes the replaced key (RFC §9.2).
+	if ownUpdateCommitted && g.pendingUpdatePrivKey != nil {
+		g.setMyLeafEncryptionKey(g.pendingUpdatePrivKey)
+		g.pendingUpdatePrivKey = nil
+	}
+
+	// Install the private keys of the new direct path (RFC 9420 §12.4.2). setPathNodePrivKey zeroes the keys
+	// they replace, which belong to the previous epoch. The staged commit releases them, so they are not
+	// erased on this path.
+	for nodeIdx, key := range stagedCommit.pathPrivKeys {
+		g.setPathNodePrivKey(nodeIdx, key)
+	}
+	stagedCommit.pathPrivKeys = nil
+
+	// The staged commit of this group is superseded when another commit is merged, as DiscardPendingCommit
+	// would supersede it (RFC 9420 §14). Its path keys and its staged leaf key are then erased. They become the
+	// group's keys only when this group's own staged commit is the one merged.
+	ownCommitMerged := g.pendingCommit != nil && stagedCommit == g.pendingCommit
+	if g.pendingCommit != nil && !ownCommitMerged {
+		zeroPathKeys(g.pendingCommit.pathPrivKeys)
+		g.pendingCommit.pathPrivKeys = nil
+		g.pendingCommit.discarded = true
+	}
+	// Apply the new leaf HPKE private key generated during Commit() now that the commit is confirmed.
+	// setMyLeafEncryptionKey takes ownership of the slice (no copy), so we must NOT zero it here — that would
+	// also zero myLeafEncryptionKey via the shared backing array, breaking decryption of future path secrets
+	// addressed to us.
 	if g.pendingLeafKey != nil {
-		g.setMyLeafEncryptionKey(g.pendingLeafKey)
+		if ownCommitMerged {
+			g.setMyLeafEncryptionKey(g.pendingLeafKey)
+		} else {
+			secureZeroBytes(g.pendingLeafKey)
+		}
 		g.pendingLeafKey = nil
 	}
 
@@ -2505,7 +2785,7 @@ func (g *Group) collectPSKsFromProposals(proposals []*Proposal) ([]schedule.Psk,
 		)
 		if pid.PskType == 2 { // Resumption PSK
 			resumptionKey := ResumptionPskCacheKey(pid.PskGroupID, pid.PskEpoch)
-			pskBytes, ok = g.cachedPsks[resumptionKey]
+			pskBytes, ok = g.cachedPsk(resumptionKey)
 			if !ok {
 				if g.PSKStore != nil {
 					pskBytes, err = NewPSKResolver(g.PSKStore).ResolvePSK(&pid)
@@ -2526,7 +2806,7 @@ func (g *Group) collectPSKsFromProposals(proposals []*Proposal) ([]schedule.Psk,
 				PskEpoch:   pid.PskEpoch,
 			})
 		} else { // External or Branch PSK
-			pskBytes, ok = g.cachedPsks[string(pid.ID)]
+			pskBytes, ok = g.cachedPsk(string(pid.ID))
 			if !ok && g.PSKStore != nil {
 				pskBytes, err = g.PSKStore.GetPSK(pid.ID)
 				if err != nil {
@@ -3378,6 +3658,15 @@ func (g *Group) LoadPsk(pskID, pskBytes []byte) {
 		g.cachedPsks = make(map[string][]byte)
 	}
 	g.cachedPsks[string(pskID)] = pskBytes
+}
+
+// cachedPsk returns the PSK cached under key. The cache is read under pskMu, the lock that LoadPsk and
+// the caching of resumption secrets take for writes.
+func (g *Group) cachedPsk(key string) ([]byte, bool) {
+	g.pskMu.RLock()
+	defer g.pskMu.RUnlock()
+	psk, ok := g.cachedPsks[key]
+	return psk, ok
 }
 
 func keyPackageToTreeSyncLifetime(lifetime *keypackages.Lifetime) *treesync.LeafNodeLifetime {

@@ -305,6 +305,13 @@ type StagedCommit struct {
 	// MembershipTag is the MAC(membership_key, AuthenticatedContentTBM) for PublicMessage
 	// commits (RFC §6.2). Nil for PrivateMessage commits or when membership_key is unavailable.
 	membershipTag []byte
+	// pathPrivKeys are the HPKE private keys of the new direct path, derived by this commit (the
+	// committer's own in Commit, or the receiver's from the UpdatePath). They are not in the group's
+	// key map until MergeCommit confirms the commit: a commit that is discarded or rejected erases them,
+	// so the keys of the current epoch, which are still in the tree, stay usable.
+	pathPrivKeys map[treesync.NodeIndex][]byte
+	// discarded is set by DiscardPendingCommit. The path keys are erased then, so the commit must not be merged.
+	discarded bool
 }
 
 // Commit returns the staged commit payload.
