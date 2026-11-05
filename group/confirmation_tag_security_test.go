@@ -71,6 +71,8 @@ func TestProcessReceivedCommit_ConfirmationTagSecurity(t *testing.T) {
 					nil,
 				)
 
+				pathKeys := make(map[treesync.NodeIndex][]byte)
+				defer zeroPathKeys(pathKeys)
 				rootSecret, err := bob.decryptPathSecret(
 					provisionalTree,
 					sender,
@@ -78,6 +80,7 @@ func TestProcessReceivedCommit_ConfirmationTagSecurity(t *testing.T) {
 					bob.MyLeafEncryptionKey(),
 					provisionalContext,
 					nil,
+					pathKeys,
 				)
 				if err != nil {
 					t.Fatalf("SETUP: decrypting path secret: %v", err)
