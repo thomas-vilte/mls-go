@@ -2751,7 +2751,9 @@ func Branch(
 	oldGroupID := oldGC.GroupID.AsSlice()
 	oldEpoch := oldGC.Epoch.AsUint64()
 	resumptionKey := ResumptionPskCacheKey(oldGroupID, oldEpoch)
-	newGroup.LoadPsk([]byte(resumptionKey), oldGroup.EpochSecrets().ResumptionSecret.AsSlice())
+	// LoadPsk keeps the slice it is given. The branch gets its own copy, so it does not share bytes
+	// with the live epoch secrets of oldGroup. The other resumption caches copy as well.
+	newGroup.LoadPsk([]byte(resumptionKey), append([]byte(nil), oldGroup.EpochSecrets().ResumptionSecret.AsSlice()...))
 
 	// RFC §11.3: first commit MUST include a resumption PSK proposal with usage=branch.
 	branchProposal := NewBranchPSKProposal(oldGroupID, oldEpoch, branchNonce)
