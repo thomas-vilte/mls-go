@@ -252,7 +252,9 @@ func IsParent(idx NodeIndex) bool {
 	return uint32(idx)%2 == 1
 }
 
-// LeafIndexToNodeIndex converts leaf k to node 2k.
+// LeafIndexToNodeIndex converts leaf k to node 2k. The product is taken in uint32, so for k >= 2^31
+// the result wraps onto an existing node (0x80000000 maps to node 0). Callers must check k against
+// NumLeaves before converting.
 func LeafIndexToNodeIndex(leaf LeafIndex) NodeIndex {
 	return NodeIndex(uint32(leaf) * 2)
 }
@@ -318,6 +320,11 @@ func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	}
 
 	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
+	// A node above maxIdx is not in the tree. Without this check the loop below may never end:
+	// parentStep can reach 0xFFFFFFFF, which is its own parent.
+	if node > maxIdx {
+		return 0, fmt.Errorf("node %d outside tree with %d leaves", node, t.NumLeaves)
+	}
 	p := parentStep(node)
 	for p > maxIdx {
 		p = parentStep(p)
@@ -360,8 +367,12 @@ func (t *RatchetTree) RightChild(parent NodeIndex) (NodeIndex, error) {
 	return child, nil
 }
 
-// DirectPath returns the path from a leaf to root.
+// DirectPath returns the path from a leaf to root, or nil when leafIdx is not a leaf of the tree.
 func (t *RatchetTree) DirectPath(leafIdx LeafIndex) []NodeIndex {
+	// The range is checked before the conversion, which wraps for leaves >= 2^31.
+	if uint64(leafIdx) >= uint64(t.NumLeaves) {
+		return nil
+	}
 	leaf := LeafIndexToNodeIndex(leafIdx)
 	path := []NodeIndex{leaf}
 
@@ -381,6 +392,9 @@ func (t *RatchetTree) DirectPath(leafIdx LeafIndex) []NodeIndex {
 // Copath returns the copath (siblings of direct path).
 func (t *RatchetTree) Copath(leafIdx LeafIndex) []NodeIndex {
 	path := t.DirectPath(leafIdx)
+	if len(path) == 0 {
+		return nil
+	}
 	copath := make([]NodeIndex, 0, len(path)-1)
 
 	for i := 0; i < len(path)-1; i++ {
@@ -735,6 +749,9 @@ func (t *RatchetTree) SubtreeContainsLeafByKey(idx NodeIndex, key []byte) bool {
 
 // SubtreeContainsLeaf checks if the given leaf index is under the subtree rooted at idx.
 func (t *RatchetTree) SubtreeContainsLeaf(idx NodeIndex, leaf LeafIndex) bool {
+	if uint64(leaf) >= uint64(t.NumLeaves) {
+		return false
+	}
 	target := LeafIndexToNodeIndex(leaf)
 	if int(idx) >= len(t.Nodes) || int(target) >= len(t.Nodes) {
 		return false
@@ -761,6 +778,9 @@ func (t *RatchetTree) SubtreeContainsLeaf(idx NodeIndex, leaf LeafIndex) bool {
 // and their parent_hash fields carry the value from a prior epoch that cannot
 // be independently verified by a joiner.
 func (t *RatchetTree) VerifyParentHashes(leafIdx LeafIndex) error {
+	if uint64(leafIdx) >= uint64(t.NumLeaves) {
+		return fmt.Errorf("leaf %d outside tree with %d leaves", leafIdx, t.NumLeaves)
+	}
 	path := t.DirectPath(leafIdx)
 	if len(path) <= 1 {
 		return nil

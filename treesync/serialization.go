@@ -153,6 +153,15 @@ func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error
 		return nil, fmt.Errorf("num_leaves %d implies %d nodes but only %d bytes remain", numLeaves, nodeCount, r.Remaining())
 	}
 	expectedNodes := int(nodeCount)
+
+	// Check the layout of every node before the node slice is sized. A body that is not a sequence
+	// of well-formed nodes is rejected here without allocating a Node. The reader is rewound
+	// afterwards, and the nodes are decoded below.
+	start := r.Position()
+	if err := skipTreeNodes(r, expectedNodes); err != nil {
+		return nil, err
+	}
+	r.SetPosition(start)
 	nodes := make([]Node, expectedNodes)
 
 	for i := range expectedNodes {
@@ -231,6 +240,59 @@ func UnmarshalTree(data []byte, cs ciphersuite.CipherSuite) (*RatchetTree, error
 		NumLeaves: numLeaves,
 		cs:        cs,
 	}, nil
+}
+
+// skipTreeNodes checks that the next count nodes have the layout that UnmarshalTree reads, without
+// decoding them or allocating. Keys and leaf data are decoded afterwards by UnmarshalTree, which
+// reports the same errors for the same layout.
+func skipTreeNodes(r *tls.Reader, count int) error {
+	for i := range count {
+		nodeType, err := r.ReadUint8()
+		if err != nil {
+			return fmt.Errorf("reading node type at index %d: %w", i, err)
+		}
+
+		switch nodeType {
+		case nodeTypeEmpty: // the type byte is the whole node.
+		case nodeTypeLeaf:
+			if _, err := skipVLBytes(r); err != nil {
+				return fmt.Errorf("reading leaf data at index %d: %w", i, err)
+			}
+		case nodeTypeParent:
+			if _, err := skipVLBytes(r); err != nil {
+				return fmt.Errorf("reading enc_key at index %d: %w", i, err)
+			}
+			if _, err := skipVLBytes(r); err != nil {
+				return fmt.Errorf("reading parent_hash at index %d: %w", i, err)
+			}
+			unmergedLen, err := skipVLBytes(r)
+			if err != nil {
+				return fmt.Errorf("reading unmerged_leaves at index %d: %w", i, err)
+			}
+			// A trailing partial uint32 is an error, not a shorter list.
+			if unmergedLen%4 != 0 {
+				return fmt.Errorf("reading unmerged_leaves at index %d: %w", i, tls.ErrBufferUnderrun)
+			}
+		default:
+			return fmt.Errorf("unknown node type %d at index %d", nodeType, i)
+		}
+	}
+	return nil
+}
+
+// skipVLBytes advances r past one variable-length field and returns its length. Unlike
+// ReadVLBytes it does not copy the field, and it reports a field longer than the input with the
+// same error text.
+func skipVLBytes(r *tls.Reader) (int, error) {
+	n, err := r.ReadMLSVarint()
+	if err != nil {
+		return 0, err
+	}
+	if uint64(n) > uint64(r.Remaining()) {
+		return 0, fmt.Errorf("buffer underrun: need %d bytes, have %d", n, r.Remaining())
+	}
+	r.Skip(int(n))
+	return int(n), nil
 }
 
 // UnmarshalTreeFromExtension parses the RFC 9420 ratchet_tree extension wire format.
