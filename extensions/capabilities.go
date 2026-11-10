@@ -57,35 +57,18 @@ import (
 // // Deserialize
 // req2, err := UnmarshalRequiredCapabilities(data)
 type RequiredCapabilitiesExtension struct {
-	// ProtocolVersions and CipherSuites are not part of the RFC 9420 §11.1 encoding. Marshal does not
-	// write them, UnmarshalRequiredCapabilities leaves them empty, and the protocol enforces them for
-	// every member. They are kept in memory for compatibility only.
-	ProtocolVersions []uint16                     // Protocol versions (not encoded)
-	CipherSuites     []uint16                     // Cipher suites (not encoded)
-	Extensions       []ExtensionType              // extension_types: extensions that must be supported
-	Proposals        []uint16                     // proposal_types: proposal types that must be supported
-	Credentials      []credentials.CredentialType // credential_types: credential types that must be supported
+	Extensions  []ExtensionType              // extension_types: extensions that must be supported
+	Proposals   []uint16                     // proposal_types: proposal types that must be supported
+	Credentials []credentials.CredentialType // credential_types: credential types that must be supported
 }
 
 // NewRequiredCapabilities creates a new RequiredCapabilities extension.
 func NewRequiredCapabilities() *RequiredCapabilitiesExtension {
 	return &RequiredCapabilitiesExtension{
-		ProtocolVersions: make([]uint16, 0),
-		CipherSuites:     make([]uint16, 0),
-		Extensions:       make([]ExtensionType, 0),
-		Proposals:        make([]uint16, 0),
-		Credentials:      make([]credentials.CredentialType, 0),
+		Extensions:  make([]ExtensionType, 0),
+		Proposals:   make([]uint16, 0),
+		Credentials: make([]credentials.CredentialType, 0),
 	}
-}
-
-// AddProtocolVersion adds a required protocol version.
-func (r *RequiredCapabilitiesExtension) AddProtocolVersion(version uint16) {
-	r.ProtocolVersions = append(r.ProtocolVersions, version)
-}
-
-// AddCipherSuite adds a required cipher suite.
-func (r *RequiredCapabilitiesExtension) AddCipherSuite(cs uint16) {
-	r.CipherSuites = append(r.CipherSuites, cs)
 }
 
 // AddExtension adds a required extension type.
@@ -117,7 +100,7 @@ func (r *RequiredCapabilitiesExtension) AddCredential(cred credentials.Credentia
 // └─────────────────────────────────────────────────────────────┘
 // ```
 //
-// ProtocolVersions and CipherSuites have no vector in this encoding and are not written.
+// The protocol version and the cipher suite have no vector in this encoding (RFC 9420 §11.1).
 func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 	buf := tls.NewWriter()
 
@@ -150,9 +133,8 @@ func (r *RequiredCapabilitiesExtension) Marshal() []byte {
 // # Decoding
 //
 // Reads the three vectors extension_types, proposal_types and credential_types. The data must hold
-// exactly these vectors: a truncated vector or bytes after the last one are errors. Every
-// member's protocol version and cipher suite are required by the protocol itself, so the decoded
-// ProtocolVersions and CipherSuites are always empty.
+// exactly these vectors: a truncated vector or bytes after the last one are errors. The protocol
+// version and the cipher suite are not decoded: the protocol requires them of every member anyway.
 //
 // # Example
 //
@@ -225,8 +207,6 @@ func UnmarshalRequiredCapabilities(data []byte) (*RequiredCapabilitiesExtension,
 //   - Every vector may be empty: RFC 9420 §11.1 requires no vector to be present.
 //   - The value 0x0000 is reserved for extension types (§17.3), proposal types (§17.4) and
 //     credential types (§17.5), so it is invalid in those vectors.
-//
-// ProtocolVersions and CipherSuites are not encoded, so they are not validated here.
 func (r *RequiredCapabilitiesExtension) Validate() error {
 	if slices.Contains(r.Extensions, 0) {
 		return errors.New("invalid extension type 0 (reserved, RFC 9420 §17.3)")
@@ -240,16 +220,6 @@ func (r *RequiredCapabilitiesExtension) Validate() error {
 	return nil
 }
 
-// HasProtocolVersion checks if a protocol version is required.
-func (r *RequiredCapabilitiesExtension) HasProtocolVersion(version uint16) bool {
-	return slices.Contains(r.ProtocolVersions, version)
-}
-
-// HasCipherSuite checks if a cipher suite is required.
-func (r *RequiredCapabilitiesExtension) HasCipherSuite(cs uint16) bool {
-	return slices.Contains(r.CipherSuites, cs)
-}
-
 // HasExtension checks if an extension type is required.
 func (r *RequiredCapabilitiesExtension) HasExtension(ext ExtensionType) bool {
 	return slices.Contains(r.Extensions, ext)
@@ -259,14 +229,6 @@ func (r *RequiredCapabilitiesExtension) HasExtension(ext ExtensionType) bool {
 func (r *RequiredCapabilitiesExtension) Equal(other *RequiredCapabilitiesExtension) bool {
 	if r == nil || other == nil {
 		return r == other
-	}
-
-	if !uint16SliceEqual(r.ProtocolVersions, other.ProtocolVersions) {
-		return false
-	}
-
-	if !uint16SliceEqual(r.CipherSuites, other.CipherSuites) {
-		return false
 	}
 
 	if !extensionTypeSliceEqual(r.Extensions, other.Extensions) {
@@ -286,9 +248,7 @@ func (r *RequiredCapabilitiesExtension) Equal(other *RequiredCapabilitiesExtensi
 
 // IsEmpty returns true if the extension has no required capabilities.
 func (r *RequiredCapabilitiesExtension) IsEmpty() bool {
-	return len(r.ProtocolVersions) == 0 &&
-		len(r.CipherSuites) == 0 &&
-		len(r.Extensions) == 0 &&
+	return len(r.Extensions) == 0 &&
 		len(r.Proposals) == 0 &&
 		len(r.Credentials) == 0
 }
@@ -298,20 +258,6 @@ func (r *RequiredCapabilitiesExtension) IsEmpty() bool {
 func (r *RequiredCapabilitiesExtension) SupportsAll(other *RequiredCapabilitiesExtension) bool {
 	if other == nil {
 		return true
-	}
-
-	// Check protocol versions
-	for _, v := range other.ProtocolVersions {
-		if !r.HasProtocolVersion(v) {
-			return false
-		}
-	}
-
-	// Check cipher suites
-	for _, cs := range other.CipherSuites {
-		if !r.HasCipherSuite(cs) {
-			return false
-		}
 	}
 
 	// Check extensions

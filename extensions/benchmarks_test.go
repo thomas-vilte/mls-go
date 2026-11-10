@@ -187,26 +187,18 @@ func BenchmarkRequiredCapabilitiesExtension_New(b *testing.B) {
 	}
 }
 
-func BenchmarkRequiredCapabilitiesExtension_AddProtocolVersion(b *testing.B) {
+func BenchmarkRequiredCapabilitiesExtension_AddExtension(b *testing.B) {
 	req := extensions.NewRequiredCapabilities()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		req.AddProtocolVersion(0x01)
-	}
-}
-
-func BenchmarkRequiredCapabilitiesExtension_AddCipherSuite(b *testing.B) {
-	req := extensions.NewRequiredCapabilities()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		req.AddCipherSuite(0x0002)
+		req.AddExtension(extensions.ExtensionTypeApplicationID)
 	}
 }
 
 func BenchmarkRequiredCapabilitiesExtension_Marshal(b *testing.B) {
 	req := extensions.NewRequiredCapabilities()
-	req.AddProtocolVersion(0x01)
-	req.AddCipherSuite(0x0002)
+	req.AddExtension(extensions.ExtensionTypeApplicationID)
+	req.AddProposal(0x0002)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		req.Marshal()
@@ -215,32 +207,32 @@ func BenchmarkRequiredCapabilitiesExtension_Marshal(b *testing.B) {
 
 func BenchmarkRequiredCapabilitiesExtension_Validate(b *testing.B) {
 	req := extensions.NewRequiredCapabilities()
-	req.AddProtocolVersion(0x01)
-	req.AddCipherSuite(0x0002)
+	req.AddExtension(extensions.ExtensionTypeApplicationID)
+	req.AddProposal(0x0002)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = req.Validate()
 	}
 }
 
-func BenchmarkRequiredCapabilitiesExtension_HasProtocolVersion(b *testing.B) {
+func BenchmarkRequiredCapabilitiesExtension_HasExtension(b *testing.B) {
 	req := extensions.NewRequiredCapabilities()
-	req.AddProtocolVersion(0x01)
-	req.AddProtocolVersion(0x02)
-	req.AddProtocolVersion(0x03)
+	req.AddExtension(extensions.ExtensionTypeApplicationID)
+	req.AddExtension(extensions.ExtensionTypeExternalPub)
+	req.AddExtension(extensions.ExtensionTypeRatchetTree)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		req.HasProtocolVersion(0x02)
+		req.HasExtension(extensions.ExtensionTypeExternalPub)
 	}
 }
 
 func BenchmarkRequiredCapabilitiesExtension_SupportsAll(b *testing.B) {
 	req1 := extensions.NewRequiredCapabilities()
-	req1.AddProtocolVersion(0x01)
-	req1.AddCipherSuite(0x0002)
+	req1.AddExtension(extensions.ExtensionTypeApplicationID)
+	req1.AddProposal(0x0002)
 
 	req2 := extensions.NewRequiredCapabilities()
-	req2.AddProtocolVersion(0x01)
+	req2.AddExtension(extensions.ExtensionTypeApplicationID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

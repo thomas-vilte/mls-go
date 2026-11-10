@@ -135,8 +135,6 @@ func TestExtensionsCollection(t *testing.T) {
 func TestRequiredCapabilitiesExtension(t *testing.T) {
 	rc := extensions.NewRequiredCapabilities()
 
-	rc.AddProtocolVersion(1)
-	rc.AddCipherSuite(0x0002)
 	rc.AddExtension(extensions.ExtensionTypeRatchetTree)
 	rc.AddProposal(0x0001)
 	rc.AddCredential(credentials.BasicCredential)
@@ -152,22 +150,11 @@ func TestRequiredCapabilitiesExtension(t *testing.T) {
 		t.Fatalf("UnmarshalRequiredCapabilities failed: %v", err)
 	}
 
-	// Only the RFC 9420 §11.1 vectors are encoded, so the round trip is compared on those.
-	encoded := *rc
-	encoded.ProtocolVersions, encoded.CipherSuites = nil, nil
-	if !encoded.Equal(parsed) {
+	if !rc.Equal(parsed) {
 		t.Error("Parsed extension not equal to original")
 	}
 
 	// Test Has methods
-	if !rc.HasProtocolVersion(1) {
-		t.Error("Should have protocol version 1")
-	}
-
-	if !rc.HasCipherSuite(0x0002) {
-		t.Error("Should have cipher suite 0x0002")
-	}
-
 	if !rc.HasExtension(extensions.ExtensionTypeRatchetTree) {
 		t.Error("Should have RatchetTree extension")
 	}
