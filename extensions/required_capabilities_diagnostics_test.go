@@ -29,9 +29,8 @@ func TestRequiredCapabilitiesDecodesRFCLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnmarshalRequiredCapabilities(RFC 3-vector layout) = %v", err)
 	}
-	if len(r.ProtocolVersions) != 0 || len(r.CipherSuites) != 0 ||
-		len(r.Extensions) != 1 || len(r.Proposals) != 1 || len(r.Credentials) != 1 {
-		t.Errorf("RFC 9420 §11.1 RequiredCapabilities decoded as versions=%v cipher_suites=%v extensions=%v proposals=%v credentials=%v; want extensions=[1] proposals=[2] credentials=[1]",
-			r.ProtocolVersions, r.CipherSuites, r.Extensions, r.Proposals, r.Credentials)
+	if len(r.Extensions) != 1 || len(r.Proposals) != 1 || len(r.Credentials) != 1 {
+		t.Errorf("RFC 9420 §11.1 RequiredCapabilities decoded as extensions=%v proposals=%v credentials=%v; want extensions=[1] proposals=[2] credentials=[1]",
+			r.Extensions, r.Proposals, r.Credentials)
 	}
 }

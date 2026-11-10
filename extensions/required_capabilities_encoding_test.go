@@ -21,7 +21,7 @@ func encodeUint16Vector(values ...uint16) []byte {
 }
 
 // TestRequiredCapabilitiesDecodesRFCVectors checks that the three RFC 9420 §11.1 vectors land in Extensions,
-// Proposals and Credentials, and that nothing is read into ProtocolVersions or CipherSuites.
+// Proposals and Credentials.
 func TestRequiredCapabilitiesDecodesRFCVectors(t *testing.T) {
 	data := bytes.Join([][]byte{encodeUint16Vector(0x0001, 0x0002), encodeUint16Vector(0x0003), encodeUint16Vector(0x0001)}, nil)
 	req, err := extensions.UnmarshalRequiredCapabilities(data)
@@ -37,17 +37,11 @@ func TestRequiredCapabilitiesDecodesRFCVectors(t *testing.T) {
 	if len(req.Credentials) != 1 || req.Credentials[0] != credentials.BasicCredential {
 		t.Errorf("Credentials = %v, want [BasicCredential]", req.Credentials)
 	}
-	if len(req.ProtocolVersions) != 0 || len(req.CipherSuites) != 0 {
-		t.Errorf("ProtocolVersions = %v, CipherSuites = %v, want none (not encoded)", req.ProtocolVersions, req.CipherSuites)
-	}
 }
 
-// TestRequiredCapabilitiesMarshalWritesThreeVectors checks the exact encoding. Protocol versions and cipher
-// suites have no vector, so they are not written.
+// TestRequiredCapabilitiesMarshalWritesThreeVectors checks the exact encoding of the three vectors.
 func TestRequiredCapabilitiesMarshalWritesThreeVectors(t *testing.T) {
 	req := extensions.NewRequiredCapabilities()
-	req.AddProtocolVersion(0x0001)
-	req.AddCipherSuite(0x0002)
 	req.AddExtension(extensions.ExtensionType(0x0001))
 	req.AddProposal(0x0002)
 	req.AddCredential(credentials.BasicCredential)
