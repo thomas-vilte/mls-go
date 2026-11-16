@@ -188,6 +188,9 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 	}
 
 	cs := ciphersuite.CipherSuite(state.CipherSuite)
+	if !cs.IsSupported() {
+		return nil, fmt.Errorf("unmarshaling group state: %w: %d", ciphersuite.ErrUnsupportedSuite, cs)
+	}
 
 	// Restore RatchetTree
 	tree, err := treesync.UnmarshalTree(state.RatchetTree, cs)
@@ -205,19 +208,20 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		return nil, fmt.Errorf("unmarshaling group context: %w", err)
 	}
 
-	// Restore EpochSecrets
+	// Restore EpochSecrets with the suite's own hash (SHA-512 for CS5). NewSecret defaults to
+	// SHA-256, so a restored group would derive different exporter, sender data and ratchet values.
 	var epochSecrets *schedule.EpochSecrets
 	if state.EpochSecrets != nil {
 		epochSecrets = &schedule.EpochSecrets{
-			SenderDataSecret:     ciphersuite.NewSecret(state.EpochSecrets.SenderDataSecret),
-			EncryptionSecret:     ciphersuite.NewSecret(state.EpochSecrets.EncryptionSecret),
-			ExporterSecret:       ciphersuite.NewSecret(state.EpochSecrets.ExporterSecret),
-			AuthenticationSecret: ciphersuite.NewSecret(state.EpochSecrets.AuthenticationSecret),
-			ConfirmationKey:      ciphersuite.NewSecret(state.EpochSecrets.ConfirmationKey),
-			MembershipKey:        ciphersuite.NewSecret(state.EpochSecrets.MembershipKey),
-			ExternalSecret:       ciphersuite.NewSecret(state.EpochSecrets.ExternalSecret),
-			ResumptionSecret:     ciphersuite.NewSecret(state.EpochSecrets.ResumptionSecret),
-			InitSecret:           ciphersuite.NewSecret(state.EpochSecrets.InitSecret),
+			SenderDataSecret:     ciphersuite.NewSecretForCS(cs, state.EpochSecrets.SenderDataSecret),
+			EncryptionSecret:     ciphersuite.NewSecretForCS(cs, state.EpochSecrets.EncryptionSecret),
+			ExporterSecret:       ciphersuite.NewSecretForCS(cs, state.EpochSecrets.ExporterSecret),
+			AuthenticationSecret: ciphersuite.NewSecretForCS(cs, state.EpochSecrets.AuthenticationSecret),
+			ConfirmationKey:      ciphersuite.NewSecretForCS(cs, state.EpochSecrets.ConfirmationKey),
+			MembershipKey:        ciphersuite.NewSecretForCS(cs, state.EpochSecrets.MembershipKey),
+			ExternalSecret:       ciphersuite.NewSecretForCS(cs, state.EpochSecrets.ExternalSecret),
+			ResumptionSecret:     ciphersuite.NewSecretForCS(cs, state.EpochSecrets.ResumptionSecret),
+			InitSecret:           ciphersuite.NewSecretForCS(cs, state.EpochSecrets.InitSecret),
 		}
 	}
 

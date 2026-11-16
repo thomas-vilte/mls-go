@@ -975,6 +975,9 @@ func (t *Tree) Marshal() []byte {
 // as the original, but leaf-specific ratchet state is NOT restored. Leaf secrets
 // must be re-derived using LeafForIndex after unmarshaling.
 func Unmarshal(data []byte, cs ciphersuite.CipherSuite) (*Tree, error) {
+	if !cs.IsSupported() {
+		return nil, fmt.Errorf("%w: %d", ciphersuite.ErrUnsupportedSuite, cs)
+	}
 	r := tls.NewReader(data)
 
 	encSecretBytes, err := r.ReadVLBytes()
@@ -992,7 +995,7 @@ func Unmarshal(data []byte, cs ciphersuite.CipherSuite) (*Tree, error) {
 
 	return &Tree{
 		cs:                 cs,
-		encryptionSecret:   ciphersuite.NewSecret(encSecretBytes),
+		encryptionSecret:   ciphersuite.NewSecretForCS(cs, encSecretBytes),
 		leafCount:          leafCount,
 		generation:         generation,
 		leafCache:          make(map[uint32]*LeafSecret),
@@ -1011,9 +1014,12 @@ func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) 
 	if state.LeafCount == 0 {
 		return nil, fmt.Errorf("tree state leaf_count must be > 0")
 	}
+	if !cs.IsSupported() {
+		return nil, fmt.Errorf("%w: %d", ciphersuite.ErrUnsupportedSuite, cs)
+	}
 	tree := &Tree{
 		cs:                 cs,
-		encryptionSecret:   ciphersuite.NewSecret(state.EncryptionSecret),
+		encryptionSecret:   ciphersuite.NewSecretForCS(cs, state.EncryptionSecret),
 		leafCount:          state.LeafCount,
 		generation:         state.Generation,
 		leafCache:          make(map[uint32]*LeafSecret),
@@ -1027,9 +1033,9 @@ func UnmarshalFull(state *TreeState, cs ciphersuite.CipherSuite) (*Tree, error) 
 			cs:                         cs,
 			leafIndex:                  leafIndex,
 			generation:                 leafState.Generation,
-			leafSecret:                 ciphersuite.NewSecret(leafState.LeafSecret),
-			handshakeRatchetSecret:     ciphersuite.NewSecret(leafState.HandshakeSecret),
-			applicationRatchetSecret:   ciphersuite.NewSecret(leafState.ApplicationSecret),
+			leafSecret:                 ciphersuite.NewSecretForCS(cs, leafState.LeafSecret),
+			handshakeRatchetSecret:     ciphersuite.NewSecretForCS(cs, leafState.HandshakeSecret),
+			applicationRatchetSecret:   ciphersuite.NewSecretForCS(cs, leafState.ApplicationSecret),
 			sequenceNumber:             leafState.SequenceNumber,
 			maxForwardDistance:         tree.maxForwardDistance,
 			secretCache:                make(map[uint32]*cachedGenSecret),
