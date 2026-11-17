@@ -80,6 +80,7 @@ type StoredProposalStateData struct {
 	Proposal []byte `json:"proposal"`
 	Sender   uint32 `json:"sender"`
 	Ref      []byte `json:"ref,omitempty"`
+	LocalRef []byte `json:"local_ref,omitempty"`
 }
 
 // MarshalState serializes the complete group state to JSON.
@@ -155,6 +156,7 @@ func (g *Group) MarshalState() ([]byte, error) {
 			Proposal: ProposalMarshal(stored.Proposal),
 			Sender:   uint32(stored.Sender),
 			Ref:      append([]byte(nil), stored.Ref...),
+			LocalRef: append([]byte(nil), stored.LocalRef...),
 		})
 	}
 
@@ -301,7 +303,26 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 			return nil, fmt.Errorf("unmarshaling stored proposal %d: %w", i, err)
 		}
 		ref := append([]byte(nil), pData.Ref...)
-		g.proposals.AddProposalWithRef(proposal, LeafNodeIndex(pData.Sender), ref)
+		// A state saved before repeated copies were ignored can hold one ProposalRef twice. That is one
+		// proposal, so only its first copy is restored.
+		if g.proposals.hasRef(ref) {
+			continue
+		}
+		// A state saved before LocalRef was recorded can hold the echo of an own proposal next to the
+		// proposal itself: a copy with a ProposalRef, sent by this member's leaf. The echo is the local
+		// proposal, so the local entry takes the ref and the copy is not restored.
+		if len(ref) > 0 && LeafNodeIndex(pData.Sender) == g.ownLeafIndex {
+			if local := g.proposals.localWithoutRef(g.ownLeafIndex, pData.Proposal); local != nil {
+				local.LocalRef = ref
+				continue
+			}
+		}
+		g.proposals.Proposals = append(g.proposals.Proposals, StoredProposal{
+			Proposal: proposal,
+			Sender:   LeafNodeIndex(pData.Sender),
+			Ref:      ref,
+			LocalRef: append([]byte(nil), pData.LocalRef...),
+		})
 		// Rebuild the by-ref index so that commits referencing proposals by hash
 		// can resolve them after a state restore (UnmarshalGroupState).
 		if len(ref) > 0 {

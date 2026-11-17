@@ -266,7 +266,10 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading reinit extensions: %w", err)
 		}
-		exts, _ := parseExtensions(extData)
+		exts, err := parseExtensions(extData)
+		if err != nil {
+			return nil, fmt.Errorf("parsing reinit extensions: %w", err)
+		}
 		proposal.ReInit = &ReInitProposal{
 			GroupID:     groupID,
 			Version:     keypackages.ProtocolVersion(version),
@@ -286,7 +289,10 @@ func UnmarshalProposal(data []byte) (*Proposal, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading group context extensions: %w", err)
 		}
-		exts, _ := parseExtensions(extData)
+		exts, err := parseExtensions(extData)
+		if err != nil {
+			return nil, fmt.Errorf("parsing group context extensions: %w", err)
+		}
 		proposal.GroupContextExtensions = &ContextExtensionsProposal{Extensions: exts}
 	}
 
@@ -437,6 +443,40 @@ func (ps *ProposalStore) AddProposalWithRef(proposal *Proposal, sender LeafNodeI
 	ps.Proposals = append(ps.Proposals, StoredProposal{Proposal: proposal, Sender: sender, Ref: ref})
 }
 
+// hasRef reports whether a stored proposal already has the given ProposalRef, as received (Ref) or as
+// generated locally (LocalRef). An empty ref never matches: a proposal without a ProposalRef is not
+// identified by one, and two such proposals are different proposals.
+func (ps *ProposalStore) hasRef(ref []byte) bool {
+	if ps == nil || len(ref) == 0 {
+		return false
+	}
+	for _, sp := range ps.Proposals {
+		if bytes.Equal(sp.Ref, ref) || bytes.Equal(sp.LocalRef, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+// localWithoutRef returns the stored proposal sent by leaf that has no ProposalRef yet and encodes to
+// data, or nil if there is none. It finds the local copy of a proposal whose echo is restored from a
+// state saved before LocalRef was recorded.
+func (ps *ProposalStore) localWithoutRef(leaf LeafNodeIndex, data []byte) *StoredProposal {
+	if ps == nil {
+		return nil
+	}
+	for i := range ps.Proposals {
+		sp := &ps.Proposals[i]
+		if sp.Proposal == nil || sp.Sender != leaf || len(sp.Ref) > 0 || len(sp.LocalRef) > 0 {
+			continue
+		}
+		if bytes.Equal(ProposalMarshal(sp.Proposal), data) {
+			return sp
+		}
+	}
+	return nil
+}
+
 // Clear clears all proposals.
 func (ps *ProposalStore) Clear() {
 	ps.Proposals = make([]StoredProposal, 0)
@@ -474,6 +514,10 @@ type StoredProposal struct {
 	// Ref is the ProposalRef bytes if this proposal was received from the network.
 	// Nil for proposals generated locally by the committer.
 	Ref []byte
+	// LocalRef is the ProposalRef of a locally generated proposal, set once the proposal is signed. It
+	// does not change how a commit encodes the proposal (the committer includes its own proposals by
+	// value); it recognizes the copy that the delivery service sends back to the committer.
+	LocalRef []byte
 }
 
 // ExternalSender represents an allowed external sender per RFC 9420 §12.1.8.1.

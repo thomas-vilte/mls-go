@@ -153,6 +153,17 @@ func (g *Group) SignProposalAsPublicMessage(
 	}
 	g.proposalByRef[string(ref)] = proposal
 
+	// The delivery service also sends the proposal back to its sender, and that copy has this same
+	// ProposalRef. LocalRef recognizes it as this proposal, so it is not stored a second time. Ref is
+	// left unset for the same reason as above.
+	if g.proposals != nil {
+		for i := range g.proposals.Proposals {
+			if g.proposals.Proposals[i].Proposal == proposal {
+				g.proposals.Proposals[i].LocalRef = ref
+			}
+		}
+	}
+
 	return framing.NewMLSMessagePublic(pm).Marshal(), nil
 }
 
