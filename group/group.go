@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	"github.com/thomas-vilte/mls-go/credentials"
 	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/internal/tls"
@@ -129,6 +130,10 @@ type Group struct {
 	epochHistory map[uint64]*epochState
 
 	extensionHandlers *ExtensionHandlerRegistry
+
+	// credentialValidator is the policy set with WithCredentialValidator. The group consults it for
+	// each credential it admits (see validateAdmittedCredential). Nil applies no policy.
+	credentialValidator CredentialValidator
 }
 
 func (g *Group) setMyLeafEncryptionKey(key []byte) {
@@ -581,6 +586,7 @@ func NewGroup(
 		PSKStore:              cfg.pskStore,
 		paddingSize:           cfg.paddingSize,
 		extensionHandlers:     cfg.extensionHandlers,
+		credentialValidator:   cfg.credentialValidator,
 	}
 
 	// Initialize secret tree
@@ -636,10 +642,45 @@ func (g *Group) AddMember(keyPackage *keypackages.KeyPackage) (*Proposal, error)
 		},
 	}
 
+	// The credential validator set with WithCredentialValidator refuses the credential before the
+	// proposal is stored, so the committer never holds an Add that the policy rejects.
+	if err := g.validateAdmittedCredential(context.Background(), keyPackage.LeafNode.Credential); err != nil {
+		return nil, err
+	}
+
 	// Store proposal
 	g.proposals.AddProposal(proposal, g.ownLeafIndex)
 
 	return proposal, nil
+}
+
+// validateAdmittedCredential runs the CredentialValidator set with WithCredentialValidator on a
+// credential that this group is about to admit. It returns nil when no validator is set.
+func (g *Group) validateAdmittedCredential(ctx context.Context, cred *credentials.Credential) error {
+	if g.credentialValidator == nil {
+		return nil
+	}
+	if err := g.credentialValidator.ValidateCredential(ctx, cred); err != nil {
+		return fmt.Errorf("credential not admitted by the group credential validator: %w", err)
+	}
+	return nil
+}
+
+// validateAddCredentials applies validateAdmittedCredential to the KeyPackage credential of each Add
+// proposal in proposals. Proposals of other types are not checked here.
+func (g *Group) validateAddCredentials(ctx context.Context, proposals []*Proposal) error {
+	if g.credentialValidator == nil {
+		return nil
+	}
+	for _, p := range proposals {
+		if p == nil || p.Type != ProposalTypeAdd || p.Add == nil || p.Add.KeyPackage == nil || p.Add.KeyPackage.LeafNode == nil {
+			continue
+		}
+		if err := g.validateAdmittedCredential(ctx, p.Add.KeyPackage.LeafNode.Credential); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (g *Group) validateAddKeyPackageUniqueness(keyPackage *keypackages.KeyPackage) error {
@@ -898,6 +939,12 @@ func (g *Group) CommitWithContext(
 	for i, fp := range filtered {
 		proposals[i] = fp.Proposal
 		proposalSenders[i] = fp.Sender
+	}
+
+	// The committer applies the group's credential validator to every Add it commits, including an
+	// Add that was received by reference. A refused credential fails the commit before any state changes.
+	if err := g.validateAddCredentials(ctx, proposals); err != nil {
+		return nil, err
 	}
 
 	// Clone tree, apply proposals provisionally.
@@ -1686,6 +1733,18 @@ func (g *Group) processReceivedCommit(
 			} else {
 				return ErrUnknownProposalRef
 			}
+		}
+	}
+
+	// The group's credential validator also checks the Add proposals that this commit applies, sent by
+	// value or by reference, and the credential of an external joiner. The commit is refused before any state
+	// is applied, so a refused commit leaves the group unchanged.
+	if err := g.validateAddCredentials(context.Background(), proposals); err != nil {
+		return err
+	}
+	if isExternalCommit && commit.Path != nil && commit.Path.LeafNode != nil {
+		if err := g.validateAdmittedCredential(context.Background(), commit.Path.LeafNode.Credential); err != nil {
+			return err
 		}
 	}
 
@@ -3383,6 +3442,7 @@ func NewGroupFromReInit(
 		PSKStore:              cfg.pskStore,
 		paddingSize:           cfg.paddingSize,
 		extensionHandlers:     cfg.extensionHandlers,
+		credentialValidator:   cfg.credentialValidator,
 	}
 	group.cachedPsks[string(reInit.GroupID)] = resumptionSecret.AsSlice()
 	group.secretTree, err = secrettree.NewTree(epochSecrets.EncryptionSecret, ratchetTree.NumLeaves, cs)

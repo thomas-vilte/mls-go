@@ -11,6 +11,9 @@ import (
 //
 // Applications can use this hook to enforce custom trust policies such as
 // identity allowlists, external PKI validation, or credential type checks.
+//
+// Pass it to NewGroup with WithCredentialValidator. See that option for the
+// admission points where the group calls it.
 type CredentialValidator interface {
 	ValidateCredential(ctx context.Context, credential *credentials.Credential) error
 }

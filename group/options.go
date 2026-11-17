@@ -63,6 +63,16 @@ func WithExtensionHandler(h ExtensionHandler) GroupOption {
 }
 
 // WithCredentialValidator sets the credential validator for the group.
+//
+// The group calls the validator for each credential it admits: the KeyPackage of an Add made with
+// AddMember, the Add proposals of a commit made with Commit, and the Add proposals and the external
+// joiner of a commit processed with ProcessReceivedCommit or ProcessPublicMessage. A rejected credential
+// makes that call return an error that wraps the validator's error, and the group state does not change.
+// An Add that is only received as a proposal is checked when a commit applies it, not when it arrives.
+//
+// The option applies to the Group that NewGroup or NewGroupFromReInit creates with it. JoinFromWelcome,
+// ExternalCommit and UnmarshalGroupState take no GroupOption, so the groups they return have no validator.
+// The Client applies its own validator (mls.WithCredentialValidator) and does not pass this option to group.
 func WithCredentialValidator(v CredentialValidator) GroupOption {
 	return func(cfg *groupConfig) {
 		cfg.credentialValidator = v
