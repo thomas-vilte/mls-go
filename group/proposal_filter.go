@@ -151,9 +151,10 @@ func (pf *ProposalFilter) validateSingleProposal(
 		return err
 	}
 
-	if fp.IsExternal && !isAllowedExternalProposalTypes(proposal.Type) {
-		return fmt.Errorf("external sender cannot send proposal type %d: %w",
-			proposal.Type, ErrInvalidProposal)
+	if fp.IsExternal {
+		if err := validateExternalSenderProposalType(proposal.Type); err != nil {
+			return err
+		}
 	}
 
 	requiredCaps := pf.extractRequiredCapabilities()
@@ -639,7 +640,12 @@ func (g *Group) FilterProposalsForCommit(
 		if isRemoveOfCommitterByOther(sp, g.ownLeafIndex) {
 			continue
 		}
-		filtered = append(filtered, FilteredProposal{Proposal: sp.Proposal, Sender: sp.Sender, Ref: sp.Ref})
+		filtered = append(filtered, FilteredProposal{
+			Proposal:   sp.Proposal,
+			Sender:     sp.Sender,
+			IsExternal: isExternalSenderIndex(sp.Sender, g.ratchetTree.NumLeaves),
+			Ref:        sp.Ref,
+		})
 	}
 
 	pf := NewProposalFilter(
@@ -832,4 +838,19 @@ func isAllowedExternalProposalTypes(pt ProposalType) bool {
 	default:
 		return false
 	}
+}
+
+// validateExternalSenderProposalType rejects a proposal type that an external sender may not send
+// (RFC 9420 §12.1.8). The error wraps ErrInvalidProposal.
+func validateExternalSenderProposalType(pt ProposalType) error {
+	if !isAllowedExternalProposalTypes(pt) {
+		return fmt.Errorf("external sender cannot send proposal type %d: %w", pt, ErrInvalidProposal)
+	}
+	return nil
+}
+
+// isExternalSenderIndex reports whether sender is the index of an external sender. ProcessPublicMessage
+// stores external sender k as NumLeaves+k, so every index from NumLeaves up lies outside the tree.
+func isExternalSenderIndex(sender LeafNodeIndex, numLeaves uint32) bool {
+	return sender >= LeafNodeIndex(numLeaves)
 }

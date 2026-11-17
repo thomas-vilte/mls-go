@@ -322,8 +322,12 @@ func (g *Group) Proposals() *ProposalStore { return g.proposals }
 // MyLeafEncryptionKey returns the private HPKE key bytes of the own leaf.
 func (g *Group) MyLeafEncryptionKey() []byte { return g.myLeafEncryptionKey }
 
-// StoreProposalWithRef stores a proposal with a pre-computed reference hash.
+// StoreProposalWithRef stores a proposal with a pre-computed reference hash. A proposal whose ref is
+// already stored is the same proposal, so it is not stored again.
 func (g *Group) StoreProposalWithRef(p *Proposal, sender LeafNodeIndex, ref []byte) {
+	if g.proposals.hasRef(ref) {
+		return
+	}
 	if g.proposalByRef == nil {
 		g.proposalByRef = make(map[string]*Proposal)
 	}
@@ -1539,6 +1543,11 @@ func (g *Group) StoreProposal(p *Proposal, sender LeafNodeIndex, acBytes []byte)
 		g.proposalByRef = make(map[string]*Proposal)
 	}
 	ref := ComputeProposalRef(acBytes, g.cipherSuite)
+	// A copy of a proposal that is already stored (same ProposalRef) is not stored again. The by-ref
+	// index must keep pointing at the stored proposal, so it is not overwritten with the copy.
+	if g.proposals.hasRef(ref) {
+		return ref
+	}
 	g.proposalByRef[string(ref)] = p
 	g.proposals.AddProposalWithRef(p, sender, ref)
 	return ref
@@ -1680,9 +1689,9 @@ func (g *Group) processReceivedCommit(
 		}
 	}
 
-	// RFC §12.2 and §12.4.3.2: validate proposals. For member commits, all proposals are from
-	// internal senders (IsExternal=false), and FilterAndValidateProposals checks them.
-	// An external commit follows the external Commit rules instead: its joiner is not a tree
+	// RFC §12.2 and §12.4.3.2: validate proposals. For member commits, FilterAndValidateProposals checks
+	// them; a proposal stored from an external sender is marked IsExternal, so the external sender rules
+	// apply to it. An external commit follows the external Commit rules instead: its joiner is not a tree
 	// member yet, so the list is checked against the joiner's credential from the UpdatePath.
 	pf := NewProposalFilter(g.groupContext, LeafNodeIndex(senderLeafIdx), g.members, g.cipherSuite, g.ratchetTree)
 	if isExternalCommit {
@@ -1693,8 +1702,9 @@ func (g *Group) processReceivedCommit(
 		filteredForValidation := make([]FilteredProposal, len(proposals))
 		for i, p := range proposals {
 			filteredForValidation[i] = FilteredProposal{
-				Proposal: p,
-				Sender:   proposalSenders[i],
+				Proposal:   p,
+				Sender:     proposalSenders[i],
+				IsExternal: isExternalSenderIndex(proposalSenders[i], g.ratchetTree.NumLeaves),
 			}
 		}
 		if _, err := pf.FilterAndValidateProposals(filteredForValidation, nil); err != nil {
@@ -2985,6 +2995,28 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 		return fmt.Errorf("unmarshaling proposal: %w", err)
 	}
 
+	// RFC 9420 §12.4: ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent)).
+	// WireFormat must match how the proposal was sent (Public or Private). A copy of a proposal that is
+	// already stored is the same proposal: it is accepted without being validated or stored again, so a
+	// repeated delivery neither fails nor puts the same proposal into the commit twice.
+	acForRef := &framing.AuthenticatedContent{
+		WireFormat: ac.WireFormat,
+		Content:    ac.Content,
+		Auth:       ac.Auth,
+	}
+	refBytes := acForRef.Marshal()
+	if g.proposals.hasRef(ComputeProposalRef(refBytes, g.cipherSuite)) {
+		return nil
+	}
+
+	// RFC 9420 §12.1.8: a proposal from an external sender must be of a type that sender may send. Other
+	// types are rejected here, before they are stored, so they cannot block later commits.
+	if ac.Content.Sender.Type == framing.SenderTypeExternal {
+		if err := validateExternalSenderProposalType(proposal.Type); err != nil {
+			return err
+		}
+	}
+
 	// RFC 9420 §12.2: Validate proposal immediately upon receiving it
 	switch proposal.Type {
 	case ProposalTypeAdd:
@@ -3016,14 +3048,6 @@ func (g *Group) processProposalContent(ac *framing.AuthenticatedContent, sender 
 		}
 	}
 
-	// RFC 9420 §12.4: ProposalRef = RefHash("MLS 1.0 Proposal Reference", Marshal(AuthenticatedContent))
-	// WireFormat must match how the proposal was sent (Public or Private).
-	acForRef := &framing.AuthenticatedContent{
-		WireFormat: ac.WireFormat,
-		Content:    ac.Content,
-		Auth:       ac.Auth,
-	}
-	refBytes := acForRef.Marshal()
 	g.StoreProposal(proposal, sender, refBytes)
 	return nil
 }
