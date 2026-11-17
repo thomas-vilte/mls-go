@@ -309,10 +309,16 @@ func parentStep(node NodeIndex) NodeIndex {
 	return node - NodeIndex(1<<l)
 }
 
+// maxParentSteps bounds the walk up the tree. parentStep raises the level of a node by
+// one, and the only value at level 31 is 0x7FFFFFFF, so a node inside the tree is reached within
+// 31 steps. Past that point the walk only reaches 0xFFFFFFFF, which is its own parent.
+const maxParentSteps = 32
+
 // Parent returns the parent of a node per RFC Appendix C.
 //
 // For non-power-of-2 trees, parentStep is applied repeatedly until the result
-// falls within the valid node range (0..2n-2), per the RFC algorithm.
+// falls within the valid node range (0..2n-2), per the RFC algorithm. The node
+// must be inside the tree and must not be the root; otherwise an error is returned.
 func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	root := t.Root()
 	if node == root {
@@ -320,13 +326,16 @@ func (t *RatchetTree) Parent(node NodeIndex) (NodeIndex, error) {
 	}
 
 	maxIdx := NodeIndex(t.NumLeaves*2 - 2)
-	// A node above maxIdx is not in the tree. Without this check the loop below may never end:
-	// parentStep can reach 0xFFFFFFFF, which is its own parent.
+	// A node above maxIdx is not in the tree. parentStep can reach 0xFFFFFFFF, which is its own
+	// parent, so the walk up is bounded by maxParentSteps.
 	if node > maxIdx {
 		return 0, fmt.Errorf("node %d outside tree with %d leaves", node, t.NumLeaves)
 	}
 	p := parentStep(node)
-	for p > maxIdx {
+	for steps := 1; p > maxIdx; steps++ {
+		if steps >= maxParentSteps {
+			return 0, fmt.Errorf("node %d has no parent inside tree with %d leaves", node, t.NumLeaves)
+		}
 		p = parentStep(p)
 	}
 
@@ -367,26 +376,42 @@ func (t *RatchetTree) RightChild(parent NodeIndex) (NodeIndex, error) {
 	return child, nil
 }
 
-// DirectPath returns the path from a leaf to root, or nil when leafIdx is not a leaf of the tree.
+// DirectPath returns the path from a leaf to root, or nil when there is none. DirectPathChecked
+// returns the same path together with the reason for a nil result.
 func (t *RatchetTree) DirectPath(leafIdx LeafIndex) []NodeIndex {
-	// The range is checked before the conversion, which wraps for leaves >= 2^31.
-	if uint64(leafIdx) >= uint64(t.NumLeaves) {
+	path, err := t.DirectPathChecked(leafIdx)
+	if err != nil {
 		return nil
 	}
-	leaf := LeafIndexToNodeIndex(leafIdx)
-	path := []NodeIndex{leaf}
+	return path
+}
 
-	current := leaf
-	for current != t.Root() {
+// DirectPathChecked returns the path from a leaf to root (RFC 9420 Appendix C). It returns an error
+// when leafIdx is not a leaf of the tree, so a caller that takes the index from a message can reject
+// it instead of working with an empty path.
+func (t *RatchetTree) DirectPathChecked(leafIdx LeafIndex) ([]NodeIndex, error) {
+	// The range is checked before the conversion, which wraps for leaves >= 2^31.
+	if uint64(leafIdx) >= uint64(t.NumLeaves) {
+		return nil, fmt.Errorf("leaf %d outside tree with %d leaves", leafIdx, t.NumLeaves)
+	}
+	root := t.Root()
+	current := LeafIndexToNodeIndex(leafIdx)
+	path := []NodeIndex{current}
+	for current != root {
+		// The root of a tree with at most 2^31 leaves has level 31 or less, so a direct path has at
+		// most maxParentSteps nodes. A longer walk means the tree is malformed.
+		if len(path) >= maxParentSteps {
+			return nil, fmt.Errorf("direct path of leaf %d does not reach the root", leafIdx)
+		}
 		parent, err := t.Parent(current)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("direct path of leaf %d: %w", leafIdx, err)
 		}
 		path = append(path, parent)
 		current = parent
 	}
 
-	return path
+	return path, nil
 }
 
 // Copath returns the copath (siblings of direct path).
