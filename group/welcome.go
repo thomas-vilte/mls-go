@@ -1015,7 +1015,13 @@ func JoinFromWelcomeWithContext(
 	// these intermediate nodes appears in a copath resolution.
 	if len(groupSecrets.PathSecret) > 0 {
 		committerLeafIdx := treesync.LeafIndex(groupInfo.Signer)
-		committerDP := ratchetTree.DirectPath(committerLeafIdx)
+		// The Signer comes from the GroupInfo, which is not verified when the Welcome has no
+		// ratchet_tree extension. In that case the tree above is a placeholder, and a Signer that
+		// is not one of its leaves has no direct path: reject it instead of walking a nil path.
+		committerDP, dpErr := ratchetTree.DirectPathChecked(committerLeafIdx)
+		if dpErr != nil {
+			return nil, fmt.Errorf("committer direct path: %w: %w", ErrSignerLeafMissing, dpErr)
+		}
 
 		// Walk the committer's directPath (skipping the leaf at index 0).
 		// Only PRESENT nodes were filtered levels when the UpdatePath was built;
