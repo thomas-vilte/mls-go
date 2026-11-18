@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -261,6 +262,10 @@ var (
 	ErrMemberNotFound = errors.New("mls: member not found")
 	// ErrClientClosed is returned when a closed Client is used.
 	ErrClientClosed = errors.New("mls: client is closed")
+	// ErrStalePendingCommit is returned by ConfirmPendingCommit under CacheNone when the stored group state changed
+	// after the commit was staged, for example because a winning commit was applied. Nothing is written. The handle
+	// stays pending and must be released with DiscardPendingCommit.
+	ErrStalePendingCommit = errors.New("mls: pending commit is stale: the group state changed after it was staged")
 )
 
 // ErrEpochMismatch is a type alias for group.ErrEpochMismatch, surfaced at the Client level.
@@ -420,6 +425,17 @@ type groupEntry struct {
 	storedLeafIndex group.LeafNodeIndex
 	storedLeafKey   []byte
 	sigKeyStored    bool
+	// storedSender is the own leaf's sender generation that persistGroup last wrote for this group.
+	// It is unknown for a new or reloaded entry. Guarded by mu.
+	storedSender senderGeneration
+}
+
+// senderGeneration is the sender sequence number of an own leaf, with the epoch and the leaf it belongs to.
+type senderGeneration struct {
+	known bool
+	epoch uint64
+	leaf  group.LeafNodeIndex
+	seq   uint64
 }
 
 // Client is a high-level, thread-safe facade over the low-level MLS group API.
@@ -1743,6 +1759,10 @@ func (c *Client) Close() error {
 // group ID. It is not ErrGroupNotFound: the entry holds a state, just not this group's.
 var errStateGroupMismatch = errors.New("stored group state belongs to another group")
 
+// errSenderGenerationRewind reports that a save would move the sender generation of the own leaf backwards
+// within an epoch, which would reuse a key and nonce pair (RFC 9420 §9.2). persistGroup refuses such a save.
+var errSenderGenerationRewind = errors.New("sender generation would move backwards")
+
 // loadGroupEntry loads group state from storage (or the in-memory cache).
 // Must be called with entry.mu held.
 func (c *Client) loadGroupEntry(ctx context.Context, groupIDBytes []byte, entry *groupEntry) (*group.Group, error) {
@@ -1888,9 +1908,24 @@ func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupE
 		return fmt.Errorf("marshaling group state: %w", err)
 	}
 	groupID := g.ID()
+	// The sender generation of the own leaf never moves backwards within an epoch (RFC 9420 §9.2). A save that
+	// would write a lower one than this entry last stored is refused before anything is written, so a stale
+	// snapshot cannot make a generation that was already used available again.
+	leafIndex := g.OwnLeafIndex()
+	sender := senderGeneration{
+		known: true,
+		epoch: g.Epoch().AsUint64(),
+		leaf:  leafIndex,
+		seq:   g.SecretTree().SequenceNumber(uint32(leafIndex)),
+	}
+	if prev := entry.storedSender; prev.known && prev.epoch == sender.epoch && prev.leaf == sender.leaf && sender.seq < prev.seq {
+		return fmt.Errorf("%w: epoch %d, leaf %d: stored sequence number %d, save would write %d",
+			errSenderGenerationRewind, sender.epoch, sender.leaf, prev.seq, sender.seq)
+	}
 	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
 		return fmt.Errorf("saving group state: %w", err)
 	}
+	entry.storedSender = sender
 	if !entry.sigKeyStored {
 		if err := c.store.StoreSignatureKey(ctx, groupID, c.sigKey); err != nil {
 			return fmt.Errorf("saving signature key: %w", err)
@@ -1898,7 +1933,6 @@ func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupE
 		entry.sigKeyStored = true
 	}
 	leafKey := g.MyLeafEncryptionKey()
-	leafIndex := g.OwnLeafIndex()
 	if len(leafKey) > 0 && (entry.storedLeafIndex != leafIndex || !bytes.Equal(entry.storedLeafKey, leafKey)) {
 		if err := c.store.StoreLeafEncryptionKey(ctx, groupID, leafIndex, leafKey); err != nil {
 			return fmt.Errorf("saving leaf encryption key: %w", err)
@@ -2099,6 +2133,10 @@ type PendingCommitHandle struct {
 	opts             CommitPendingProposalsOptions
 	joinIdentities   [][]byte
 	removeIdentities [][]byte
+	// baseEpoch and baseDigest identify the stored state that the commit was staged on. Only handles of
+	// CacheNone set them, because only there the snapshot in the handle can fall behind the store.
+	baseEpoch  uint64
+	baseDigest [sha256.Size]byte
 	// released records that the handle was counted out of pendingHandles. Guarded by entry.mu.
 	released bool
 }
@@ -2158,6 +2196,18 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 		}
 	}
 
+	// Under CacheNone the handle keeps a snapshot of the group, and the store can move past it before the handle
+	// is resolved. Record the stored state that the commit is staged on, so ConfirmPendingCommit can check it.
+	var baseEpoch uint64
+	var baseDigest [sha256.Size]byte
+	if c.cacheStrategy != CacheAlways {
+		baseEpoch = g.Epoch().AsUint64()
+		baseDigest, err = pendingBaseDigest(g)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprinting staged group state: %w", err)
+		}
+	}
+
 	// Generate the commit — does NOT modify the group's epoch or key material.
 	// Group transitions to StatePendingCommit.
 	staged, err := g.Commit(c.sigKey, c.sigKey.PublicKey(), nil)
@@ -2194,6 +2244,8 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 		newMemberKPs:     newMemberKPs,
 		joinIdentities:   joinIdentities,
 		removeIdentities: removeIdentities,
+		baseEpoch:        baseEpoch,
+		baseDigest:       baseDigest,
 	}, nil
 }
 
@@ -2202,6 +2254,10 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 // Welcome message for any new members, persists the group, and emits events.
 //
 // Returns the serialized Welcome message (nil if the commit has no Add proposals).
+//
+// Under CacheNone, if the stored group state changed after the commit was staged (for example, a winning commit
+// was applied), it returns ErrStalePendingCommit and writes nothing. The handle stays pending: call
+// DiscardPendingCommit to release it.
 func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommitHandle) ([]byte, error) {
 	if handle == nil {
 		return nil, fmt.Errorf("nil pending commit handle")
@@ -2215,6 +2271,14 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 	if handle.entry.forgotten {
 		handle.release()
 		return nil, ErrGroupNotFound
+	}
+
+	// Under CacheNone the store may hold a newer state than the snapshot in the handle. Merging the snapshot
+	// would write that state back and could fork the group, so a stale handle is refused here.
+	if c.cacheStrategy != CacheAlways {
+		if err := c.checkPendingBase(ctx, handle); err != nil {
+			return nil, err
+		}
 	}
 
 	g := handle.g
@@ -2269,6 +2333,8 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 //
 // The group returns to StateOperational. Stored proposals are preserved so the
 // application can re-commit (possibly after applying the winning commit first).
+// Discarding never rolls back the stored state: a commit that won the epoch
+// meanwhile, and messages sent since staging, stay in effect.
 func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommitHandle) error {
 	if handle == nil {
 		return fmt.Errorf("nil pending commit handle")
@@ -2289,10 +2355,14 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 		return fmt.Errorf("discarding pending commit: %w", err)
 	}
 
-	// Persist the group back in StateOperational so subsequent loads see the
-	// pre-commit state with proposals still intact.
-	if err := c.persistGroup(ctx, g, handle.entry); err != nil {
-		return err
+	// Under CacheNone nothing is written. Staging wrote nothing, so the store already holds the operational
+	// state that this handle returns to, and it may hold a newer one: a winning commit, or messages sent or
+	// received since staging. Writing the snapshot would roll that state back. CacheAlways keeps the
+	// group in memory, so it saves the group back in StateOperational, as before.
+	if c.cacheStrategy == CacheAlways {
+		if err := c.persistGroup(ctx, g, handle.entry); err != nil {
+			return err
+		}
 	}
 
 	if c.cacheStrategy != CacheAlways {
@@ -2302,6 +2372,47 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 	handle.release()
 
 	return nil
+}
+
+// checkPendingBase returns ErrStalePendingCommit when the stored group state is not the state that handle was
+// staged on (CacheNone). The epoch is compared first, because a winning commit is the usual cause. The caller
+// holds handle.entry.mu.
+func (c *Client) checkPendingBase(ctx context.Context, handle *PendingCommitHandle) error {
+	stored, err := c.loadGroupEntry(ctx, handle.g.ID().AsSlice(), handle.entry)
+	if err != nil {
+		return err
+	}
+	if epoch := stored.Epoch().AsUint64(); epoch != handle.baseEpoch {
+		return fmt.Errorf("%w: staged on epoch %d, stored state is at epoch %d", ErrStalePendingCommit, handle.baseEpoch, epoch)
+	}
+	digest, err := pendingBaseDigest(stored)
+	if err != nil {
+		return fmt.Errorf("fingerprinting stored group state: %w", err)
+	}
+	if digest != handle.baseDigest {
+		return fmt.Errorf("%w: stored group state changed after staging", ErrStalePendingCommit)
+	}
+	return nil
+}
+
+// pendingBaseDigest fingerprints the operational state of g without its secret tree. The secret tree holds the
+// ratchets of the current epoch, which application sends and receives advance. Merging a staged commit replaces
+// it with the tree of the next epoch, so those changes do not make the commit stale. Everything else does.
+func pendingBaseDigest(g *group.Group) ([sha256.Size]byte, error) {
+	raw, err := g.MarshalState()
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	var state group.StateData
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	state.SecretTree = nil
+	stripped, err := json.Marshal(&state)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(stripped), nil
 }
 
 // CommitPendingProposalsWithOptions commits pending proposals with fine-grained control.
@@ -2498,6 +2609,7 @@ func (c *Client) forgetGroup(ctx context.Context, groupID []byte, entry *groupEn
 	// A forgotten entry never writes again, so its record of the stored keys is dropped too.
 	entry.storedLeafKey = nil
 	entry.sigKeyStored = false
+	entry.storedSender = senderGeneration{}
 
 	var errs []error
 	if err := c.store.DeleteGroupState(ctx, gID); err != nil {

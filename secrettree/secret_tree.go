@@ -200,6 +200,19 @@ func (t *Tree) Generation() uint64 { return t.generation }
 // IncrementGeneration increments the epoch generation counter.
 func (t *Tree) IncrementGeneration() { t.generation++ }
 
+// SequenceNumber returns the sequence number that the next message of leafIndex uses. A leaf whose ratchet
+// is not loaded has never been used in this tree, so its sequence number is 0.
+func (t *Tree) SequenceNumber(leafIndex uint32) uint64 {
+	if t == nil {
+		return 0
+	}
+	ls, ok := t.leafCache[leafIndex]
+	if !ok || ls == nil {
+		return 0
+	}
+	return ls.sequenceNumber
+}
+
 // MaxForwardDistance returns how many generations a single message may move a
 // leaf's ratchet forward. The default is DefaultMaxForwardDistance.
 func (t *Tree) MaxForwardDistance() uint32 { return t.maxForwardDistance }
