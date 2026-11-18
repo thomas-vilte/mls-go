@@ -1899,6 +1899,17 @@ func (g *Group) processReceivedCommit(
 		); err != nil {
 			return fmt.Errorf("%w: invalid update path leaf node: %w", ErrInvalidProposal, err)
 		}
+		// RFC 9420 §7.4 requires the new LeafNode of the UpdatePath to meet the same
+		// restrictions as a LeafNode of an Update proposal (§7.3), apart from leaf_node_source. As in that
+		// case, it must be compatible with the group (cipher suite, MLS 1.0 and required_capabilities), and
+		// its credential type must be supported by the other members of the tree after the proposals. The
+		// sender's own leaf is replaced by this LeafNode, so it is not compared.
+		if err := validateCapabilitiesCompatible(g.cipherSuite, commit.Path.LeafNode.Capabilities, pf.extractRequiredCapabilities()); err != nil {
+			return fmt.Errorf("invalid update path leaf node: %w", err)
+		}
+		if err := validateCredentialTypeSupportedInTree(treeAfterProposals, commit.Path.LeafNode.Credential.CredentialType, &senderLeafIdx); err != nil {
+			return fmt.Errorf("invalid update path leaf node: %w", err)
+		}
 		// RFC §12.4.2: the UpdatePath.LeafNode.EncryptionKey MUST differ from the
 		// sender's current leaf key (forward secrecy — the old key must be retired).
 		if senderLeaf := g.ratchetTree.GetLeaf(senderLeafIdx); senderLeaf != nil && senderLeaf.LeafData != nil {

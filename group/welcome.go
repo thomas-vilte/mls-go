@@ -959,6 +959,7 @@ func JoinFromWelcomeWithContext(
 		leafEncKey = myKeyPackage.InitKey
 	}
 	ownLeafFound := false
+	ownLeafMatches := 0
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(ratchetTree.NumLeaves); i++ {
 		leaf := ratchetTree.GetLeaf(i)
 		if leaf != nil && leaf.LeafData != nil {
@@ -966,9 +967,14 @@ func JoinFromWelcomeWithContext(
 			if bytes.Equal(leaf.LeafData.EncryptionKey, leafEncKey) {
 				ownLeafIndex = LeafNodeIndex(i)
 				ownLeafFound = true
-				break
+				ownLeafMatches++
 			}
 		}
+	}
+	// RFC §12.4.3.1: the joiner's leaf is the one identical to its KeyPackage, so exactly one
+	// leaf may match. Several matches make the own leaf ambiguous: reject instead of picking one.
+	if ownLeafMatches > 1 {
+		return nil, fmt.Errorf("own encryption_key matches %d leaves in ratchet tree: %w", ownLeafMatches, ErrDuplicateLeafEncryptionKey)
 	}
 	// RFC §12.4.3.1: must find a leaf matching our KeyPackage; error if the tree was
 	// provided but our leaf is absent. When no tree was provided (fallback), the
