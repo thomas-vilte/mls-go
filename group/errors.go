@@ -174,6 +174,9 @@ var (
 	ErrLeafNodeInvalid = errors.New("group: leaf node is invalid")
 	// ErrUnmergedLeavesInvalid is returned when an unmerged_leaves entry is invalid.
 	ErrUnmergedLeavesInvalid = errors.New("group: unmerged_leaves entry is invalid")
+	// ErrDuplicateLeafEncryptionKey is returned when two leaves of a ratchet tree share the same
+	// encryption_key (RFC 9420 §7.3), which leaves the joiner's own leaf ambiguous.
+	ErrDuplicateLeafEncryptionKey = errors.New("group: duplicate leaf encryption_key in ratchet tree")
 	// ErrRequiredExtensionMissing is returned when a required extension is not supported.
 	ErrRequiredExtensionMissing = errors.New("group: required extension not supported")
 	// ErrJoinerLeafNotFound is returned when the joiner leaf is not found in the ratchet tree.

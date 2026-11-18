@@ -750,8 +750,18 @@ func (pf *ProposalFilter) extractRequiredCapabilities() *extensions.RequiredCapa
 // by all existing (non-blank) members of the tree (RFC §7.3).
 // A credential type is "supported" by a member if it appears in their Capabilities.Credentials.
 func (pf *ProposalFilter) validateCredentialTypeSupported(credType credentials.CredentialType) error {
-	for i, node := range pf.tree.Nodes {
+	return validateCredentialTypeSupportedInTree(pf.tree, credType, nil)
+}
+
+// validateCredentialTypeSupportedInTree is validateCredentialTypeSupported over an explicit tree. When
+// skip is set, that leaf is not compared: its LeafNode is being replaced, as the sender's leaf is by the
+// UpdatePath of a member commit.
+func validateCredentialTypeSupportedInTree(tree *treesync.RatchetTree, credType credentials.CredentialType, skip *treesync.LeafIndex) error {
+	for i, node := range tree.Nodes {
 		if node.State != treesync.NodeStatePresent || !treesync.IsLeaf(treesync.NodeIndex(i)) {
+			continue
+		}
+		if skip != nil && treesync.LeafIndex(i/2) == *skip {
 			continue
 		}
 		if node.LeafData == nil || node.LeafData.Capabilities == nil {

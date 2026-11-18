@@ -114,7 +114,11 @@ func TestPersistGroupWritesKeysOnlyWhenNeeded(t *testing.T) {
 				t.Fatalf("NewClient(alice): %v", err)
 			}
 			defer func() { _ = alice.Close() }()
-			bob, err := NewClient([]byte("bob-persist"), cs, WithCacheStrategy(tc.strategy))
+			// bob also holds an X.509 credential. alice's LeafNode uses X.509, and RFC 9420 section 7.3 requires
+			// every member to support the credential type of the LeafNode that a commit installs, so a Basic-only
+			// bob would not support it.
+			bobCertDER, bobCertKey := generateTestCertificate(t)
+			bob, err := NewClient([]byte("bob-persist"), cs, WithCacheStrategy(tc.strategy), WithX509Credential(bobCertDER, bobCertKey))
 			if err != nil {
 				t.Fatalf("NewClient(bob): %v", err)
 			}

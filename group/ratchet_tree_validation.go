@@ -14,7 +14,8 @@ import (
 // "verify the integrity of the ratchet tree" checklist:
 //
 //   - tree_hash matches the GroupContext's tree_hash.
-//   - every non-blank LeafNode is structurally valid (RFC §7.3).
+//   - every non-blank LeafNode is structurally valid (RFC §7.3), and no two of them
+//     share an encryption_key (RFC §7.3: unique among the members of the group).
 //   - every non-blank parent node is parent-hash valid (RFC §7.9.2), checked
 //     across the whole tree since a fresh joiner has no prior verified state
 //     to lean on (unlike processing a Commit, where only the committer's
@@ -28,6 +29,9 @@ func validateJoinedRatchetTree(tree *treesync.RatchetTree, groupContext *GroupCo
 	}
 
 	groupID := groupContext.GroupID.AsSlice()
+	// RFC 9420 §7.3: encryption_key must be unique among the leaves. Keys are compared by
+	// value, so a joiner never ends up with two leaves that could be its own.
+	seenEncKeys := make(map[string]treesync.LeafIndex)
 	for i := treesync.LeafIndex(0); i < treesync.LeafIndex(tree.NumLeaves); i++ {
 		leaf := tree.GetLeaf(i)
 		if leaf == nil || leaf.State != treesync.NodeStatePresent || leaf.LeafData == nil {
@@ -38,6 +42,12 @@ func validateJoinedRatchetTree(tree *treesync.RatchetTree, groupContext *GroupCo
 		); err != nil {
 			return fmt.Errorf("invalid leaf node at index %d in ratchet tree: %w", i, ErrLeafNodeInvalid)
 		}
+		encKey := string(leaf.LeafData.EncryptionKey)
+		if first, dup := seenEncKeys[encKey]; dup {
+			return fmt.Errorf("leaves %d and %d share encryption_key in ratchet tree: %w: %w",
+				first, i, ErrLeafNodeInvalid, ErrDuplicateLeafEncryptionKey)
+		}
+		seenEncKeys[encKey] = i
 	}
 
 	if err := tree.VerifyAllParentHashes(); err != nil {
