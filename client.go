@@ -264,7 +264,7 @@ var (
 	ErrClientClosed = errors.New("mls: client is closed")
 	// ErrStalePendingCommit is returned by ConfirmPendingCommit under CacheNone when the stored group state changed
 	// after the commit was staged, for example because a winning commit was applied. Nothing is written. The handle
-	// stays pending and must be released with DiscardPendingCommit.
+	// is resolved, so Close does not wait for it, and DiscardPendingCommit may still be called.
 	ErrStalePendingCommit = errors.New("mls: pending commit is stale: the group state changed after it was staged")
 )
 
@@ -1902,7 +1902,23 @@ func (c *Client) isClosed() bool {
 // The group state is saved on every call. The signature key is written once per entry, and the
 // leaf key only when it differs from the one the entry last wrote, so an operation that does not
 // change the keys does not rewrite them.
+//
+// Under CacheAlways the cached group is the one the caller has just changed. When the save fails, that change
+// is not in the store, so the cache entry is dropped and the next operation loads the last saved state.
+// A group with a staged commit is the one its PendingCommitHandle resolves, so it stays cached. Dropping it would
+// let other operations work on a reloaded copy, and a later Discard would then save the old copy over their
+// changes.
 func (c *Client) persistGroup(ctx context.Context, g *group.Group, entry *groupEntry) error {
+	err := c.saveGroupState(ctx, g, entry)
+	if err != nil && c.cacheStrategy == CacheAlways && g.State() != group.StatePendingCommit {
+		entry.group = nil
+	}
+	return err
+}
+
+// saveGroupState writes the state of g to the store, and the keys of entry when they differ from the ones it
+// last stored. It is the storage half of persistGroup, which handles the cache when the save fails.
+func (c *Client) saveGroupState(ctx context.Context, g *group.Group, entry *groupEntry) error {
 	state, err := g.MarshalState()
 	if err != nil {
 		return fmt.Errorf("marshaling group state: %w", err)
@@ -2256,8 +2272,8 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 // Returns the serialized Welcome message (nil if the commit has no Add proposals).
 //
 // Under CacheNone, if the stored group state changed after the commit was staged (for example, a winning commit
-// was applied), it returns ErrStalePendingCommit and writes nothing. The handle stays pending: call
-// DiscardPendingCommit to release it.
+// was applied), it returns ErrStalePendingCommit and writes nothing. Like every other outcome, this call resolves
+// the handle, so Close does not wait for it. DiscardPendingCommit may still be called afterwards.
 func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommitHandle) ([]byte, error) {
 	if handle == nil {
 		return nil, fmt.Errorf("nil pending commit handle")
@@ -2265,11 +2281,13 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 
 	handle.entry.mu.Lock()
 	defer handle.entry.mu.Unlock()
+	// Every outcome resolves the handle, failures included, so Close never waits for a handle that can no
+	// longer be resolved. Deferred calls run last in, first out, so release runs under entry.mu.
+	defer handle.release()
 
 	// The local member left or was removed after the commit was staged. Persisting the group now
 	// would write back the state that forgetGroup deleted.
 	if handle.entry.forgotten {
-		handle.release()
 		return nil, ErrGroupNotFound
 	}
 
@@ -2300,6 +2318,11 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 		}
 		welcomeObj, err := g.CreateWelcomeWithOpts(handle.newMemberKPs, c.sigKey, welcomeOpts...)
 		if err != nil {
+			// The merge is already applied to g, and under CacheAlways g is the cached group. The merged
+			// state is not saved, so the cache entry is dropped.
+			if c.cacheStrategy == CacheAlways {
+				handle.entry.group = nil
+			}
 			return nil, fmt.Errorf("creating welcome: %w", err)
 		}
 		msg := framing.MLSMessage{Welcome: welcomeObj.Marshal()}
@@ -2323,8 +2346,6 @@ func (c *Client) ConfirmPendingCommit(ctx context.Context, handle *PendingCommit
 		handle.entry.group = nil
 	}
 
-	handle.release()
-
 	return welcomeBytes, nil
 }
 
@@ -2342,10 +2363,11 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 
 	handle.entry.mu.Lock()
 	defer handle.entry.mu.Unlock()
+	// As in ConfirmPendingCommit, the handle is resolved on every path, a failed save included.
+	defer handle.release()
 
 	// As in ConfirmPendingCommit, a forgotten group must not be persisted again.
 	if handle.entry.forgotten {
-		handle.release()
 		return ErrGroupNotFound
 	}
 
@@ -2368,8 +2390,6 @@ func (c *Client) DiscardPendingCommit(ctx context.Context, handle *PendingCommit
 	if c.cacheStrategy != CacheAlways {
 		handle.entry.group = nil
 	}
-
-	handle.release()
 
 	return nil
 }
