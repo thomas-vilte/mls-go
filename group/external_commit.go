@@ -425,6 +425,7 @@ func ExternalCommit(
 		proposalByRef:         make(map[string]*Proposal),
 		keySchedule:           schedule.NewKeySchedule(cs, epochSecrets.InitSecret),
 		interimTranscriptHash: newInterimHash,
+		confirmationTag:       confirmationTag,
 		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		cachedPsks:            make(map[string][]byte),
