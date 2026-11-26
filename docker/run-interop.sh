@@ -16,7 +16,8 @@ CROSS_TARGET="${CROSS_TARGET:-mlspp}"
 # can scramble KeyPackages/Welcomes between suites and cause spurious
 # failures (typically in the last-run configs, e.g. reinit/branch).
 # Self-interop (mls-go vs mls-go) handles concurrency fine and stays parallel.
-SEQUENTIAL_SELF="${SEQUENTIAL_SELF:-}"
+# SEQUENTIAL=1 applies to self unless SEQUENTIAL_SELF is set; cross is sequential by default.
+SEQUENTIAL_SELF="${SEQUENTIAL_SELF:-${SEQUENTIAL:-}}"
 SEQUENTIAL_CROSS="${SEQUENTIAL_CROSS:-1}"
 
 GREEN='\033[0;32m'
@@ -176,14 +177,14 @@ fi
 if [ "$MODE" = "all" ] || [ "$MODE" = "self" ]; then
     declare -a selected_self
     select_configs self selected_self
-    SEQUENTIAL="${SEQUENTIAL_SELF:-${SEQUENTIAL:-}}"
+    SEQUENTIAL="$SEQUENTIAL_SELF"
     run_mode self "mls-go:50051" "mls-go:50051" "${selected_self[@]}"
 fi
 
 if [ "$MODE" = "all" ] || [ "$MODE" = "cross" ]; then
     declare -a selected_cross
     select_configs cross selected_cross
-    SEQUENTIAL="${SEQUENTIAL_CROSS:-${SEQUENTIAL:-}}"
+    SEQUENTIAL="$SEQUENTIAL_CROSS"
     run_mode cross "mls-go:50051" "$CROSS_TARGET:50051" "${selected_cross[@]}"
 fi
 

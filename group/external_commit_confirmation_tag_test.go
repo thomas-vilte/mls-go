@@ -2,6 +2,7 @@ package group
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/treesync"
@@ -80,7 +81,7 @@ func TestExternalJoinerGroupInfoAndRestoredStateCarryTag(t *testing.T) {
 
 	restored.confirmationTag = append([]byte(nil), restored.confirmationTag...)
 	restored.confirmationTag[0] ^= 0xFF
-	if err := restored.ValidateRestoredState(); err == nil {
-		t.Fatal("ValidateRestoredState accepted a modified confirmation tag in an external joiner state")
+	if err := restored.ValidateRestoredState(); !errors.Is(err, ErrConfirmationTagMismatch) {
+		t.Fatalf("ValidateRestoredState(modified tag in an external joiner state) = %v, want ErrConfirmationTagMismatch", err)
 	}
 }
