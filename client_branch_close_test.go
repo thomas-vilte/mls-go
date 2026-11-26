@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -101,8 +102,17 @@ func TestClientBranchCloseDuringCommit(t *testing.T) {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
-	var closeErr error
-	store.onSave = func() { closeErr = c.Close() }
+	// Close runs in its own goroutine, started from inside Branch's commit. Close waits for the store write in
+	// progress, and that write is the one that runs the hook, so Close cannot run on the same goroutine. The hook
+	// returns once Close has set closed, the write then completes, and Close finishes. The window is the same as
+	// before: Close runs while Branch is committing and before it registers.
+	closeDone := make(chan error, 1)
+	store.onSave = func() {
+		go func() { closeDone <- c.Close() }()
+		for !c.isClosed() {
+			runtime.Gosched()
+		}
+	}
 
 	var branchErr error
 	func() {
@@ -114,6 +124,7 @@ func TestClientBranchCloseDuringCommit(t *testing.T) {
 		_, _, _, branchErr = c.Branch(ctx, groupID, nil)
 	}()
 
+	closeErr := <-closeDone
 	if closeErr != nil {
 		t.Fatalf("Close: %v", closeErr)
 	}

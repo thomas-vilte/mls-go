@@ -480,6 +480,16 @@ type Client struct {
 	// Close waits for all of them to be resolved before closing the store.
 	pendingHandles sync.WaitGroup
 
+	// joinMu serializes JoinGroup and JoinGroupWithPSKs. A Welcome is processed without holding mu, so
+	// the joins need their own lock to stay apart.
+	joinMu sync.Mutex
+
+	// storeMu gates the writes to the store. A write holds it for reading and refuses to run once storeClosed is
+	// set. Close sets storeClosed while holding it for writing, so it waits for the writes in progress, and no
+	// write reaches a closed store.
+	storeMu     sync.RWMutex
+	storeClosed bool
+
 	pendingKPs   map[string]*pendingEntry
 	groupEntries map[string]*groupEntry
 }
@@ -615,12 +625,7 @@ func (c *Client) FreshKeyPackageBytes(ctx context.Context, opts ...keypackages.G
 
 // CreateGroup creates a fresh one-member MLS group and returns its group ID.
 func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := c.checkOpenCtx(ctx); err != nil {
 		return nil, err
 	}
 	groupID, err := group.NewGroupIDRandom()
@@ -636,11 +641,9 @@ func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("creating group: %w", err)
 	}
 	g.SetPaddingSize(c.paddingSize)
-	entry := &groupEntry{}
-	if err := c.persistGroup(ctx, g, entry); err != nil {
+	if err := c.saveNewGroup(ctx, g); err != nil {
 		return nil, err
 	}
-	c.groupEntries[groupCacheKey(groupID)] = entry
 	c.log(slog.LevelInfo, "group created", "group", groupHex(groupID.AsSlice()))
 	return cloneBytes(groupID.AsSlice()), nil
 }
@@ -648,12 +651,7 @@ func (c *Client) CreateGroup(ctx context.Context) ([]byte, error) {
 // CreateGroupWithExtensions creates a fresh one-member MLS group using the
 // provided GroupID, creator KeyPackage bytes, and GroupContext extensions.
 func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, keyPackageBytes []byte, extensions []group.Extension) ([]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := c.checkOpenCtx(ctx); err != nil {
 		return nil, err
 	}
 	if len(groupIDBytes) == 0 {
@@ -663,7 +661,9 @@ func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, ke
 		return nil, ErrEmptyKeyPackage
 	}
 
+	c.mu.Lock()
 	pe, ok := c.pendingKPs[keyPackageFingerprint(keyPackageBytes)]
+	c.mu.Unlock()
 	if !ok || pe == nil || pe.kp == nil || pe.kpPriv == nil {
 		return nil, ErrNoPendingKeyPackage
 	}
@@ -674,11 +674,9 @@ func (c *Client) CreateGroupWithExtensions(ctx context.Context, groupIDBytes, ke
 		return nil, fmt.Errorf("creating group with extensions: %w", err)
 	}
 	g.SetPaddingSize(c.paddingSize)
-	entry := &groupEntry{}
-	if err := c.persistGroup(ctx, g, entry); err != nil {
+	if err := c.saveNewGroup(ctx, g); err != nil {
 		return nil, err
 	}
-	c.groupEntries[groupCacheKey(groupID)] = entry
 	return cloneBytes(groupID.AsSlice()), nil
 }
 
@@ -796,20 +794,33 @@ func (c *Client) JoinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, ext
 }
 
 func (c *Client) joinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, externalPsks map[string][]byte) ([]byte, error) {
+	c.joinMu.Lock()
+	defer c.joinMu.Unlock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 	if len(welcomeBytes) == 0 {
+		c.mu.Unlock()
 		return nil, ErrEmptyWelcome
 	}
 	if len(c.pendingKPs) == 0 {
+		c.mu.Unlock()
 		return nil, ErrNoPendingKeyPackage
 	}
+	// The Welcome is processed on a copy of the pending key packages, without holding mu. joinMu keeps other
+	// joins from taking one of them meanwhile, and the match is removed only once the group is stored.
+	pendingKPs := make(map[string]*pendingEntry, len(c.pendingKPs))
+	for key, pe := range c.pendingKPs {
+		pendingKPs[key] = pe
+	}
+	c.mu.Unlock()
+
 	welcome, err := parseWelcomeBytes(welcomeBytes)
 	if err != nil {
 		return nil, err
@@ -818,7 +829,7 @@ func (c *Client) joinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, ext
 	var joinedGroup *group.Group
 	var matchKey string
 	var joinMatchErr error
-	for key, pe := range c.pendingKPs {
+	for key, pe := range pendingKPs {
 		g, joinErr := group.JoinFromWelcomeWithContext(ctx, welcome, pe.kp, pe.kpPriv, externalPsks)
 		if joinErr != nil {
 			continue
@@ -838,12 +849,12 @@ func (c *Client) joinGroupWithPSKs(ctx context.Context, welcomeBytes []byte, ext
 		}
 		return nil, ErrNoPendingKeyPackage
 	}
-	entry := &groupEntry{}
-	if err := c.persistGroup(ctx, joinedGroup, entry); err != nil {
+	if err := c.saveNewGroup(ctx, joinedGroup); err != nil {
 		return nil, err
 	}
-	c.groupEntries[groupCacheKey(joinedGroup.ID())] = entry
+	c.mu.Lock()
 	delete(c.pendingKPs, matchKey)
+	c.mu.Unlock()
 	c.log(slog.LevelInfo, "joined group", "group", groupHex(joinedGroup.ID().AsSlice()), "epoch", joinedGroup.Epoch().AsUint64())
 	return cloneBytes(joinedGroup.ID().AsSlice()), nil
 }
@@ -1678,12 +1689,7 @@ func (c *Client) GroupInfo(ctx context.Context, groupID []byte) ([]byte, error) 
 // private keys. The returned commit bytes must be broadcast to all current
 // members so they can process the new epoch.
 func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (groupID, commit []byte, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, nil, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := c.checkOpenCtx(ctx); err != nil {
 		return nil, nil, err
 	}
 	if len(groupInfoBytes) == 0 {
@@ -1708,11 +1714,9 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 		return nil, nil, err
 	}
 	g.SetPaddingSize(c.paddingSize)
-	entry := &groupEntry{}
-	if err := c.persistGroup(ctx, g, entry); err != nil {
+	if err := c.saveNewGroup(ctx, g); err != nil {
 		return nil, nil, err
 	}
-	c.groupEntries[groupCacheKey(g.ID())] = entry
 	c.emitEvent(GroupEvent{Type: EventEpochAdvanced, GroupID: g.ID().AsSlice(), Epoch: g.Epoch().AsUint64()})
 	pm := &framing.PublicMessage{
 		Content: staged.AuthenticatedContent().Content,
@@ -1725,9 +1729,11 @@ func (c *Client) ExternalJoin(ctx context.Context, groupInfoBytes []byte) (group
 // After Close, the Client must not be used.
 //
 // Close waits for any outstanding PendingCommitHandles to be resolved via
-// ConfirmPendingCommit or DiscardPendingCommit before closing the underlying
-// store. This prevents a race where a handle's persistGroup call races with
-// the store being closed.
+// ConfirmPendingCommit or DiscardPendingCommit, and for the store writes that are
+// in progress, before closing the underlying store. Operations that have not
+// reached the store yet fail with ErrClientClosed, and no write starts after the
+// store is closed. Close must not be called from inside a method of the
+// store, because it waits for the store write that is running.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -1743,9 +1749,16 @@ func (c *Client) Close() error {
 	c.events = nil
 	c.eventsMu.Unlock()
 
-	// Wait for all outstanding PendingCommitHandles to finish. We release c.mu
-	// first so that Confirm/Discard can still acquire entry.mu and call Done().
+	// Confirm and Discard still run once closed is set, and Confirm persists the group it
+	// resolves, so the handles are waited for before the write gate is closed. Confirm and
+	// Discard acquire entry.mu and call Done() without holding c.mu.
 	c.pendingHandles.Wait()
+
+	// Setting storeClosed under the write lock waits for the writes in progress. A write that
+	// starts later sees storeClosed and fails, so nothing reaches the store after it is closed.
+	c.storeMu.Lock()
+	c.storeClosed = true
+	c.storeMu.Unlock()
 
 	if closer, ok := any(c.store).(io.Closer); ok {
 		if err := closer.Close(); err != nil {
@@ -1895,9 +1908,9 @@ func (c *Client) isClosed() bool {
 }
 
 // persistGroup marshals and saves group state, and updates the in-memory cache.
-// For per-group operations this is called with entry.mu held.
-// For global-lock operations (CreateGroup, JoinGroup, ExternalJoin) it is called
-// with c.mu held exclusively, which also provides the necessary exclusion.
+// It is called with entry.mu held. For a group that is being created (CreateGroup,
+// CreateGroupWithExtensions, JoinGroup, ExternalJoin) the entry is registered and
+// locked by saveNewGroup first, so the call is still per-group. c.mu is not held.
 //
 // The group state is saved on every call. The signature key is written once per entry, and the
 // leaf key only when it differs from the one the entry last wrote, so an operation that does not
@@ -1923,6 +1936,12 @@ func (c *Client) saveGroupState(ctx context.Context, g *group.Group, entry *grou
 	if err != nil {
 		return fmt.Errorf("marshaling group state: %w", err)
 	}
+	// The whole save runs under the write gate (see storeMu), so Close waits for it, and it is refused once the store is closed.
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	if c.storeClosed {
+		return ErrClientClosed
+	}
 	groupID := g.ID()
 	// The sender generation of the own leaf never moves backwards within an epoch (RFC 9420 §9.2). A save that
 	// would write a lower one than this entry last stored is refused before anything is written, so a stale
@@ -1938,10 +1957,9 @@ func (c *Client) saveGroupState(ctx context.Context, g *group.Group, entry *grou
 		return fmt.Errorf("%w: epoch %d, leaf %d: stored sequence number %d, save would write %d",
 			errSenderGenerationRewind, sender.epoch, sender.leaf, prev.seq, sender.seq)
 	}
-	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
-		return fmt.Errorf("saving group state: %w", err)
-	}
-	entry.storedSender = sender
+	// The keys are written first and the state last. The state is the commit point of the epoch: a save that fails part
+	// way leaves the stored epoch where it was, and the state is never saved ahead of the keys it needs. The
+	// entry records a key once the store has accepted it, and the sender generation only together with the state.
 	if !entry.sigKeyStored {
 		if err := c.store.StoreSignatureKey(ctx, groupID, c.sigKey); err != nil {
 			return fmt.Errorf("saving signature key: %w", err)
@@ -1956,8 +1974,57 @@ func (c *Client) saveGroupState(ctx context.Context, g *group.Group, entry *grou
 		entry.storedLeafIndex = leafIndex
 		entry.storedLeafKey = cloneBytes(leafKey)
 	}
+	if err := c.store.SaveGroupState(ctx, groupID, state); err != nil {
+		return fmt.Errorf("saving group state: %w", err)
+	}
+	entry.storedSender = sender
 	if c.cacheStrategy == CacheAlways {
 		entry.group = g
+	}
+	return nil
+}
+
+// checkOpenCtx returns ErrClientClosed once Close has started, or the error of ctx when it is done. It takes mu only
+// for that check, so the callers can run their cryptographic work without holding it.
+func (c *Client) checkOpenCtx(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// saveNewGroup stores g, the group of a new entry, and registers the entry. The entry is registered and locked
+// before the save, so Close either refuses the group or waits for the write, and no operation reaches the group
+// before it is stored. If the save fails, the entry is removed again and the one it replaced, if any, is restored.
+func (c *Client) saveNewGroup(ctx context.Context, g *group.Group) error {
+	key := groupCacheKeyBytes(g.ID().AsSlice())
+	entry := &groupEntry{}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	replaced := c.groupEntries[key]
+	c.groupEntries[key] = entry
+	c.mu.Unlock()
+
+	if err := c.persistGroup(ctx, g, entry); err != nil {
+		c.mu.Lock()
+		// Close may have dropped the map, and then the entry is not there to remove. A nil map never matches.
+		if c.groupEntries[key] == entry {
+			if replaced != nil {
+				c.groupEntries[key] = replaced
+			} else {
+				delete(c.groupEntries, key)
+			}
+		}
+		c.mu.Unlock()
+		return err
 	}
 	return nil
 }
@@ -2244,12 +2311,19 @@ func (c *Client) CommitPendingProposalsStaged(ctx context.Context, groupID []byt
 		}
 	}
 
+	// Track the outstanding handle so Close() can wait for it to be resolved. The check and the count are made under
+	// mu, so no handle is counted once Close has started to wait for them.
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	c.pendingHandles.Add(1)
+	c.mu.Unlock()
+
 	// Pin the in-memory group in the entry so Confirm/Discard can find it
 	// without re-loading from storage (which only stores StateOperational state).
 	entry.group = g
-
-	// Track outstanding handle so Close() can wait for it to be resolved.
-	c.pendingHandles.Add(1)
 
 	return &PendingCommitHandle{
 		c:                c,
@@ -2631,15 +2705,7 @@ func (c *Client) forgetGroup(ctx context.Context, groupID []byte, entry *groupEn
 	entry.sigKeyStored = false
 	entry.storedSender = senderGeneration{}
 
-	var errs []error
-	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
-		errs = append(errs, fmt.Errorf("deleting group state: %w", err))
-	}
-	if d, ok := c.store.(group.LeafKeyDeleter); ok {
-		if err := d.DeleteLeafEncryptionKeys(ctx, gID); err != nil {
-			errs = append(errs, fmt.Errorf("deleting leaf encryption keys: %w", err))
-		}
-	}
+	errs := c.deleteStoredGroup(ctx, gID)
 	if len(errs) > 0 {
 		// The tombstone stays in c.groupEntries, so the group cannot be loaded again from the store.
 		return errors.Join(errs...)
@@ -2649,6 +2715,26 @@ func (c *Client) forgetGroup(ctx context.Context, groupID []byte, entry *groupEn
 	delete(c.groupEntries, groupCacheKeyBytes(groupID))
 	c.mu.Unlock()
 	return nil
+}
+
+// deleteStoredGroup deletes the state of gID and, when the store implements group.LeafKeyDeleter, its leaf keys.
+// Each deletion reports its own error. It is a store write, so it runs under the write gate (see storeMu).
+func (c *Client) deleteStoredGroup(ctx context.Context, gID *group.ID) []error {
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	if c.storeClosed {
+		return []error{ErrClientClosed}
+	}
+	var errs []error
+	if err := c.store.DeleteGroupState(ctx, gID); err != nil {
+		errs = append(errs, fmt.Errorf("deleting group state: %w", err))
+	}
+	if d, ok := c.store.(group.LeafKeyDeleter); ok {
+		if err := d.DeleteLeafEncryptionKeys(ctx, gID); err != nil {
+			errs = append(errs, fmt.Errorf("deleting leaf encryption keys: %w", err))
+		}
+	}
+	return errs
 }
 
 // removedFromGroup handles a commit that removes the local member. It forgets the local
