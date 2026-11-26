@@ -297,7 +297,9 @@ func UnmarshalGroupInfo(data []byte) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(confirmationTag) > 0 && len(confirmationTag) != nh {
+	// Every epoch has a confirmation_tag, a MAC of Nh bytes, epoch 0 included (RFC 9420 §8.2, §11). An empty
+	// tag came from a GroupInfo of epoch 0 written by an earlier version of this library.
+	if nh := ciphersuite.CipherSuite(cipherSuite).HashLength(); nh > 0 && len(confirmationTag) != nh {
 		return nil, fmt.Errorf("confirmation_tag length %d != Nh (%d) (RFC §8.2)", len(confirmationTag), nh)
 	}
 

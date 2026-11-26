@@ -562,6 +562,8 @@ func NewGroup(
 		return nil, fmt.Errorf("deriving epoch secrets: %w", err)
 	}
 
+	initialTag, initialInterim := initialEpochTranscript(cipherSuite, epochSecrets, groupContext.ConfirmedTranscriptHash)
+
 	// Create group. The key schedule keeps init_secret for epoch 1, as MergeCommit
 	// does, so the epoch_secret of epoch 0 is not retained by the group.
 	group := &Group{
@@ -575,11 +577,9 @@ func NewGroup(
 		proposals:     NewProposalStore(),
 		proposalByRef: make(map[string]*Proposal),
 		keySchedule:   schedule.NewKeySchedule(cipherSuite, epochSecrets.InitSecret),
-		// RFC 9420 §6.2: for the initial epoch, interim_transcript_hash =
-		// Hash(confirmed_transcript_hash || VL(confirmation_tag)) where both
-		// inputs are empty → Hash([0x00]). Must match what external parties
-		// derive from GroupInfo (which also has empty CTH and empty confirmation_tag).
-		interimTranscriptHash: schedule.ComputeInterimTranscriptHash(cipherSuite, nil, nil),
+		// The GroupInfo of epoch 0 carries confirmationTag, so a joiner derives the same interim hash from it.
+		interimTranscriptHash: initialInterim,
+		confirmationTag:       initialTag,
 		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		cachedPsks:            make(map[string][]byte),
@@ -3316,6 +3316,14 @@ func (g *Group) EpochAuthenticator() []byte {
 	return append([]byte(nil), g.epochSecrets.AuthenticationSecret.AsSlice()...)
 }
 
+// initialEpochTranscript returns the confirmation_tag and interim_transcript_hash of a new group's first
+// epoch. RFC 9420 §11: the creator computes confirmation_tag over the empty confirmed_transcript_hash with
+// the epoch's confirmation_key, then the interim transcript hash from both as in §8.2.
+func initialEpochTranscript(cs ciphersuite.CipherSuite, secrets *schedule.EpochSecrets, confirmedHash []byte) (tag, interim []byte) {
+	tag = schedule.ComputeConfirmationTag(cs, secrets.ConfirmationKey.AsSlice(), confirmedHash)
+	return tag, schedule.ComputeInterimTranscriptHash(cs, confirmedHash, tag)
+}
+
 // NewGroupFromReInit creates a successor group from a ReInit proposal.
 // oldGroupID must be the ID of the group that sent the ReInit proposal
 // (RFC §12.4.4: the resumption PSK ID references the old group, not the new one).
@@ -3435,6 +3443,7 @@ func NewGroupFromReInit(
 	if err != nil {
 		return nil, fmt.Errorf("deriving reinit epoch secrets: %w", err)
 	}
+	initialTag, initialInterim := initialEpochTranscript(cs, epochSecrets, groupContext.ConfirmedTranscriptHash)
 	group := &Group{
 		groupID:               groupContext.GroupID,
 		epoch:                 groupContext.Epoch,
@@ -3446,7 +3455,8 @@ func NewGroupFromReInit(
 		proposals:             NewProposalStore(),
 		proposalByRef:         make(map[string]*Proposal),
 		keySchedule:           keySchedule,
-		interimTranscriptHash: []byte{},
+		interimTranscriptHash: initialInterim,
+		confirmationTag:       initialTag,
 		members:               make(map[LeafNodeIndex]*Member),
 		state:                 StateOperational,
 		cachedPsks:            make(map[string][]byte),
