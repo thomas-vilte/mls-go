@@ -18,7 +18,7 @@ var (
 	// ErrNilSignatureKey is returned when a nil signature key is passed to StoreSignatureKey.
 	ErrNilSignatureKey = errors.New("memory: signature key is nil")
 	// ErrGroupStateNotFound is returned when LoadGroupState finds no entry for the given group.
-	ErrGroupStateNotFound = errors.New("memory: group state not found")
+	ErrGroupStateNotFound = fmt.Errorf("memory: %w", group.ErrGroupStateNotFound)
 	// ErrSignatureKeyNotFound is returned when LoadSignatureKey finds no entry for the given group.
 	ErrSignatureKeyNotFound = errors.New("memory: signature key not found")
 	// ErrLeafKeyNotFound is returned when LoadLeafEncryptionKey finds no entry for the given group and leaf.

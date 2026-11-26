@@ -24,6 +24,7 @@ type CredentialValidator interface {
 // back with files, databases, or secret storage systems.
 type GroupStorage interface {
 	SaveGroupState(ctx context.Context, groupID *ID, state []byte) error
+	// LoadGroupState returns an error matching ErrGroupStateNotFound (errors.Is) when no state exists for groupID.
 	LoadGroupState(ctx context.Context, groupID *ID) ([]byte, error)
 	DeleteGroupState(ctx context.Context, groupID *ID) error
 }
