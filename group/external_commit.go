@@ -343,9 +343,9 @@ func ExternalCommit(
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transcript hash input: %w", err)
 	}
-	// RFC 9420 §6.2: always compute the interim transcript hash from the
-	// GroupInfo, even when ConfirmationTag is empty (initial epoch). For
-	// epoch 0, this gives Hash(CTH=[] || VL(tag=[])) = SHA256([0x00]).
+	// RFC 9420 §8.2: interim_transcript_hash = Hash(confirmed_transcript_hash ||
+	// VL(confirmation_tag)), taken from the GroupInfo. In epoch 0 the tag is
+	// MAC(confirmation_key, "") (§11); UnmarshalGroupInfo refuses an empty one.
 	interimHashForNewMember := schedule.ComputeInterimTranscriptHash(
 		cs,
 		groupContext.ConfirmedTranscriptHash,

@@ -13,6 +13,10 @@ import (
 	"github.com/thomas-vilte/mls-go/treesync"
 )
 
+// stateVersion is the StateData format that MarshalState writes. Version 1 guarantees a confirmation tag
+// and an RFC 9420 §8.2 interim transcript hash for every epoch, epoch 0 included.
+const stateVersion = 1
+
 // StateData represents the serialized state of an MLS group.
 //
 // SECURITY WARNING: This structure contains sensitive cryptographic material
@@ -45,6 +49,9 @@ import (
 //     proposal (SelfUpdate) not yet committed; needed to decrypt the UpdatePath
 //     of the commit that merges this proposal.
 type StateData struct {
+	// StateVersion is the format version (stateVersion when written by MarshalState). A state without it was
+	// saved by an earlier version, and UnmarshalGroupState migrates it.
+	StateVersion          int                           `json:"state_version,omitempty"`
 	GroupID               []byte                        `json:"group_id"`
 	Epoch                 uint64                        `json:"epoch"`
 	CipherSuite           uint16                        `json:"cipher_suite"`
@@ -107,6 +114,7 @@ func (g *Group) MarshalState() ([]byte, error) {
 	}
 
 	state := &StateData{
+		StateVersion:          stateVersion,
 		GroupID:               g.groupID.AsSlice(),
 		Epoch:                 g.epoch.AsUint64(),
 		CipherSuite:           uint16(g.cipherSuite),
@@ -330,11 +338,34 @@ func UnmarshalGroupState(data []byte) (*Group, error) {
 		}
 	}
 
+	switch {
+	case state.StateVersion > stateVersion:
+		return nil, fmt.Errorf("unmarshaling group state: unsupported state version %d: %w", state.StateVersion, ErrInvalidGroupState)
+	case state.StateVersion == 0:
+		g.migrateLegacyTranscript()
+	}
+
 	if err := g.ValidateRestoredState(); err != nil {
 		return nil, err
 	}
 
 	return g, nil
+}
+
+// migrateLegacyTranscript completes a state saved before stateVersion 1. Such a state can lack the
+// confirmation tag (groups still at epoch 0, external joiners saved before ExternalCommit kept it) and, at
+// epoch 0, hold an interim transcript hash computed from an empty tag. The tag follows from the epoch's own
+// secrets. A group at epoch 0 has not used its interim hash yet, so that one is recomputed as RFC 9420 §11
+// specifies. In later epochs the stored interim hash already came from the real tag and is kept.
+func (g *Group) migrateLegacyTranscript() {
+	if len(g.confirmationTag) > 0 || g.groupContext == nil || g.epochSecrets == nil || g.epochSecrets.ConfirmationKey == nil {
+		return
+	}
+	cth := g.groupContext.ConfirmedTranscriptHash
+	g.confirmationTag = schedule.ComputeConfirmationTag(g.cipherSuite, g.epochSecrets.ConfirmationKey.AsSlice(), cth)
+	if g.epoch.AsUint64() == 0 {
+		g.interimTranscriptHash = schedule.ComputeInterimTranscriptHash(g.cipherSuite, cth, g.confirmationTag)
+	}
 }
 
 // ValidateRestoredState verifies that a deserialized group is internally consistent
@@ -380,15 +411,24 @@ func (g *Group) ValidateRestoredState() error {
 		return fmt.Errorf("validating restored state: computed tree hash %x does not match stored tree hash %x: %w", computedTreeHash, g.groupContext.TreeHash, ErrTreeHashMismatch)
 	}
 
-	if len(g.confirmationTag) > 0 {
-		expectedTag := schedule.ComputeConfirmationTag(
-			g.cipherSuite,
-			g.epochSecrets.ConfirmationKey.AsSlice(),
-			g.groupContext.ConfirmedTranscriptHash,
-		)
-		if !ciphersuite.EqualCT(expectedTag, g.confirmationTag) {
-			return fmt.Errorf("validating restored state: stored confirmation tag %x does not match computed confirmation tag %x: %w", g.confirmationTag, expectedTag, ErrConfirmationTagMismatch)
-		}
+	// Every epoch has a confirmation tag (RFC 9420 §8.2, §11), and it is the integrity check of the epoch
+	// secrets, so a state without it is incomplete. UnmarshalGroupState completes states saved
+	// before stateVersion 1 before this check runs.
+	if len(g.confirmationTag) == 0 {
+		return fmt.Errorf("validating restored state: missing confirmation tag: %w", ErrInvalidGroupState)
+	}
+	expectedTag := schedule.ComputeConfirmationTag(
+		g.cipherSuite,
+		g.epochSecrets.ConfirmationKey.AsSlice(),
+		g.groupContext.ConfirmedTranscriptHash,
+	)
+	if !ciphersuite.EqualCT(expectedTag, g.confirmationTag) {
+		return fmt.Errorf("validating restored state: stored confirmation tag %x does not match computed confirmation tag %x: %w", g.confirmationTag, expectedTag, ErrConfirmationTagMismatch)
+	}
+	// interim_transcript_hash = Hash(confirmed_transcript_hash || VL(confirmation_tag)) (RFC 9420 §8.2).
+	expectedInterim := schedule.ComputeInterimTranscriptHash(g.cipherSuite, g.groupContext.ConfirmedTranscriptHash, g.confirmationTag)
+	if !bytes.Equal(expectedInterim, g.interimTranscriptHash) {
+		return fmt.Errorf("validating restored state: interim transcript hash does not follow from the confirmed transcript hash and confirmation tag: %w", ErrInvalidGroupState)
 	}
 
 	return nil
