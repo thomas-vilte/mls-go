@@ -14,7 +14,7 @@ import (
 
 var (
 	// ErrGroupStateNotFound is returned by FakeStore when a requested group state does not exist.
-	ErrGroupStateNotFound = errors.New("mlstest: group state not found")
+	ErrGroupStateNotFound = fmt.Errorf("mlstest: %w", group.ErrGroupStateNotFound)
 	// ErrSignatureKeyNotFound is returned by FakeStore when no signing key is stored for the requested group.
 	ErrSignatureKeyNotFound = errors.New("mlstest: signature key not found")
 	// ErrLeafKeyNotFound is returned by FakeStore when no leaf encryption key is stored for the requested group and leaf index.

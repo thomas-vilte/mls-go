@@ -24,6 +24,7 @@ Recommended production shape:
 Notes:
 
 - `GroupStorage` persists serialized group state blobs
+- `GroupStorage.LoadGroupState` must report a group it does not hold with an error that matches `group.ErrGroupStateNotFound` (`errors.Is`). The memory and file stores, and `storage.NewEncryptedStore` around them, already do. The `Client` uses it to check that a group ID is free before it creates or joins a group (RFC 9420 §12.4.3). With a store that returns another error, or no state and no error, creating and joining groups fail with a store-contract error.
 - `KeyStore` persists signature private keys and leaf encryption private keys
 - the default in-memory store is fine for tests and demos, not for durable deployments
 

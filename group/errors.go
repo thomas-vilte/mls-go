@@ -79,6 +79,10 @@ func (e *ErrDecryptionFailed) Unwrap() error {
 // These errors represent specific failure conditions in group operations.
 // They can be checked using errors.Is() for programmatic handling.
 var (
+	// ErrGroupStateNotFound reports that a GroupStorage holds no state for a group. LoadGroupState
+	// implementations return an error that matches it with errors.Is when the group is unknown; the
+	// Client relies on it to tell a free group ID from a storage failure (RFC 9420 §12.4.3).
+	ErrGroupStateNotFound = errors.New("group: group state not found")
 	// ErrNilProposal is returned when a proposal is nil.
 	ErrNilProposal = errors.New("group: proposal is nil")
 	// ErrInvalidProposal is returned when a proposal is invalid.

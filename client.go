@@ -20,7 +20,6 @@ import (
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/keypackages"
-	filestore "github.com/thomas-vilte/mls-go/storage/file"
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 	"github.com/thomas-vilte/mls-go/treesync"
 )
@@ -254,6 +253,10 @@ var (
 	ErrEmptyCiphertext = errors.New("mls: ciphertext is empty")
 	// ErrGroupNotFound is returned when an operation references a group that has not been joined or created.
 	ErrGroupNotFound = errors.New("mls: group not found")
+	// ErrGroupExists is returned when creating or joining a group whose ID is already in use by a group
+	// this Client participates in. RFC 9420 §12.4.3 requires a new member to verify that group_id is
+	// unique among the groups it participates in.
+	ErrGroupExists = errors.New("mls: group already exists")
 	// ErrNoPendingKeyPackage is returned when JoinGroup is called before FreshKeyPackageBytes.
 	ErrNoPendingKeyPackage = errors.New("mls: no pending key package available")
 	// ErrUnexpectedMessageType is returned when a parsed MLSMessage does not match the expected wire format.
@@ -1998,6 +2001,11 @@ func (c *Client) checkOpenCtx(ctx context.Context) error {
 // saveNewGroup stores g, the group of a new entry, and registers the entry. The entry is registered and locked
 // before the save, so Close either refuses the group or waits for the write, and no operation reaches the group
 // before it is stored. If the save fails, the entry is removed again and the one it replaced, if any, is restored.
+//
+// A group that already uses g's ID is an error (ErrGroupExists) instead of being replaced: RFC 9420 §12.4.3
+// requires a new member, joining by Welcome or by external Commit, to verify that group_id is unique among the
+// groups it participates in. A forgotten entry does not count: it is a group this Client left whose cleanup did
+// not finish, and its stale stored state, if any, is overwritten.
 func (c *Client) saveNewGroup(ctx context.Context, g *group.Group) error {
 	key := groupCacheKeyBytes(g.ID().AsSlice())
 	entry := &groupEntry{}
@@ -2010,6 +2018,31 @@ func (c *Client) saveNewGroup(ctx context.Context, g *group.Group) error {
 		return err
 	}
 	replaced := c.groupEntries[key]
+	c.mu.Unlock()
+
+	if replaced != nil {
+		// entry is not registered yet, so no other operation can wait on its mutex while holding replaced.mu.
+		replaced.mu.Lock()
+		forgotten := replaced.forgotten
+		replaced.mu.Unlock()
+		if !forgotten {
+			return ErrGroupExists
+		}
+	} else if err := c.checkGroupIDFree(ctx, g.ID()); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	if err := c.checkOpen(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	// Another operation may have registered the ID meanwhile (a concurrent create or join). A forgotten entry that
+	// left the map in the meantime had its state deleted, so the ID is still free.
+	if current := c.groupEntries[key]; current != nil && current != replaced {
+		c.mu.Unlock()
+		return ErrGroupExists
+	}
 	c.groupEntries[key] = entry
 	c.mu.Unlock()
 
@@ -2027,6 +2060,27 @@ func (c *Client) saveNewGroup(ctx context.Context, g *group.Group) error {
 		return err
 	}
 	return nil
+}
+
+// errStoreNotFoundContract explains why a group ID could not be shown to be free.
+const errStoreNotFoundContract = "checking group ID (the store must report a missing group with group.ErrGroupStateNotFound)"
+
+// checkGroupIDFree returns ErrGroupExists when the store already holds a state for groupID. With CacheNone the
+// entry map does not list every group, so the store is the record of the groups this Client participates in.
+func (c *Client) checkGroupIDFree(ctx context.Context, groupID *group.ID) error {
+	state, err := c.store.LoadGroupState(ctx, groupID)
+	switch {
+	case err == nil && len(state) > 0:
+		return ErrGroupExists
+	case err == nil:
+		// No state and no error: the store does not follow the not-found contract.
+		return fmt.Errorf("%s: store returned an empty state without an error", errStoreNotFoundContract)
+	case isGroupStateNotFound(err):
+		return nil
+	default:
+		// Fail closed: without a clear "not found", the group ID cannot be shown to be free.
+		return fmt.Errorf("%s: %w", errStoreNotFoundContract, err)
+	}
 }
 
 func parseWelcomeBytes(data []byte) (*group.Welcome, error) {
@@ -2105,8 +2159,10 @@ func (c *Client) emitEvent(event GroupEvent) {
 	}()
 }
 
+// isGroupStateNotFound reports whether a store said that it holds no state for a group. Stores signal it with an
+// error matching group.ErrGroupStateNotFound; the memory, file and mlstest stores' own sentinels wrap it.
 func isGroupStateNotFound(err error) bool {
-	return errors.Is(err, memorystore.ErrGroupStateNotFound) || errors.Is(err, filestore.ErrGroupStateNotFound)
+	return errors.Is(err, group.ErrGroupStateNotFound)
 }
 
 func credentialIdentityBytes(cred *credentials.Credential) []byte {

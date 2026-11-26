@@ -2812,8 +2812,14 @@ func Branch(
 		}
 	}
 
+	// The subgroup gets a fresh group ID. Its members still belong to the old group, and RFC 9420 §12.4.3
+	// requires a new member to reject a Welcome whose group_id is already in use.
+	branchGroupID, err := NewGroupIDRandom()
+	if err != nil {
+		return nil, fmt.Errorf("generating branch group ID: %w", err)
+	}
 	newGroup, err := NewGroup(
-		NewGroupID(oldGroup.groupID.AsSlice()),
+		branchGroupID,
 		cs,
 		ownKeyPackage,
 		ownPrivKeys,
